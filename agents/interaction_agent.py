@@ -2,11 +2,15 @@ import os
 from sendgrid import SendGridAPIClient
 from sendgrid.helpers.mail import Mail
 from dotenv import load_dotenv
+import sendgrid
+
+print("SendGrid library is installed and accessible.")
 
 class InteractionAgent:
     def __init__(self):
         load_dotenv()
         self.sendgrid_api_key = os.getenv('SENDGRID_API_KEY')
+        self.sender_email = os.getenv('SENDER_EMAIL')  # Use the sender email from the environment
 
     def contact_candidate(self, job_match):
         """Sends an email to the candidate about the job opportunity."""
@@ -16,7 +20,7 @@ class InteractionAgent:
 
         # Create the email message
         message = Mail(
-            from_email='your_verified_email@domain.com',
+            from_email=self.sender_email,  # Use the sender email from the environment
             to_emails=recipient_email,
             subject=f"Exciting Opportunity: {job_title} at {company}",
             html_content=f"""
@@ -46,5 +50,3 @@ class InteractionAgent:
                 'error': str(e),
                 'recipient': recipient_email
             }
-
-print("Transformers library is installed and accessible.")

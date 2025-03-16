@@ -9,10 +9,11 @@ interaction_agent = InteractionAgent()
 async def read_root():
     return {"Hello": "World"}
 
-@app.post("/test-sms")
-async def test_sms():
+@app.post("/test-email")
+async def test_email():
     # Test data for Andrew
     job_match = {
+        'email': 'arschuessler90@gmail.com',
         'phone_number': '+18476094515',
         'title': 'Senior Backend Engineer',
         'company': 'Hedra'
