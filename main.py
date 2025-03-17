@@ -14,6 +14,11 @@ import openai
 from pydantic import ValidationError
 import json
 import base64
+from openai import AsyncOpenAI
+import PyPDF2
+import io
+from pdf2image import convert_from_bytes
+import tempfile
 
 # Load environment variables
 load_dotenv()
@@ -38,7 +43,7 @@ vector_store = VectorStore()
 RETELL_API_KEY = os.getenv('RETELL_API_KEY')
 RETELL_API_BASE = "https://api.retellai.com/v2"
 RETELL_FROM_NUMBER = os.getenv('RETELL_FROM_NUMBER')
-RETELL_AGENT_ID = os.getenv('AGENT_ID')
+RETELL_AGENT_ID = os.getenv('RETELL_AGENT_ID')
 
 class Location(BaseModel):
     city: Optional[str] = None
@@ -203,66 +208,180 @@ class MakeCallRequest(BaseModel):
 
     @validator('name')
     def validate_name(cls, v):
-        if not v or not v.strip():
-            raise ValueError('Name cannot be empty')
-        if len(v.strip()) > 100:
-            raise ValueError('Name is too long (max 100 characters)')
-        return v.strip()
-
-    @validator('email')
-    def validate_email(cls, v):
-        if not v or not v.strip():
-            raise ValueError('Email cannot be empty')
-        if '@' not in v:
-            raise ValueError('Invalid email format')
-        if len(v.strip()) > 255:
-            raise ValueError('Email is too long (max 255 characters)')
-        return v.strip().lower()
+        if not v or len(v) > 100:
+            raise ValueError('Name must be between 1 and 100 characters')
+        return v
 
     @validator('phone_number')
     def validate_phone(cls, v):
-        if not v or not v.strip():
-            raise ValueError('Phone number cannot be empty')
+        if not v:
+            raise ValueError('Phone number is required')
         # Remove any non-digit characters except '+'
-        phone = ''.join(filter(str.isdigit, v.replace('+', '')))
-        if not phone.startswith('+'):
-            phone = '+' + phone
+        phone = '+' + ''.join(filter(str.isdigit, v.replace('+', '')))
         if len(phone) < 10 or len(phone) > 15:
-            raise ValueError('Invalid phone number length')
+            raise ValueError('Phone number must be between 10 and 15 digits')
         return phone
 
     @validator('linkedin')
     def validate_linkedin(cls, v):
-        if v:
-            v = v.strip()
-            if not v:
-                return None
-            if not (v.startswith('http://') or v.startswith('https://')):
-                v = 'https://' + v
-            if len(v) > 255:
-                raise ValueError('LinkedIn URL is too long (max 255 characters)')
-        return v
+        if v and len(v) > 255:
+            raise ValueError('LinkedIn URL must be less than 255 characters')
+        return v or ""
 
-    @validator('resume_text')
-    def validate_resume(cls, v):
-        if v:
-            v = v.strip()
-            if not v:
-                return None
-            # Truncate if too long (Retell AI might have limits)
-            max_length = 5000
-            if len(v) > max_length:
-                return v[:max_length]
-        return v
+class CallStatusRequest(BaseModel):
+    """Request model for checking call status"""
+    candidate_id: str
+    call_id: str
 
-@app.get("/")
-async def read_root():
-    """API root endpoint"""
-    return {
-        "name": "Anita AI Recruitment API",
-        "version": "2.0.0",
-        "status": "operational"
-    }
+# Add CORS middleware
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # Allows all origins
+    allow_credentials=True,
+    allow_methods=["*"],  # Allows all methods
+    allow_headers=["*"],  # Allows all headers
+)
+
+async def process_pdf_to_text(file: UploadFile) -> Dict[str, Any]:
+    """Process a PDF file and extract its text and image content."""
+    if not file.filename.lower().endswith('.pdf'):
+        raise HTTPException(status_code=400, detail="File must be a PDF")
+        
+    try:
+        # Read the uploaded file
+        contents = await file.read()
+        pdf_file = io.BytesIO(contents)
+        
+        # First try to extract text using PyPDF2
+        try:
+            pdf_reader = PyPDF2.PdfReader(pdf_file)
+            text = ""
+            for page in pdf_reader.pages:
+                text += page.extract_text() + "\n"
+            text = text.strip()
+        except Exception as e:
+            print(f"PyPDF2 extraction failed: {str(e)}")
+            text = ""
+
+        # Convert PDF to images for OCR processing
+        try:
+            # Create a temporary directory for PDF processing
+            with tempfile.TemporaryDirectory() as temp_dir:
+                images = convert_from_bytes(contents, output_folder=temp_dir)
+                
+                # Convert first page to base64 for vision processing
+                if images:
+                    img_byte_arr = io.BytesIO()
+                    images[0].save(img_byte_arr, format='PNG')
+                    img_byte_arr = img_byte_arr.getvalue()
+                    base64_image = base64.b64encode(img_byte_arr).decode('utf-8')
+                else:
+                    base64_image = None
+                    
+                return {
+                    "text": text,
+                    "base64_image": base64_image,
+                    "total_pages": len(images)
+                }
+        except Exception as e:
+            print(f"PDF to image conversion failed: {str(e)}")
+            return {
+                "text": text,
+                "base64_image": None,
+                "total_pages": 0
+            }
+            
+    except Exception as e:
+        print(f"Error processing PDF: {str(e)}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to process PDF file: {str(e)}"
+        )
+    finally:
+        await file.seek(0)
+
+async def process_resume_text(resume_data: Dict[str, Any]) -> Dict[str, Any]:
+    """Process resume using OpenAI GPT-4 Turbo to extract key information."""
+    if not OPENAI_API_KEY:
+        print("Warning: OpenAI API key not configured, skipping resume processing")
+        return {
+            "raw_text": resume_data.get("text", ""),
+            "processed": False,
+            "error": "OpenAI API key not configured"
+        }
+    
+    try:
+        client = AsyncOpenAI(api_key=OPENAI_API_KEY)
+        
+        # Prepare the content for GPT-4
+        content = resume_data.get("text", "").strip()
+        
+        if not content:
+            return {
+                "raw_text": resume_data.get("text", ""),
+                "processed": False,
+                "error": "No content available for processing"
+            }
+        
+        system_message = """You are an expert resume analyzer. Extract the following information in a structured format:
+        - skills: List of technical and soft skills
+        - experience: List of work experiences with company, role, and duration
+        - education: List of educational qualifications
+        - achievements: List of key achievements
+        - summary: A brief professional summary
+
+        Format the response as a valid JSON object with these exact keys."""
+
+        try:
+            response = await client.chat.completions.create(
+                model="gpt-4-turbo-preview",
+                messages=[
+                    {"role": "system", "content": system_message},
+                    {"role": "user", "content": f"Please analyze this resume and extract the key information:\n\n{content}"}
+                ],
+                temperature=0.3,
+                max_tokens=1500,
+                response_format={ "type": "json_object" }
+            )
+            
+            try:
+                processed_data = json.loads(response.choices[0].message.content)
+                return {
+                    "raw_text": resume_data.get("text", ""),
+                    "processed": True,
+                    "structured_data": processed_data,
+                    "processed_at": datetime.utcnow().isoformat()
+                }
+            except json.JSONDecodeError as e:
+                print(f"Error parsing OpenAI response: {str(e)}")
+                return {
+                    "raw_text": resume_data.get("text", ""),
+                    "processed": True,
+                    "structured_data": {
+                        "skills": [],
+                        "experience": [],
+                        "education": [],
+                        "achievements": [],
+                        "summary": "Failed to parse structured data from resume"
+                    },
+                    "error": f"Failed to parse OpenAI response: {str(e)}",
+                    "processed_at": datetime.utcnow().isoformat()
+                }
+        except Exception as api_error:
+            print(f"OpenAI API error: {str(api_error)}")
+            return {
+                "raw_text": resume_data.get("text", ""),
+                "processed": False,
+                "error": f"OpenAI API error: {str(api_error)}"
+            }
+            
+    except Exception as e:
+        print(f"Error processing resume with OpenAI: {str(e)}")
+        return {
+            "raw_text": resume_data.get("text", ""),
+            "processed": False,
+            "error": str(e)
+        }
 
 @app.post("/candidates", response_model=Dict[str, Any])
 async def submit_candidate(request: MakeCallRequest):
@@ -278,18 +397,22 @@ async def submit_candidate(request: MakeCallRequest):
         if not phone.startswith('+'):
             phone = '+' + phone
         
+        # Process resume text
+        resume_data = await process_pdf_to_text(request.resume_text)
+        
         # Create candidate data
         candidate_data = {
             "name": request.name,
             "email": request.email,
             "phone_number": phone,
             "linkedin": request.linkedin,
-            "resume_text": request.resume_text
+            "resume_text": resume_data.get("text"),
+            "resume_analysis": resume_data
         }
         
         # Store candidate in vector database
         try:
-            print(f"Storing candidate {candidate_id} with data: {candidate_data}")
+            print(f"Storing candidate {candidate_id} with processed data")
             result = vector_store.store_candidate(candidate_id, candidate_data)
             if result.get('status') != 'success':
                 return {
@@ -309,7 +432,15 @@ async def submit_candidate(request: MakeCallRequest):
             "status": "success",
             "message": "Candidate submitted successfully",
             "candidate_id": candidate_id,
-            "data": candidate_data
+            "data": {
+                "profile": {
+                    "name": request.name,
+                    "email": request.email,
+                    "phone_number": phone,
+                    "linkedin": request.linkedin
+                },
+                "resume_analysis": resume_data
+            }
         }
         
     except ValidationError as e:
@@ -831,75 +962,160 @@ async def fetch_and_store_retell_transcript(call_data: RetellCallData):
         )
 
 @app.post("/api/makeCall", response_model=Dict[str, Any])
-async def make_call(request: MakeCallRequest):
+async def make_call(
+    name: str = Form(...),
+    email: str = Form(...),
+    phone_number: str = Form(...),
+    linkedin: Optional[str] = Form(None),
+    resume: UploadFile = File(...)
+):
     """
     Create a new Retell AI call for a candidate.
+    1. Process the PDF resume (both text and image)
+    2. Analyze resume content with OpenAI Vision
+    3. Set up context with Retell AI
+    4. Initiate the call
     """
-    if not RETELL_API_KEY:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Retell AI API key not configured"
-        )
-    
-    if not RETELL_AGENT_ID:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Retell AI Agent ID not configured"
-        )
-    
-    if not RETELL_FROM_NUMBER:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Retell AI From Number not configured"
-        )
-    
     try:
+        # Validate API configuration
+        if not RETELL_API_KEY:
+            raise HTTPException(status_code=500, detail="Retell AI API key not configured")
+        if not RETELL_AGENT_ID:
+            raise HTTPException(status_code=500, detail="Retell AI Agent ID not configured")
+        if not RETELL_FROM_NUMBER:
+            raise HTTPException(status_code=500, detail="Retell AI From Number not configured")
+
         # Generate a unique candidate ID
         candidate_id = f"candidate_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}"
         
         # Format phone number to E.164 format
-        phone = request.phone_number.strip()
-        # Remove any non-digit characters except '+'
+        phone = phone_number.strip()
         phone = '+' + ''.join(filter(str.isdigit, phone.replace('+', '')))
         if not phone.startswith('+'):
             phone = '+' + phone
         
-        # Store candidate data first
+        # Step 1: Process the PDF resume
+        print(f"Processing resume: {resume.filename}")
+        pdf_data = await process_pdf_to_text(resume)
+        
+        if not pdf_data.get("text") and not pdf_data.get("base64_image"):
+            raise HTTPException(
+                status_code=400,
+                detail="Could not extract any content from the PDF. Please ensure the file is valid and contains readable content."
+            )
+        
+        # Step 2: Process resume content through OpenAI Vision
+        print(f"Analyzing resume content for candidate {candidate_id}...")
+        resume_analysis = await process_resume_text(pdf_data)
+        
+        if not resume_analysis.get("processed"):
+            raise HTTPException(
+                status_code=500,
+                detail=f"Failed to process resume content: {resume_analysis.get('error', 'Unknown error')}"
+            )
+        
+        # Create the request object with validated data
+        request = MakeCallRequest(
+            name=name,
+            email=email,
+            phone_number=phone,
+            linkedin=linkedin,
+            resume_text=pdf_data.get("text", "")
+        )
+        
+        # Step 3: Create comprehensive dynamic variables for Retell AI context
+        dynamic_variables = {
+            "user_name": request.name,
+            "email": request.email,
+            "phone_number": phone,
+            "linkedin": request.linkedin or ""
+        }
+        
+        if resume_analysis.get("structured_data"):
+            data = resume_analysis["structured_data"]
+            
+            # Add skills
+            if data.get("skills"):
+                if isinstance(data["skills"], list):
+                    dynamic_variables["skills"] = ", ".join(data["skills"][:10])
+                else:
+                    dynamic_variables["skills"] = str(data["skills"])
+            
+            # Add experience summary
+            if data.get("experience"):
+                if isinstance(data["experience"], list):
+                    exp_summary = "; ".join([str(exp) for exp in data["experience"][:3]])
+                    dynamic_variables["experience"] = exp_summary
+                else:
+                    dynamic_variables["experience"] = str(data["experience"])
+            
+            # Add education
+            if data.get("education"):
+                if isinstance(data["education"], list):
+                    edu_summary = "; ".join([str(edu) for edu in data["education"]])
+                    dynamic_variables["education"] = edu_summary
+                else:
+                    dynamic_variables["education"] = str(data["education"])
+            
+            # Add professional summary
+            if data.get("summary"):
+                dynamic_variables["professional_summary"] = str(data["summary"])
+            
+            # Add achievements
+            if data.get("achievements"):
+                if isinstance(data["achievements"], list):
+                    achievements_summary = "; ".join([str(ach) for ach in data["achievements"][:3]])
+                    dynamic_variables["achievements"] = achievements_summary
+                else:
+                    dynamic_variables["achievements"] = str(data["achievements"])
+        
+        # Create a comprehensive context string
+        context_parts = []
+        for key, value in dynamic_variables.items():
+            if key not in ["user_name", "email", "phone_number"] and value:
+                context_parts.append(f"{key.replace('_', ' ').title()}: {value}")
+        
+        # Add context as a single string
+        dynamic_variables["context"] = " | ".join(context_parts)
+        
+        # Store candidate data
+        print(f"Storing candidate data for {candidate_id}...")
         candidate_data = {
             "name": request.name,
             "email": request.email,
             "phone_number": phone,
             "linkedin": request.linkedin,
-            "resume_text": request.resume_text
+            "resume_text": pdf_data.get("text", ""),
+            "resume_analysis": resume_analysis,
+            "context": dynamic_variables["context"]
         }
         
-        # Store in vector database
         try:
-            print(f"Storing candidate {candidate_id} with data: {candidate_data}")
             vector_result = vector_store.store_candidate(candidate_id, candidate_data)
             if vector_result.get('status') != 'success':
                 print(f"Warning: Failed to store candidate data: {vector_result.get('message')}")
         except Exception as e:
             print(f"Warning: Error storing candidate data: {str(e)}")
         
-        # Create a new call with Retell AI
+        # Step 4: Create a new call with Retell AI
+        print(f"Initiating call for candidate {candidate_id}...")
         async with httpx.AsyncClient(timeout=30.0) as client:
             try:
                 retell_payload = {
                     "to_number": phone,
                     "from_number": RETELL_FROM_NUMBER,
                     "override_agent_id": RETELL_AGENT_ID,
+                    "dynamic_variables": dynamic_variables,
                     "metadata": {
                         "candidate_id": candidate_id,
                         "name": request.name,
                         "email": request.email,
                         "linkedin": request.linkedin or "",
-                        "resume": request.resume_text or "",
                         "source": "anita_ai"
                     }
                 }
                 
-                print(f"Sending request to Retell AI: {retell_payload}")
+                print(f"Sending request to Retell AI with context...")
                 response = await client.post(
                     f"{RETELL_API_BASE}/create-phone-call",
                     headers={
@@ -910,11 +1126,10 @@ async def make_call(request: MakeCallRequest):
                 )
                 
                 print(f"Retell API Response Status: {response.status_code}")
-                print(f"Retell API Response Body: {response.text}")
                 
                 if response.status_code == 401:
                     raise HTTPException(
-                        status_code=status.HTTP_401_UNAUTHORIZED,
+                        status_code=401,
                         detail="Invalid Retell AI API key"
                     )
                 elif response.status_code == 400:
@@ -926,7 +1141,7 @@ async def make_call(request: MakeCallRequest):
                     except:
                         pass
                     raise HTTPException(
-                        status_code=status.HTTP_400_BAD_REQUEST,
+                        status_code=400,
                         detail=f"Failed to create call: {error_msg}"
                     )
                 elif response.status_code != 200:
@@ -938,42 +1153,27 @@ async def make_call(request: MakeCallRequest):
                     except:
                         pass
                     raise HTTPException(
-                        status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                        status_code=response.status_code,
                         detail=f"Retell AI service error: {error_msg}"
                     )
                 
                 call_data = response.json()
                 if not isinstance(call_data, dict):
                     raise HTTPException(
-                        status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                        status_code=500,
                         detail="Invalid response format from Retell AI"
                     )
                 
                 call_id = call_data.get("callId") or call_data.get("call_id")
                 if not call_id:
                     raise HTTPException(
-                        status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                        status_code=500,
                         detail="No call ID in response from Retell AI"
                     )
                 
-                # Start async transcript processing
-                try:
-                    # Call the transcript processing endpoint
-                    async with httpx.AsyncClient(timeout=30.0) as internal_client:
-                        await internal_client.post(
-                            "http://localhost:8000/api/process-retell-transcript",
-                            json={
-                                "candidate_id": candidate_id,
-                                "call_id": call_id
-                            }
-                        )
-                except Exception as e:
-                    print(f"Warning: Failed to start transcript processing: {str(e)}")
-                    # Don't raise the error as this is a background process
-                
                 return {
                     "status": "success",
-                    "message": "Call created successfully",
+                    "message": "Resume processed and call initiated successfully",
                     "candidate_id": candidate_id,
                     "call_id": call_id,
                     "call_details": {
@@ -982,29 +1182,23 @@ async def make_call(request: MakeCallRequest):
                         "phone_number": phone,
                         "name": request.name,
                         "email": request.email,
-                        "resume": request.resume_text or ""
+                        "context_set": True,
+                        "resume_processed": True
                     }
                 }
                 
             except httpx.TimeoutException:
                 raise HTTPException(
-                    status_code=status.HTTP_504_GATEWAY_TIMEOUT,
+                    status_code=504,
                     detail="Request to Retell AI timed out"
                 )
-            
+                
     except HTTPException as e:
-        # Return error in a format that matches the frontend's expectations
-        return {
-            "status": "error",
-            "message": str(e.detail),
-            "error": str(e.detail)
-        }
+        raise e
     except Exception as e:
         print(f"Error in make_call: {str(e)}")
-        # Return error in a format that matches the frontend's expectations
-        return {
-            "status": "error",
-            "message": str(e),
-            "error": str(e)
-        }
+        raise HTTPException(
+            status_code=500,
+            detail=str(e)
+        )
 
