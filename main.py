@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException, status, UploadFile, File, Form, Depends, Request
+from fastapi import FastAPI, HTTPException, status, UploadFile, File, Form, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from agents.brain_agent import BrainAgent
 from agents.interaction_agent import InteractionAgent
@@ -203,6 +203,35 @@ class ProcessedTranscript(BaseModel):
     availability: Optional[str]
     interests: Optional[List[str]]
     raw_transcript: str
+
+class MakeCallRequest(BaseModel):
+    name: str
+    email: str
+    phone_number: str
+    linkedin: Optional[str] = None
+    resume_text: Optional[str] = None
+
+    @validator('name')
+    def validate_name(cls, v):
+        if not v or len(v) > 100:
+            raise ValueError('Name must be between 1 and 100 characters')
+        return v
+
+    @validator('phone_number')
+    def validate_phone(cls, v):
+        if not v:
+            raise ValueError('Phone number is required')
+        # Remove any non-digit characters except '+'
+        phone = '+' + ''.join(filter(str.isdigit, v.replace('+', '')))
+        if len(phone) < 10 or len(phone) > 15:
+            raise ValueError('Phone number must be between 10 and 15 digits')
+        return phone
+
+    @validator('linkedin')
+    def validate_linkedin(cls, v):
+        if v and len(v) > 255:
+            raise ValueError('LinkedIn URL must be less than 255 characters')
+        return v or ""
 
 class CallStatusRequest(BaseModel):
     """Request model for checking call status"""
@@ -812,7 +841,7 @@ async def delete_retell_knowledge_base(knowledge_base_id: str) -> bool:
         print(f"\n=== Deleting Knowledge Base {knowledge_base_id} ===")
         async with httpx.AsyncClient(timeout=30.0) as client:
             response = await client.delete(
-                f"https://api.retellai.com/delete-knowledge-base/{knowledge_base_id}",
+                f"{RETELL_API_BASE}/knowledge-bases/{knowledge_base_id}",
                 headers={
                     "Authorization": f"Bearer {RETELL_API_KEY}",
                     "Content-Type": "application/json"
@@ -822,11 +851,11 @@ async def delete_retell_knowledge_base(knowledge_base_id: str) -> bool:
             print(f"Delete response status: {response.status_code}")
             print(f"Delete response body: {response.text}")
 
-            if response.status_code == 204:
-                print(f"Successfully deleted knowledge base {knowledge_base_id}")
-                return True
-            elif response.status_code == 404:
+            if response.status_code == 404:
                 print(f"Knowledge base {knowledge_base_id} not found - considering it already deleted")
+                return True
+            elif response.status_code == 200:
+                print(f"Successfully deleted knowledge base {knowledge_base_id}")
                 return True
             else:
                 print(f"Failed to delete knowledge base: {response.text}")
@@ -923,7 +952,7 @@ async def fetch_and_store_retell_transcript(call_data: RetellCallData):
                     try:
                         async with httpx.AsyncClient(timeout=30.0) as client:
                             delete_response = await client.delete(
-                                f"https://api.retellai.com/delete-knowledge-base/{knowledge_base_id}",
+                                f"{RETELL_API_BASE}/knowledge-bases/{knowledge_base_id}",
                                 headers={
                                     "Authorization": f"Bearer {RETELL_API_KEY}",
                                     "Content-Type": "application/json"
@@ -931,7 +960,7 @@ async def fetch_and_store_retell_transcript(call_data: RetellCallData):
                             )
                             
                             print(f"Delete response status: {delete_response.status_code}")
-                            if delete_response.status_code in (204, 404):
+                            if delete_response.status_code in (200, 404):
                                 knowledge_base_cleaned = True
                                 print("Successfully cleaned up knowledge base")
                             else:
@@ -1095,108 +1124,154 @@ async def make_call(
     email: Annotated[str, Form()],
     phone_number: Annotated[str, Form()],
     linkedin: Annotated[str, Form()],
-    resume_file: UploadFile = File(...)
+    resume: UploadFile = File(...)
 ):
-    """Make a call using Retell AI with enhanced error handling and logging."""
-    if not all([RETELL_API_KEY, RETELL_API_BASE, RETELL_FROM_NUMBER, RETELL_AGENT_ID]):
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Retell AI configuration incomplete"
-        )
-
+    """
+    Create a new Retell AI call for a candidate.
+    1. Upload the PDF resume directly to Retell AI knowledge base
+    2. Set up context with Retell AI
+    3. Initiate the call
+    """
     try:
         print("\n=== Starting Make Call Process ===")
+        
+        # Validate API configuration
+        if not RETELL_API_KEY:
+            raise HTTPException(status_code=500, detail="Retell AI API key not configured")
+        if not RETELL_AGENT_ID:
+            raise HTTPException(status_code=500, detail="Retell AI Agent ID not configured")
+        if not RETELL_FROM_NUMBER:
+            raise HTTPException(status_code=500, detail="Retell AI From Number not configured")
+
         print("API configuration validated successfully")
 
         # Generate a unique candidate ID
-        timestamp = datetime.utcnow().strftime('%Y%m%d_%H%M%S')
-        candidate_id = f"candidate_{timestamp}"
+        candidate_id = f"candidate_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}"
         print(f"Generated candidate ID: {candidate_id}")
+        
+        # Format phone number to E.164 format
+        phone = phone_number.strip()
+        phone = '+' + ''.join(filter(str.isdigit, phone.replace('+', '')))
+        if not phone.startswith('+'):
+            phone = '+' + phone
+        print(f"Formatted phone number: {phone}")
+        
+        # Validate file type
+        if not resume.filename.lower().endswith('.pdf'):
+            raise HTTPException(status_code=400, detail="File must be a PDF")
+        print(f"Validated resume file: {resume.filename}")
 
-        # Format phone number
-        formatted_phone = format_phone_number(phone_number)
-        print(f"Formatted phone number: {formatted_phone}")
-
-        # Validate resume file
-        if not resume_file.filename.lower().endswith('.pdf'):
-            raise HTTPException(status_code=400, detail="Only PDF files are accepted")
-        print(f"Validated resume file: {resume_file.filename}")
-
-        # Create knowledge base
-        print("Creating Retell AI knowledge base...")
-        knowledge_base_id = await create_retell_knowledge_base(
-            resume_file,
-            name
-        )
+        # Create knowledge base with resume file
+        print("\nCreating Retell AI knowledge base...")
+        knowledge_base_id = await create_retell_knowledge_base(resume, name)
         print(f"Created knowledge base with ID: {knowledge_base_id}")
 
-        # Prepare dynamic variables
-        dynamic_vars = {
-            "user_name": name,
-            "email": email,
-            "phone_number": formatted_phone,
-            "linkedin": linkedin or "Not provided"
+        # Create the request object with validated data
+        request = MakeCallRequest(
+            name=name,
+            email=email,
+            phone_number=phone,
+            linkedin=linkedin
+        )
+        print("\nCreated MakeCallRequest object")
+        
+        # Create dynamic variables for Retell AI context
+        dynamic_variables = {
+            "user_name": request.name,
+            "email": request.email,
+            "phone_number": phone,
+            "linkedin": request.linkedin or ""
         }
-        print(f"Dynamic variables prepared: {dynamic_vars}")
-
-        print("Initiating call with Retell AI...")
-        # Prepare the payload for Retell AI
-        payload = {
-            "to_number": formatted_phone,
-            "from_number": RETELL_FROM_NUMBER,
-            "override_agent_id": RETELL_AGENT_ID,
-            "dynamic_variables": dynamic_vars,
-            "knowledge_base_id": knowledge_base_id,
-            "webhook_url": "https://anita-fastapi.onrender.com/webhook/retell",
-            "metadata": {
-                "candidate_id": candidate_id,
-                "name": name,
-                "email": email,
-                "linkedin": linkedin or "Not provided",
-                "source": "anita_ai",
-                "knowledge_base_id": knowledge_base_id
-            }
-        }
-        print(f"Prepared Retell AI payload: {json.dumps(payload, indent=2)}")
-
-        # Make the API call to Retell AI
-        async with httpx.AsyncClient() as client:
-            response = await client.post(
-                f"{RETELL_API_BASE}/calls",
-                json=payload,
-                headers={
-                    "Authorization": f"Bearer {RETELL_API_KEY}",
-                    "Content-Type": "application/json"
+        print(f"Dynamic variables prepared: {dynamic_variables}")
+        
+        # Create a new call with Retell AI
+        print("\nInitiating call with Retell AI...")
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            try:
+                retell_payload = {
+                    "to_number": phone,
+                    "from_number": RETELL_FROM_NUMBER,
+                    "override_agent_id": RETELL_AGENT_ID,
+                    "dynamic_variables": dynamic_variables,
+                    "knowledge_base_id": knowledge_base_id,
+                    "metadata": {
+                        "candidate_id": candidate_id,
+                        "name": request.name,
+                        "email": request.email,
+                        "linkedin": request.linkedin or "",
+                        "source": "anita_ai",
+                        "knowledge_base_id": knowledge_base_id
+                    }
                 }
-            )
-            
-            print(f"Retell AI response status: {response.status_code}")
-            print(f"Retell AI response headers: {response.headers}")
-            print(f"Retell AI response body: {response.text}")
+                print(f"\nPrepared Retell AI payload: {json.dumps(retell_payload, indent=2)}")
 
-            if response.status_code != 201:
-                raise HTTPException(
-                    status_code=response.status_code,
-                    detail=f"Retell AI service error: {response.text}"
+                response = await client.post(
+                    f"{RETELL_API_BASE}/create-phone-call",
+                    headers={
+                        "Authorization": f"Bearer {RETELL_API_KEY}",
+                        "Content-Type": "application/json"
+                    },
+                    json=retell_payload
                 )
-
-            response_data = response.json()
-            return {
-                "status": "success",
-                "call_id": response_data["call_id"],
-                "candidate_id": candidate_id,
-                "knowledge_base_id": knowledge_base_id
-            }
-
-    except HTTPException as he:
-        print(f"HTTPException in make_call: {he.status_code}: {he.detail}")
-        raise
+                
+                print(f"\nRetell AI response status: {response.status_code}")
+                print(f"Retell AI response headers: {dict(response.headers)}")
+                print(f"Retell AI response body: {response.text}")
+                
+                if response.status_code != 200:
+                    error_msg = response.text
+                    try:
+                        error_data = response.json()
+                        if isinstance(error_data, dict):
+                            error_msg = error_data.get('message', error_data.get('error', response.text))
+                    except:
+                        pass
+                    raise HTTPException(
+                        status_code=response.status_code,
+                        detail=f"Retell AI service error: {error_msg}"
+                    )
+                
+                call_data = response.json()
+                call_id = call_data.get("callId") or call_data.get("call_id")
+                if not call_id:
+                    raise HTTPException(
+                        status_code=500,
+                        detail="No call ID in response from Retell AI"
+                    )
+                
+                print(f"\nCall initiated successfully with ID: {call_id}")
+                
+                return {
+                    "status": "success",
+                    "message": "Resume uploaded and call initiated successfully",
+                    "candidate_id": candidate_id,
+                    "call_id": call_id,
+                    "call_details": {
+                        "status": call_data.get("status", "unknown"),
+                        "created_at": datetime.utcnow().isoformat(),
+                        "phone_number": phone,
+                        "name": request.name,
+                        "email": request.email,
+                        "knowledge_base_id": knowledge_base_id
+                    }
+                }
+                
+            except httpx.TimeoutException:
+                print("\nTimeout error while calling Retell AI")
+                raise HTTPException(
+                    status_code=504,
+                    detail="Request to Retell AI timed out"
+                )
+                
+    except HTTPException as e:
+        print(f"\nHTTPException in make_call: {str(e)}")
+        raise e
     except Exception as e:
-        print(f"Unexpected error in make_call: {str(e)}")
+        print(f"\nUnexpected error in make_call: {str(e)}")
         print(f"Error type: {type(e)}")
         print(f"Error traceback: {traceback.format_exc()}")
         raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            status_code=500,
             detail=str(e)
         )
     finally:
@@ -1222,33 +1297,3 @@ async def delete_knowledge_base(knowledge_base_id: str):
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=str(e)
         )
-
-@app.post("/webhook/retell")
-async def retell_webhook(request: Request):
-    """Handle Retell AI webhooks for call status updates."""
-    try:
-        webhook_data = await request.json()
-        print(f"\n=== Processing Retell Webhook ===")
-        print(f"Webhook data: {json.dumps(webhook_data, indent=2)}")
-        
-        call_status = webhook_data.get('call_status')
-        if call_status == 'ended':
-            # Extract knowledge base ID from metadata
-            metadata = webhook_data.get('metadata', {})
-            knowledge_base_id = metadata.get('knowledge_base_id')
-            
-            if knowledge_base_id:
-                print(f"Call ended - cleaning up knowledge base {knowledge_base_id}")
-                success = await delete_retell_knowledge_base(knowledge_base_id)
-                if success:
-                    print("Successfully cleaned up knowledge base via webhook")
-                else:
-                    print("Failed to clean up knowledge base via webhook")
-            else:
-                print("No knowledge base ID found in webhook metadata")
-        
-        return {"status": "success", "message": "Webhook processed"}
-    except Exception as e:
-        print(f"Error processing webhook: {str(e)}")
-        return {"status": "error", "message": str(e)}
-
