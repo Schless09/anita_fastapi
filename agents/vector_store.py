@@ -251,13 +251,12 @@ class VectorStore:
             parts.append(f"Name: {candidate_data['name']}")
         if 'email' in candidate_data:
             parts.append(f"Email: {candidate_data['email']}")
-        if 'phone_number' in candidate_data and candidate_data['phone_number']:
+        if 'phone_number' in candidate_data:
             parts.append(f"Phone: {candidate_data['phone_number']}")
         if 'linkedin' in candidate_data and candidate_data['linkedin']:
             parts.append(f"LinkedIn: {candidate_data['linkedin']}")
+        if 'resume' in candidate_data and candidate_data['resume']:
+            parts.append(f"Resume: {candidate_data['resume']}")
             
-        # Add resume text if available
-        if 'resume_text' in candidate_data and candidate_data['resume_text']:
-            parts.append(f"Resume: {candidate_data['resume_text']}")
-            
-        return "\n".join(parts) 
+        # Join all parts with newlines
+        return '\n'.join(parts) 
