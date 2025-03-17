@@ -1,0 +1,9 @@
+fastapi
+uvicorn
+python-dotenv
+sendgrid
+pinecone
+sentence-transformers
+pydantic
+python-multipart
+httpx
