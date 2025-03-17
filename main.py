@@ -1095,8 +1095,7 @@ async def make_call(
     email: Annotated[str, Form()],
     phone_number: Annotated[str, Form()],
     linkedin: Annotated[str, Form()],
-    resume_file: UploadFile = File(...),
-    base_url: str = Form(...)
+    resume_file: UploadFile = File(...)
 ):
     """Make a call using Retell AI with enhanced error handling and logging."""
     if not all([RETELL_API_KEY, RETELL_API_BASE, RETELL_FROM_NUMBER, RETELL_AGENT_ID]):
@@ -1148,7 +1147,7 @@ async def make_call(
             "override_agent_id": RETELL_AGENT_ID,
             "dynamic_variables": dynamic_vars,
             "knowledge_base_id": knowledge_base_id,
-            "webhook_url": f"{base_url}/webhook/retell",
+            "webhook_url": "https://anita-fastapi.onrender.com/webhook/retell",
             "metadata": {
                 "candidate_id": candidate_id,
                 "name": name,
