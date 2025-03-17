@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException, status, UploadFile, File, Form, Depends
+from fastapi import FastAPI, HTTPException, status, UploadFile, File, Form, Depends, Request
 from fastapi.middleware.cors import CORSMiddleware
 from agents.brain_agent import BrainAgent
 from agents.interaction_agent import InteractionAgent
@@ -937,36 +937,52 @@ async def fetch_and_store_retell_transcript(call_data: RetellCallData):
             knowledge_base_cleaned = False
             knowledge_base_id = None
             
+            # Extract knowledge base ID from multiple possible locations
+            metadata = retell_data.get('metadata', {})
+            knowledge_base_id = (
+                metadata.get('knowledge_base_id') or
+                retell_data.get('knowledge_base_id') or
+                metadata.get('knowledgeBaseId')
+            )
+
+            # Check if call has ended and attempt knowledge base cleanup
             if retell_data.get('call_status') == RetellCallStatus.ENDED:
                 print("\nCall has ended - attempting to clean up knowledge base")
-                # Try to get knowledge_base_id from multiple possible locations
-                metadata = retell_data.get('metadata', {})
-                knowledge_base_id = (
-                    metadata.get('knowledge_base_id') or
-                    retell_data.get('knowledge_base_id') or
-                    metadata.get('knowledgeBaseId')
-                )
-                
                 if knowledge_base_id:
                     print(f"Found knowledge base ID: {knowledge_base_id}")
                     try:
-                        async with httpx.AsyncClient(timeout=30.0) as client:
+                        # First try the new delete endpoint
+                        delete_response = await client.delete(
+                            f"{RETELL_API_BASE}/knowledge-bases/{knowledge_base_id}",
+                            headers={
+                                "Authorization": f"Bearer {RETELL_API_KEY}",
+                                "Content-Type": "application/json"
+                            }
+                        )
+                        
+                        # If that fails, try the alternative endpoint
+                        if delete_response.status_code not in (200, 404):
+                            print("First deletion attempt failed, trying alternative endpoint...")
                             delete_response = await client.delete(
-                                f"{RETELL_API_BASE}/knowledge-bases/{knowledge_base_id}",
+                                f"https://api.retellai.com/delete-knowledge-base-source/{knowledge_base_id}/source/{knowledge_base_id}",
                                 headers={
                                     "Authorization": f"Bearer {RETELL_API_KEY}",
                                     "Content-Type": "application/json"
                                 }
                             )
-                            
-                            print(f"Delete response status: {delete_response.status_code}")
-                            if delete_response.status_code in (200, 404):
-                                knowledge_base_cleaned = True
-                                print("Successfully cleaned up knowledge base")
-                            else:
-                                print(f"Failed to delete knowledge base: {delete_response.text}")
+                        
+                        print(f"Delete response status: {delete_response.status_code}")
+                        if delete_response.status_code in (200, 404):
+                            knowledge_base_cleaned = True
+                            print("Successfully cleaned up knowledge base")
+                        else:
+                            print(f"Failed to delete knowledge base: {delete_response.text}")
+                            # Log the failure but don't raise an exception to allow transcript processing to continue
+                            print(f"Warning: Failed to delete knowledge base {knowledge_base_id}")
                     except Exception as e:
                         print(f"Error deleting knowledge base: {str(e)}")
+                        print(f"Error type: {type(e)}")
+                        print(f"Error traceback: {traceback.format_exc()}")
                 else:
                     print("No knowledge base ID found in response")
             else:
@@ -998,6 +1014,11 @@ async def fetch_and_store_retell_transcript(call_data: RetellCallData):
                 }
             )
             
+            # If knowledge base wasn't cleaned up, schedule a retry
+            if knowledge_base_id and not knowledge_base_cleaned:
+                print("Scheduling knowledge base cleanup retry...")
+                asyncio.create_task(retry_knowledge_base_cleanup(knowledge_base_id))
+            
             return {
                 "status": "success",
                 "message": "Transcript processed and stored successfully",
@@ -1028,6 +1049,46 @@ async def fetch_and_store_retell_transcript(call_data: RetellCallData):
         )
     finally:
         print("=== Transcript Processing Complete ===\n")
+
+async def retry_knowledge_base_cleanup(knowledge_base_id: str, max_retries: int = 3, delay_seconds: int = 60):
+    """
+    Retry deleting a knowledge base with exponential backoff.
+    """
+    for attempt in range(max_retries):
+        try:
+            await asyncio.sleep(delay_seconds * (2 ** attempt))  # Exponential backoff
+            
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                # Try both deletion endpoints
+                endpoints = [
+                    f"{RETELL_API_BASE}/knowledge-bases/{knowledge_base_id}",
+                    f"https://api.retellai.com/delete-knowledge-base-source/{knowledge_base_id}/source/{knowledge_base_id}"
+                ]
+                
+                for endpoint in endpoints:
+                    try:
+                        response = await client.delete(
+                            endpoint,
+                            headers={
+                                "Authorization": f"Bearer {RETELL_API_KEY}",
+                                "Content-Type": "application/json"
+                            }
+                        )
+                        
+                        if response.status_code in (200, 404):
+                            print(f"Successfully deleted knowledge base {knowledge_base_id} on retry attempt {attempt + 1}")
+                            return True
+                    except Exception as e:
+                        print(f"Error on endpoint {endpoint}: {str(e)}")
+                        continue
+                
+            print(f"Retry attempt {attempt + 1} failed for knowledge base {knowledge_base_id}")
+            
+        except Exception as e:
+            print(f"Error in retry attempt {attempt + 1}: {str(e)}")
+    
+    print(f"Failed to delete knowledge base {knowledge_base_id} after {max_retries} retries")
+    return False
 
 def calculate_call_duration(retell_data: Dict[str, Any]) -> Optional[float]:
     """Calculate call duration from timestamps."""
@@ -1297,3 +1358,53 @@ async def delete_knowledge_base(knowledge_base_id: str):
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=str(e)
         )
+
+@app.post("/webhook/retell", response_model=Dict[str, Any])
+async def retell_webhook(request: Request):
+    """
+    Webhook endpoint for Retell AI call status updates.
+    This endpoint will be called by Retell AI when call status changes.
+    """
+    try:
+        # Get the raw body
+        body = await request.json()
+        print(f"\n=== Received Retell AI Webhook ===\nPayload: {json.dumps(body, indent=2)}")
+        
+        # Extract relevant information
+        call_id = body.get('call_id')
+        call_status = body.get('call_status')
+        metadata = body.get('metadata', {})
+        knowledge_base_id = (
+            metadata.get('knowledge_base_id') or
+            body.get('knowledge_base_id') or
+            metadata.get('knowledgeBaseId')
+        )
+        
+        if not call_id:
+            raise HTTPException(status_code=400, detail="Missing call_id in webhook payload")
+            
+        print(f"Processing webhook for call {call_id} with status {call_status}")
+        
+        # If call has ended, clean up the knowledge base
+        if call_status == RetellCallStatus.ENDED and knowledge_base_id:
+            print(f"Call {call_id} has ended - cleaning up knowledge base {knowledge_base_id}")
+            asyncio.create_task(retry_knowledge_base_cleanup(knowledge_base_id))
+            
+        return {
+            "status": "success",
+            "message": "Webhook processed successfully",
+            "call_id": call_id,
+            "call_status": call_status,
+            "knowledge_base_id": knowledge_base_id
+        }
+        
+    except Exception as e:
+        print(f"Error processing webhook: {str(e)}")
+        print(f"Error type: {type(e)}")
+        print(f"Error traceback: {traceback.format_exc()}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to process webhook: {str(e)}"
+        )
+    finally:
+        print("=== Webhook Processing Complete ===\n")
