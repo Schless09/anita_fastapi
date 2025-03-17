@@ -90,46 +90,46 @@ class EnhancedTranscript(BaseModel):
 class CandidateData(BaseModel):
     name: str
     email: str
-    phone_number: Optional[str] = None
+    phone_number: str
     linkedin: Optional[str] = None
-    resume_text: Optional[str] = None
+    resume: Optional[str] = None
 
     @validator('name')
     def validate_name(cls, v):
         if not v or not v.strip():
-            raise ValueError('Name is required')
+            raise ValueError('Name cannot be empty')
         return v.strip()
 
     @validator('email')
     def validate_email(cls, v):
         if not v or not v.strip():
-            raise ValueError('Email is required')
+            raise ValueError('Email cannot be empty')
         if '@' not in v:
             raise ValueError('Invalid email format')
-        return v.strip().lower()
+        return v.strip()
 
     @validator('phone_number')
     def validate_phone(cls, v):
-        if not v:
-            return None
-        # Keep only digits and common phone number characters
-        phone = ''.join(c for c in v if c.isdigit() or c in '+-() ')
+        if not v or not v.strip():
+            raise ValueError('Phone number cannot be empty')
+        # Remove any non-digit characters except '+'
+        phone = '+' + ''.join(filter(str.isdigit, v.replace('+', '')))
+        if not phone.startswith('+'):
+            phone = '+' + phone
         return phone
 
     @validator('linkedin')
     def validate_linkedin(cls, v):
-        if not v:
-            return None
-        v = v.strip()
-        if not v:
-            return None
-        # Add https:// if missing
-        if not v.startswith(('http://', 'https://')):
-            v = 'https://' + v
+        if v:
+            v = v.strip()
+            if not v:
+                return None
+            if not (v.startswith('http://') or v.startswith('https://')):
+                v = 'https://' + v
         return v
 
-    @validator('resume_text')
-    def validate_resume_text(cls, v):
+    @validator('resume')
+    def validate_resume(cls, v):
         if not v:
             return None
         # Truncate if too long
@@ -201,20 +201,44 @@ async def read_root():
 
 @app.post("/candidates", response_model=Dict[str, Any])
 async def submit_candidate(candidate: CandidateData):
-    """
-    Submit a new candidate to the system.
-    
-    Enhanced matching will be performed against all available jobs,
-    considering location, work environment, compensation, and work authorization preferences.
-    """
-    # Add timestamp to candidate data
-    candidate_dict = candidate.dict()
-    candidate_dict['timestamp'] = datetime.utcnow().isoformat()
-    
-    result = brain_agent.handle_candidate_submission(candidate_dict)
-    if result.get('status') == 'error':
-        raise HTTPException(status_code=400, detail=result['message'])
-    return result
+    """Submit a new candidate"""
+    try:
+        # Convert candidate model to dict
+        candidate_dict = candidate.dict()
+        
+        # Generate a unique candidate ID
+        candidate_id = f"candidate_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}"
+        
+        # Store candidate in vector database
+        result = brain_agent.handle_candidate_submission(candidate_dict)
+        
+        if result.get('status') != 'success':
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail={
+                    "error": "Failed to store candidate",
+                    "message": result.get('message', 'Unknown error occurred')
+                }
+            )
+            
+        return {
+            "status": "success",
+            "message": "Candidate submitted successfully",
+            "candidate_id": candidate_id,
+            "data": candidate_dict
+        }
+        
+    except ValidationError as e:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={"error": "Validation error", "message": str(e)}
+        )
+    except Exception as e:
+        print(f"Error in submit_candidate: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail={"error": "Internal server error", "message": str(e)}
+        )
 
 async def process_transcript_with_openai(transcript: str) -> Dict[str, Any]:
     """Process transcript using OpenAI to extract structured information."""
