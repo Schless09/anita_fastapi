@@ -204,35 +204,6 @@ class ProcessedTranscript(BaseModel):
     interests: Optional[List[str]]
     raw_transcript: str
 
-class MakeCallRequest(BaseModel):
-    name: str
-    email: str
-    phone_number: str
-    linkedin: Optional[str] = None
-    resume_text: Optional[str] = None
-
-    @validator('name')
-    def validate_name(cls, v):
-        if not v or len(v) > 100:
-            raise ValueError('Name must be between 1 and 100 characters')
-        return v
-
-    @validator('phone_number')
-    def validate_phone(cls, v):
-        if not v:
-            raise ValueError('Phone number is required')
-        # Remove any non-digit characters except '+'
-        phone = '+' + ''.join(filter(str.isdigit, v.replace('+', '')))
-        if len(phone) < 10 or len(phone) > 15:
-            raise ValueError('Phone number must be between 10 and 15 digits')
-        return phone
-
-    @validator('linkedin')
-    def validate_linkedin(cls, v):
-        if v and len(v) > 255:
-            raise ValueError('LinkedIn URL must be less than 255 characters')
-        return v or ""
-
 class CallStatusRequest(BaseModel):
     """Request model for checking call status"""
     candidate_id: str
@@ -1119,7 +1090,14 @@ async def create_retell_knowledge_base(resume_file: UploadFile, name: str) -> st
         raise HTTPException(status_code=500, detail=f"Failed to create knowledge base: {str(e)}")
 
 @app.post("/api/makeCall", response_model=Dict[str, Any])
-async def make_call(request: MakeCallRequest) -> Dict[str, Any]:
+async def make_call(
+    name: Annotated[str, Form()],
+    email: Annotated[str, Form()],
+    phone_number: Annotated[str, Form()],
+    linkedin: Annotated[str, Form()],
+    resume_file: UploadFile = File(...),
+    base_url: str = Form(...)
+):
     """Make a call using Retell AI with enhanced error handling and logging."""
     if not all([RETELL_API_KEY, RETELL_API_BASE, RETELL_FROM_NUMBER, RETELL_AGENT_ID]):
         raise HTTPException(
@@ -1137,31 +1115,28 @@ async def make_call(request: MakeCallRequest) -> Dict[str, Any]:
         print(f"Generated candidate ID: {candidate_id}")
 
         # Format phone number
-        formatted_phone = format_phone_number(request.phone_number)
+        formatted_phone = format_phone_number(phone_number)
         print(f"Formatted phone number: {formatted_phone}")
 
         # Validate resume file
-        if not request.resume_file.filename.lower().endswith('.pdf'):
+        if not resume_file.filename.lower().endswith('.pdf'):
             raise HTTPException(status_code=400, detail="Only PDF files are accepted")
-        print(f"Validated resume file: {request.resume_file.filename}")
+        print(f"Validated resume file: {resume_file.filename}")
 
         # Create knowledge base
         print("Creating Retell AI knowledge base...")
         knowledge_base_id = await create_retell_knowledge_base(
-            request.resume_file,
-            request.name
+            resume_file,
+            name
         )
         print(f"Created knowledge base with ID: {knowledge_base_id}")
 
-        # Create MakeCallRequest object
-        print("Created MakeCallRequest object")
-
         # Prepare dynamic variables
         dynamic_vars = {
-            "user_name": request.name,
-            "email": request.email,
+            "user_name": name,
+            "email": email,
             "phone_number": formatted_phone,
-            "linkedin": request.linkedin or "Not provided"
+            "linkedin": linkedin or "Not provided"
         }
         print(f"Dynamic variables prepared: {dynamic_vars}")
 
@@ -1173,12 +1148,12 @@ async def make_call(request: MakeCallRequest) -> Dict[str, Any]:
             "override_agent_id": RETELL_AGENT_ID,
             "dynamic_variables": dynamic_vars,
             "knowledge_base_id": knowledge_base_id,
-            "webhook_url": f"{request.base_url}/webhook/retell",
+            "webhook_url": f"{base_url}/webhook/retell",
             "metadata": {
                 "candidate_id": candidate_id,
-                "name": request.name,
-                "email": request.email,
-                "linkedin": request.linkedin or "Not provided",
+                "name": name,
+                "email": email,
+                "linkedin": linkedin or "Not provided",
                 "source": "anita_ai",
                 "knowledge_base_id": knowledge_base_id
             }
