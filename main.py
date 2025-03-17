@@ -88,7 +88,7 @@ class EnhancedTranscript(BaseModel):
     error_details: Optional[str]
 
 class CandidateData(BaseModel):
-    name: str
+    name: str  # Will combine first_name and last_name
     email: str
     phone_number: str
     linkedin: Optional[str] = None
@@ -113,7 +113,7 @@ class CandidateData(BaseModel):
         if not v or not v.strip():
             raise ValueError('Phone number cannot be empty')
         # Remove any non-digit characters except '+'
-        phone = '+' + ''.join(filter(str.isdigit, v.replace('+', '')))
+        phone = ''.join(filter(str.isdigit, v.replace('+', '')))
         if not phone.startswith('+'):
             phone = '+' + phone
         return phone
@@ -189,6 +189,53 @@ class MakeCallRequest(BaseModel):
     email: str
     phone_number: str
     linkedin: Optional[str] = None
+    resume: Optional[str] = None
+
+    @validator('name')
+    def validate_name(cls, v):
+        if not v or not v.strip():
+            raise ValueError('Name cannot be empty')
+        return v.strip()
+
+    @validator('email')
+    def validate_email(cls, v):
+        if not v or not v.strip():
+            raise ValueError('Email cannot be empty')
+        if '@' not in v:
+            raise ValueError('Invalid email format')
+        return v.strip()
+
+    @validator('phone_number')
+    def validate_phone(cls, v):
+        if not v or not v.strip():
+            raise ValueError('Phone number cannot be empty')
+        # Remove any non-digit characters except '+'
+        phone = ''.join(filter(str.isdigit, v.replace('+', '')))
+        if not phone.startswith('+'):
+            phone = '+' + phone
+        return phone
+
+    @validator('linkedin')
+    def validate_linkedin(cls, v):
+        if v:
+            v = v.strip()
+            if not v:
+                return None
+            if not (v.startswith('http://') or v.startswith('https://')):
+                v = 'https://' + v
+        return v
+
+    @validator('resume')
+    def validate_resume(cls, v):
+        if v:
+            v = v.strip()
+            if not v:
+                return None
+            # Truncate if too long (Retell AI might have limits)
+            max_length = 5000
+            if len(v) > max_length:
+                return v[:max_length]
+        return v
 
 @app.get("/")
 async def read_root():
@@ -210,14 +257,24 @@ async def submit_candidate(candidate: CandidateData):
         candidate_id = f"candidate_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}"
         
         # Store candidate in vector database
-        result = brain_agent.handle_candidate_submission(candidate_dict)
-        
-        if result.get('status') != 'success':
+        try:
+            print(f"Storing candidate {candidate_id} with data: {candidate_dict}")
+            result = vector_store.store_candidate(candidate_id, candidate_dict)
+            if result.get('status') != 'success':
+                raise HTTPException(
+                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    detail={
+                        "error": "Failed to store candidate",
+                        "message": result.get('message', 'Unknown error occurred')
+                    }
+                )
+        except Exception as e:
+            print(f"Error storing candidate in vector store: {str(e)}")
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail={
-                    "error": "Failed to store candidate",
-                    "message": result.get('message', 'Unknown error occurred')
+                    "error": "Vector store error",
+                    "message": str(e)
                 }
             )
             
@@ -898,11 +955,13 @@ async def make_call(request: MakeCallRequest):
             "name": request.name,
             "email": request.email,
             "phone_number": phone,
-            "linkedin": request.linkedin
+            "linkedin": request.linkedin,
+            "resume": request.resume
         }
         
         # Store in vector database
         try:
+            print(f"Storing candidate {candidate_id} with data: {candidate_data}")
             vector_result = vector_store.store_candidate(candidate_id, candidate_data)
             if vector_result.get('status') != 'success':
                 print(f"Warning: Failed to store candidate data: {vector_result.get('message')}")
@@ -921,6 +980,7 @@ async def make_call(request: MakeCallRequest):
                         "name": request.name,
                         "email": request.email,
                         "linkedin": request.linkedin or "",
+                        "resume": request.resume or "",  # Include resume content
                         "source": "anita_ai"
                     }
                 }
@@ -987,7 +1047,8 @@ async def make_call(request: MakeCallRequest):
                     "created_at": datetime.utcnow().isoformat(),
                     "phone_number": phone,
                     "name": request.name,
-                    "email": request.email
+                    "email": request.email,
+                    "resume": request.resume or ""  # Include resume in response
                 }
             }
             
