@@ -1262,6 +1262,23 @@ async def make_call(
                         "linkedin": request.linkedin or "",
                         "source": "anita_ai",
                         "knowledge_base_id": knowledge_base_id
+                    },
+                    # Update voice and audio configuration to match dashboard settings
+                    "voice_id": "kathrine",  # Using Kathrine voice as shown in dashboard
+                    "voice_config": {
+                        "model": "elevenlabs-turbo-v2",  # Auto(Elevenlabs Turbo V2)
+                        "speed": 1.0,  # Default speed from dashboard
+                        "temperature": 1.0,  # Default temperature from dashboard
+                        "volume": 1.0  # Default volume from dashboard
+                    },
+                    "audio_config": {
+                        "noise_reduction": True,
+                        "voice_activity_detection": True,
+                        "auto_gain_control": True
+                    },
+                    "conversation_config": {
+                        "initiation": "agent_first",
+                        "welcome_message": f"Hi {request.name}, this is Anita calling from our recruiting team. I received your resume and I'd love to learn more about your background and interests. Do you have a few minutes to chat?"
                     }
                 }
                 print(f"\nPrepared Retell AI payload: {json.dumps(retell_payload, indent=2)}")
