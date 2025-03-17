@@ -384,78 +384,144 @@ async def process_resume_text(resume_data: Dict[str, Any]) -> Dict[str, Any]:
         }
 
 @app.post("/candidates", response_model=Dict[str, Any])
-async def submit_candidate(request: MakeCallRequest):
-    """Submit a new candidate with JSON data"""
+async def submit_candidate(
+    name: str = Form(...),
+    email: str = Form(...),
+    phone_number: str = Form(...),
+    linkedin: Optional[str] = Form(None),
+    resume: UploadFile = File(...)
+):
+    """
+    Submit a new candidate.
+    1. Process the PDF resume (both text and image)
+    2. Analyze resume content with OpenAI
+    3. Store candidate data in vector database
+    """
     try:
         # Generate a unique candidate ID
         candidate_id = f"candidate_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}"
         
         # Format phone number to E.164 format
-        phone = request.phone_number.strip()
-        # Remove any non-digit characters except '+'
+        phone = phone_number.strip()
         phone = '+' + ''.join(filter(str.isdigit, phone.replace('+', '')))
         if not phone.startswith('+'):
             phone = '+' + phone
         
-        # Process resume text
-        resume_data = await process_pdf_to_text(request.resume_text)
+        # Step 1: Process the PDF resume
+        print(f"Processing resume: {resume.filename}")
+        pdf_data = await process_pdf_to_text(resume)
         
-        # Create candidate data
+        if not pdf_data.get("text") and not pdf_data.get("base64_image"):
+            raise HTTPException(
+                status_code=400,
+                detail="Could not extract any content from the PDF. Please ensure the file is valid and contains readable content."
+            )
+        
+        # Step 2: Process resume content through OpenAI
+        print(f"Analyzing resume content for candidate {candidate_id}...")
+        resume_analysis = await process_resume_text(pdf_data)
+        
+        if not resume_analysis.get("processed"):
+            raise HTTPException(
+                status_code=500,
+                detail=f"Failed to process resume content: {resume_analysis.get('error', 'Unknown error')}"
+            )
+        
+        # Create comprehensive context from resume analysis
+        context_data = {}
+        if resume_analysis.get("structured_data"):
+            data = resume_analysis["structured_data"]
+            
+            # Add skills
+            if data.get("skills"):
+                if isinstance(data["skills"], list):
+                    context_data["skills"] = ", ".join(data["skills"][:10])
+                else:
+                    context_data["skills"] = str(data["skills"])
+            
+            # Add experience summary
+            if data.get("experience"):
+                if isinstance(data["experience"], list):
+                    exp_summary = "; ".join([str(exp) for exp in data["experience"][:3]])
+                    context_data["experience"] = exp_summary
+                else:
+                    context_data["experience"] = str(data["experience"])
+            
+            # Add education
+            if data.get("education"):
+                if isinstance(data["education"], list):
+                    edu_summary = "; ".join([str(edu) for edu in data["education"]])
+                    context_data["education"] = edu_summary
+                else:
+                    context_data["education"] = str(data["education"])
+            
+            # Add professional summary
+            if data.get("summary"):
+                context_data["professional_summary"] = str(data["summary"])
+            
+            # Add achievements
+            if data.get("achievements"):
+                if isinstance(data["achievements"], list):
+                    achievements_summary = "; ".join([str(ach) for ach in data["achievements"][:3]])
+                    context_data["achievements"] = achievements_summary
+                else:
+                    context_data["achievements"] = str(data["achievements"])
+        
+        # Create a comprehensive context string
+        context_parts = []
+        for key, value in context_data.items():
+            if value:
+                context_parts.append(f"{key.replace('_', ' ').title()}: {value}")
+        
+        # Store candidate data
+        print(f"Storing candidate data for {candidate_id}...")
         candidate_data = {
-            "name": request.name,
-            "email": request.email,
+            "name": name,
+            "email": email,
             "phone_number": phone,
-            "linkedin": request.linkedin,
-            "resume_text": resume_data.get("text"),
-            "resume_analysis": resume_data
+            "linkedin": linkedin,
+            "resume_text": pdf_data.get("text", ""),
+            "resume_analysis": resume_analysis,
+            "context": " | ".join(context_parts)
         }
         
-        # Store candidate in vector database
         try:
-            print(f"Storing candidate {candidate_id} with processed data")
-            result = vector_store.store_candidate(candidate_id, candidate_data)
-            if result.get('status') != 'success':
-                return {
-                    "status": "error",
-                    "message": result.get('message', 'Failed to store candidate'),
-                    "error": result.get('message', 'Failed to store candidate')
-                }
+            vector_result = vector_store.store_candidate(candidate_id, candidate_data)
+            if vector_result.get('status') != 'success':
+                print(f"Warning: Failed to store candidate data: {vector_result.get('message')}")
+                raise HTTPException(
+                    status_code=500,
+                    detail=f"Failed to store candidate data: {vector_result.get('message')}"
+                )
         except Exception as e:
-            print(f"Error storing candidate in vector store: {str(e)}")
-            return {
-                "status": "error",
-                "message": str(e),
-                "error": str(e)
-            }
-            
+            print(f"Error storing candidate data: {str(e)}")
+            raise HTTPException(
+                status_code=500,
+                detail=f"Failed to store candidate data: {str(e)}"
+            )
+        
         return {
             "status": "success",
-            "message": "Candidate submitted successfully",
+            "message": "Candidate profile created successfully",
             "candidate_id": candidate_id,
-            "data": {
-                "profile": {
-                    "name": request.name,
-                    "email": request.email,
-                    "phone_number": phone,
-                    "linkedin": request.linkedin
-                },
-                "resume_analysis": resume_data
-            }
+            "profile": {
+                "name": name,
+                "email": email,
+                "phone_number": phone,
+                "linkedin": linkedin
+            },
+            "resume_analysis": resume_analysis.get("structured_data", {}),
+            "stored_in_vector_db": True
         }
-        
-    except ValidationError as e:
-        return {
-            "status": "error",
-            "message": str(e),
-            "error": str(e)
-        }
+                
+    except HTTPException as e:
+        raise e
     except Exception as e:
         print(f"Error in submit_candidate: {str(e)}")
-        return {
-            "status": "error",
-            "message": str(e),
-            "error": str(e)
-        }
+        raise HTTPException(
+            status_code=500,
+            detail=str(e)
+        )
 
 async def process_transcript_with_openai(transcript: str) -> Dict[str, Any]:
     """Process transcript using OpenAI to extract structured information."""
