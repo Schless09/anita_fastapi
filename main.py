@@ -1,4 +1,5 @@
-from fastapi import FastAPI, HTTPException, status
+from fastapi import FastAPI, HTTPException, status, UploadFile, File, Form, Depends
+from fastapi.middleware.cors import CORSMiddleware
 from agents.brain_agent import BrainAgent
 from agents.interaction_agent import InteractionAgent
 from agents.vector_store import VectorStore
@@ -10,6 +11,9 @@ from dotenv import load_dotenv
 import httpx
 from enum import Enum
 import openai
+from pydantic import ValidationError
+import json
+import base64
 
 # Load environment variables
 load_dotenv()
@@ -61,12 +65,16 @@ class RetellCallData(BaseModel):
     def validate_candidate_id(cls, v):
         if not v or not v.strip():
             raise ValueError("candidate_id cannot be empty")
+        if not v.startswith('candidate_'):
+            raise ValueError("Invalid candidate_id format")
         return v.strip()
 
     @validator('call_id')
     def validate_call_id(cls, v):
         if not v or not v.strip():
             raise ValueError("call_id cannot be empty")
+        if not v.startswith('call_'):
+            raise ValueError("Invalid call_id format")
         return v.strip()
 
 class RetellTranscriptResponse(BaseModel):
@@ -88,11 +96,11 @@ class EnhancedTranscript(BaseModel):
     error_details: Optional[str]
 
 class CandidateData(BaseModel):
-    name: str  # Will combine first_name and last_name
+    name: str
     email: str
     phone_number: str
     linkedin: Optional[str] = None
-    resume: Optional[str] = None
+    resume_text: Optional[str] = None  # Changed from resume to resume_text
 
     @validator('name')
     def validate_name(cls, v):
@@ -128,14 +136,16 @@ class CandidateData(BaseModel):
                 v = 'https://' + v
         return v
 
-    @validator('resume')
+    @validator('resume_text')
     def validate_resume(cls, v):
-        if not v:
-            return None
-        # Truncate if too long
-        max_length = 6000
-        if len(v) > max_length:
-            return v[:max_length]
+        if v:
+            v = v.strip()
+            if not v:
+                return None
+            # Truncate if too long (Retell AI might have limits)
+            max_length = 5000
+            if len(v) > max_length:
+                return v[:max_length]
         return v
 
 class JobMatchRequest(BaseModel):
@@ -189,12 +199,14 @@ class MakeCallRequest(BaseModel):
     email: str
     phone_number: str
     linkedin: Optional[str] = None
-    resume: Optional[str] = None
+    resume_text: Optional[str] = None
 
     @validator('name')
     def validate_name(cls, v):
         if not v or not v.strip():
             raise ValueError('Name cannot be empty')
+        if len(v.strip()) > 100:
+            raise ValueError('Name is too long (max 100 characters)')
         return v.strip()
 
     @validator('email')
@@ -203,7 +215,9 @@ class MakeCallRequest(BaseModel):
             raise ValueError('Email cannot be empty')
         if '@' not in v:
             raise ValueError('Invalid email format')
-        return v.strip()
+        if len(v.strip()) > 255:
+            raise ValueError('Email is too long (max 255 characters)')
+        return v.strip().lower()
 
     @validator('phone_number')
     def validate_phone(cls, v):
@@ -213,6 +227,8 @@ class MakeCallRequest(BaseModel):
         phone = ''.join(filter(str.isdigit, v.replace('+', '')))
         if not phone.startswith('+'):
             phone = '+' + phone
+        if len(phone) < 10 or len(phone) > 15:
+            raise ValueError('Invalid phone number length')
         return phone
 
     @validator('linkedin')
@@ -223,9 +239,11 @@ class MakeCallRequest(BaseModel):
                 return None
             if not (v.startswith('http://') or v.startswith('https://')):
                 v = 'https://' + v
+            if len(v) > 255:
+                raise ValueError('LinkedIn URL is too long (max 255 characters)')
         return v
 
-    @validator('resume')
+    @validator('resume_text')
     def validate_resume(cls, v):
         if v:
             v = v.strip()
@@ -247,55 +265,66 @@ async def read_root():
     }
 
 @app.post("/candidates", response_model=Dict[str, Any])
-async def submit_candidate(candidate: CandidateData):
-    """Submit a new candidate"""
+async def submit_candidate(request: MakeCallRequest):
+    """Submit a new candidate with JSON data"""
     try:
-        # Convert candidate model to dict
-        candidate_dict = candidate.dict()
-        
         # Generate a unique candidate ID
         candidate_id = f"candidate_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}"
         
+        # Format phone number to E.164 format
+        phone = request.phone_number.strip()
+        # Remove any non-digit characters except '+'
+        phone = '+' + ''.join(filter(str.isdigit, phone.replace('+', '')))
+        if not phone.startswith('+'):
+            phone = '+' + phone
+        
+        # Create candidate data
+        candidate_data = {
+            "name": request.name,
+            "email": request.email,
+            "phone_number": phone,
+            "linkedin": request.linkedin,
+            "resume_text": request.resume_text
+        }
+        
         # Store candidate in vector database
         try:
-            print(f"Storing candidate {candidate_id} with data: {candidate_dict}")
-            result = vector_store.store_candidate(candidate_id, candidate_dict)
+            print(f"Storing candidate {candidate_id} with data: {candidate_data}")
+            result = vector_store.store_candidate(candidate_id, candidate_data)
             if result.get('status') != 'success':
-                raise HTTPException(
-                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                    detail={
-                        "error": "Failed to store candidate",
-                        "message": result.get('message', 'Unknown error occurred')
-                    }
-                )
+                return {
+                    "status": "error",
+                    "message": result.get('message', 'Failed to store candidate'),
+                    "error": result.get('message', 'Failed to store candidate')
+                }
         except Exception as e:
             print(f"Error storing candidate in vector store: {str(e)}")
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail={
-                    "error": "Vector store error",
-                    "message": str(e)
-                }
-            )
+            return {
+                "status": "error",
+                "message": str(e),
+                "error": str(e)
+            }
             
         return {
             "status": "success",
             "message": "Candidate submitted successfully",
             "candidate_id": candidate_id,
-            "data": candidate_dict
+            "data": candidate_data
         }
         
     except ValidationError as e:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail={"error": "Validation error", "message": str(e)}
-        )
+        return {
+            "status": "error",
+            "message": str(e),
+            "error": str(e)
+        }
     except Exception as e:
         print(f"Error in submit_candidate: {str(e)}")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail={"error": "Internal server error", "message": str(e)}
-        )
+        return {
+            "status": "error",
+            "message": str(e),
+            "error": str(e)
+        }
 
 async def process_transcript_with_openai(transcript: str) -> Dict[str, Any]:
     """Process transcript using OpenAI to extract structured information."""
@@ -652,7 +681,8 @@ async def fetch_and_store_retell_transcript(call_data: RetellCallData):
                 response = await client.get(
                     f"{RETELL_API_BASE}/get-call/{call_data.call_id}",
                     headers={
-                        "Authorization": f"Bearer {RETELL_API_KEY}"
+                        "Authorization": f"Bearer {RETELL_API_KEY}",
+                        "Content-Type": "application/json"
                     }
                 )
             except httpx.TimeoutException:
@@ -693,205 +723,88 @@ async def fetch_and_store_retell_transcript(call_data: RetellCallData):
                     }
                 )
             
-            retell_data = response.json()
-            
-            # Validate Retell response
             try:
-                validated_data = await validate_retell_response(retell_data)
+                retell_data = response.json()
+                if not isinstance(retell_data, dict):
+                    raise ValueError("Invalid response format from Retell AI")
+                
+                # Validate required fields
+                if not retell_data.get('transcript'):
+                    raise ValueError("No transcript found in Retell AI response")
+                
+                if not retell_data.get('call_status'):
+                    raise ValueError("No call status found in Retell AI response")
+                
+                if retell_data['call_status'] not in RetellCallStatus.__members__.values():
+                    raise ValueError(f"Invalid call status: {retell_data['call_status']}")
+                
+                if retell_data['call_status'] != RetellCallStatus.ENDED:
+                    raise ValueError(f"Call is not completed. Current status: {retell_data['call_status']}")
+                
+                # Process transcript with OpenAI
+                processed_data = await process_transcript_with_openai(retell_data['transcript'])
+                
+                # Calculate call duration if timestamps available
+                call_duration = None
+                start_time = retell_data.get('start_timestamp')
+                end_time = retell_data.get('end_timestamp')
+                if start_time and end_time:
+                    call_duration = (end_time - start_time) / 1000  # Convert to seconds
+                
+                # Create enhanced transcript with analysis
+                enhanced_transcript = EnhancedTranscript(
+                    raw_transcript=retell_data['transcript'],
+                    call_summary=retell_data.get('call_analysis', {}).get('call_summary', ''),
+                    user_sentiment=retell_data.get('call_analysis', {}).get('user_sentiment', 'Unknown'),
+                    call_successful=retell_data.get('call_analysis', {}).get('call_successful', False),
+                    custom_analysis=retell_data.get('call_analysis', {}).get('custom_analysis_data', {}),
+                    timestamp=datetime.utcnow(),
+                    call_status=retell_data['call_status'],
+                    call_duration=call_duration,
+                    error_details=retell_data.get('disconnection_reason')
+                )
+                
+                # Update candidate profile with transcript and processed data
+                result = brain_agent.add_transcript_to_profile(
+                    call_data.candidate_id,
+                    {
+                        "raw_transcript": retell_data['transcript'],
+                        "processed_data": processed_data,
+                        "enhanced_transcript": enhanced_transcript.dict()
+                    }
+                )
+                
+                if result.get('status') == 'error':
+                    raise HTTPException(
+                        status_code=status.HTTP_400_BAD_REQUEST,
+                        detail={
+                            "error": "Profile update failed",
+                            "message": result['message'],
+                            "action_required": "Please check the candidate profile data"
+                        }
+                    )
+                
+                return {
+                    "status": "success",
+                    "message": "Transcript processed and stored successfully",
+                    "transcript_data": enhanced_transcript.dict(),
+                    "candidate_state": result.get('current_state'),
+                    "call_id": call_data.call_id,
+                    "metadata": {
+                        "processed_at": datetime.utcnow().isoformat(),
+                        "call_duration_seconds": call_duration,
+                        "sentiment": enhanced_transcript.user_sentiment,
+                        "success_status": enhanced_transcript.call_successful
+                    }
+                }
+                
             except ValueError as e:
                 raise HTTPException(
                     status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
                     detail={
-                        "error": "Invalid call data",
+                        "error": "Invalid response format",
                         "message": str(e),
-                        "action_required": "Please ensure the call is completed"
-                    }
-                )
-            
-            # Extract transcript and analysis
-            transcript = validated_data.get('transcript', '')
-            call_analysis = validated_data.get('call_analysis', {})
-            
-            # Process transcript with OpenAI
-            processed_data = await process_transcript_with_openai(transcript)
-            
-            # Calculate call duration if timestamps available
-            call_duration = None
-            start_time = validated_data.get('start_timestamp')
-            end_time = validated_data.get('end_timestamp')
-            if start_time and end_time:
-                call_duration = (end_time - start_time) / 1000  # Convert to seconds
-            
-            # Create enhanced transcript with analysis
-            enhanced_transcript = EnhancedTranscript(
-                raw_transcript=transcript,
-                call_summary=call_analysis.get('call_summary', ''),
-                user_sentiment=call_analysis.get('user_sentiment', 'Unknown'),
-                call_successful=call_analysis.get('call_successful', False),
-                custom_analysis=call_analysis.get('custom_analysis_data', {}),
-                timestamp=datetime.utcnow(),
-                call_status=validated_data['call_status'],
-                call_duration=call_duration,
-                error_details=validated_data.get('disconnection_reason')
-            )
-            
-            # Update candidate profile with transcript and processed data
-            result = brain_agent.add_transcript_to_profile(
-                call_data.candidate_id,
-                {
-                    "raw_transcript": transcript,
-                    "processed_data": processed_data,
-                    "enhanced_transcript": enhanced_transcript.dict()
-                }
-            )
-            
-            if result.get('status') == 'error':
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail={
-                        "error": "Profile update failed",
-                        "message": result['message'],
-                        "action_required": "Please check the candidate profile data"
-                    }
-                )
-            
-            return {
-                'status': 'success',
-                'message': 'Transcript fetched and stored successfully',
-                'transcript_data': enhanced_transcript.dict(),
-                'candidate_state': result.get('current_state'),
-                'call_id': call_data.call_id,
-                'metadata': {
-                    'processed_at': datetime.utcnow().isoformat(),
-                    'call_duration_seconds': call_duration,
-                    'sentiment': enhanced_transcript.user_sentiment,
-                    'success_status': enhanced_transcript.call_successful
-                }
-            }
-            
-    except httpx.RequestError as e:
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail={
-                "error": "Communication error",
-                "message": f"Failed to communicate with Retell AI: {str(e)}",
-                "action_required": "Please check your network connection and try again"
-            }
-        )
-    except Exception as e:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail={
-                "error": "Internal server error",
-                "message": str(e),
-                "action_required": "Please contact support if the issue persists"
-            }
-        )
-
-@app.post("/api/process-retell-transcript", response_model=Dict[str, Any])
-async def process_retell_transcript_alias(call_data: RetellCallData):
-    """Alias endpoint for /candidate/retell-transcript to maintain compatibility with frontend."""
-    return await fetch_and_store_retell_transcript(call_data)
-
-@app.post("/calls/list", response_model=RetellCallList)
-async def list_retell_calls(page: int = 1, page_size: int = 10):
-    """
-    List all call transcripts from Retell AI.
-    
-    Parameters:
-        page: Page number (1-based indexing)
-        page_size: Number of calls per page
-        
-    Returns:
-        List of calls with their transcripts and metadata
-        
-    Raises:
-        401 - Unauthorized: Invalid Retell AI API key
-        500 - Internal Server Error: Server-side errors
-        503 - Service Unavailable: Retell AI service unavailable
-    """
-    if not RETELL_API_KEY:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail={
-                "error": "Configuration error",
-                "message": "Retell AI API key not configured",
-                "action_required": "Please set RETELL_API_KEY in environment variables"
-            }
-        )
-    
-    try:
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            try:
-                response = await client.post(
-                    f"{RETELL_API_BASE}/list-calls",
-                    json={
-                        "page": page,
-                        "page_size": page_size
-                    },
-                    headers={
-                        "Authorization": f"Bearer {RETELL_API_KEY}",
-                        "Content-Type": "application/json"
-                    }
-                )
-            except httpx.TimeoutException:
-                raise HTTPException(
-                    status_code=status.HTTP_504_GATEWAY_TIMEOUT,
-                    detail={
-                        "error": "Timeout",
-                        "message": "Request to Retell AI timed out",
-                        "action_required": "Please try again later"
-                    }
-                )
-            
-            if response.status_code == 401:
-                raise HTTPException(
-                    status_code=status.HTTP_401_UNAUTHORIZED,
-                    detail={
-                        "error": "Authentication failed",
-                        "message": "Invalid Retell AI API key",
-                        "action_required": "Please check your API key configuration"
-                    }
-                )
-            elif response.status_code != 200:
-                raise HTTPException(
-                    status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                    detail={
-                        "error": "Retell AI service error",
-                        "message": f"Failed to fetch calls: {response.text}",
-                        "action_required": "Please try again later"
-                    }
-                )
-            
-            try:
-                data = response.json()
-                if isinstance(data, list):
-                    # If response is a list of calls
-                    return RetellCallList(
-                        calls=data,
-                        total_count=len(data),
-                        page=page,
-                        page_size=page_size
-                    )
-                else:
-                    # If response is an object with calls array
-                    calls = data.get('calls', [])
-                    if not isinstance(calls, list):
-                        raise ValueError("Invalid response format: 'calls' is not a list")
-                        
-                    return RetellCallList(
-                        calls=calls,
-                        total_count=data.get('total_count', len(calls)),
-                        page=page,
-                        page_size=page_size
-                    )
-            except ValueError as e:
-                raise HTTPException(
-                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                    detail={
-                        "error": "Response format error",
-                        "message": str(e),
-                        "action_required": "Please contact support"
+                        "action_required": "Please ensure the call is completed and try again"
                     }
                 )
             
@@ -904,7 +817,10 @@ async def list_retell_calls(page: int = 1, page_size: int = 10):
                 "action_required": "Please check your network connection and try again"
             }
         )
+    except HTTPException:
+        raise
     except Exception as e:
+        print(f"Error in process_retell_transcript: {str(e)}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail={
@@ -922,21 +838,19 @@ async def make_call(request: MakeCallRequest):
     if not RETELL_API_KEY:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail={
-                "error": "Configuration error",
-                "message": "Retell AI API key not configured",
-                "action_required": "Please set RETELL_API_KEY in environment variables"
-            }
+            detail="Retell AI API key not configured"
         )
     
     if not RETELL_AGENT_ID:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail={
-                "error": "Configuration error",
-                "message": "Retell AI Agent ID not configured",
-                "action_required": "Please set AGENT_ID in environment variables"
-            }
+            detail="Retell AI Agent ID not configured"
+        )
+    
+    if not RETELL_FROM_NUMBER:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Retell AI From Number not configured"
         )
     
     try:
@@ -956,7 +870,7 @@ async def make_call(request: MakeCallRequest):
             "email": request.email,
             "phone_number": phone,
             "linkedin": request.linkedin,
-            "resume": request.resume
+            "resume_text": request.resume_text
         }
         
         # Store in vector database
@@ -974,13 +888,13 @@ async def make_call(request: MakeCallRequest):
                 retell_payload = {
                     "to_number": phone,
                     "from_number": RETELL_FROM_NUMBER,
-                    "agent_id": RETELL_AGENT_ID,
+                    "override_agent_id": RETELL_AGENT_ID,
                     "metadata": {
                         "candidate_id": candidate_id,
                         "name": request.name,
                         "email": request.email,
                         "linkedin": request.linkedin or "",
-                        "resume": request.resume or "",  # Include resume content
+                        "resume": request.resume_text or "",
                         "source": "anita_ai"
                     }
                 }
@@ -998,70 +912,99 @@ async def make_call(request: MakeCallRequest):
                 print(f"Retell API Response Status: {response.status_code}")
                 print(f"Retell API Response Body: {response.text}")
                 
+                if response.status_code == 401:
+                    raise HTTPException(
+                        status_code=status.HTTP_401_UNAUTHORIZED,
+                        detail="Invalid Retell AI API key"
+                    )
+                elif response.status_code == 400:
+                    error_msg = response.text
+                    try:
+                        error_data = response.json()
+                        if isinstance(error_data, dict):
+                            error_msg = error_data.get('message', error_data.get('error', response.text))
+                    except:
+                        pass
+                    raise HTTPException(
+                        status_code=status.HTTP_400_BAD_REQUEST,
+                        detail=f"Failed to create call: {error_msg}"
+                    )
+                elif response.status_code != 200:
+                    error_msg = response.text
+                    try:
+                        error_data = response.json()
+                        if isinstance(error_data, dict):
+                            error_msg = error_data.get('message', error_data.get('error', response.text))
+                    except:
+                        pass
+                    raise HTTPException(
+                        status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                        detail=f"Retell AI service error: {error_msg}"
+                    )
+                
+                call_data = response.json()
+                if not isinstance(call_data, dict):
+                    raise HTTPException(
+                        status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                        detail="Invalid response format from Retell AI"
+                    )
+                
+                call_id = call_data.get("callId") or call_data.get("call_id")
+                if not call_id:
+                    raise HTTPException(
+                        status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                        detail="No call ID in response from Retell AI"
+                    )
+                
+                # Start async transcript processing
+                try:
+                    # Call the transcript processing endpoint
+                    async with httpx.AsyncClient(timeout=30.0) as internal_client:
+                        await internal_client.post(
+                            "http://localhost:8000/api/process-retell-transcript",
+                            json={
+                                "candidate_id": candidate_id,
+                                "call_id": call_id
+                            }
+                        )
+                except Exception as e:
+                    print(f"Warning: Failed to start transcript processing: {str(e)}")
+                    # Don't raise the error as this is a background process
+                
+                return {
+                    "status": "success",
+                    "message": "Call created successfully",
+                    "candidate_id": candidate_id,
+                    "call_id": call_id,
+                    "call_details": {
+                        "status": call_data.get("status", "unknown"),
+                        "created_at": datetime.utcnow().isoformat(),
+                        "phone_number": phone,
+                        "name": request.name,
+                        "email": request.email,
+                        "resume": request.resume_text or ""
+                    }
+                }
+                
             except httpx.TimeoutException:
                 raise HTTPException(
                     status_code=status.HTTP_504_GATEWAY_TIMEOUT,
-                    detail={
-                        "error": "Timeout",
-                        "message": "Request to Retell AI timed out",
-                        "action_required": "Please try again later"
-                    }
+                    detail="Request to Retell AI timed out"
                 )
             
-            if response.status_code == 401:
-                raise HTTPException(
-                    status_code=status.HTTP_401_UNAUTHORIZED,
-                    detail={
-                        "error": "Authentication failed",
-                        "message": "Invalid Retell AI API key",
-                        "action_required": "Please check your API key configuration"
-                    }
-                )
-            elif response.status_code != 200:
-                error_msg = response.text
-                try:
-                    error_data = response.json()
-                    if isinstance(error_data, dict):
-                        error_msg = error_data.get('message', error_data.get('error', response.text))
-                except:
-                    pass
-                
-                raise HTTPException(
-                    status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                    detail={
-                        "error": "Retell AI service error",
-                        "message": f"Failed to create call: {error_msg}",
-                        "action_required": "Please verify the phone number and try again"
-                    }
-                )
-            
-            call_data = response.json()
-            
-            return {
-                "status": "success",
-                "message": "Call created successfully",
-                "candidate_id": candidate_id,  # Return the generated candidate ID
-                "call_id": call_data.get("callId") or call_data.get("call_id"),
-                "call_details": {
-                    "status": call_data.get("status"),
-                    "created_at": datetime.utcnow().isoformat(),
-                    "phone_number": phone,
-                    "name": request.name,
-                    "email": request.email,
-                    "resume": request.resume or ""  # Include resume in response
-                }
-            }
-            
-    except HTTPException:
-        raise
+    except HTTPException as e:
+        # Return error in a format that matches the frontend's expectations
+        return {
+            "status": "error",
+            "message": str(e.detail),
+            "error": str(e.detail)
+        }
     except Exception as e:
         print(f"Error in make_call: {str(e)}")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail={
-                "error": "Internal server error",
-                "message": str(e),
-                "action_required": "Please contact support if the issue persists"
-            }
-        )
+        # Return error in a format that matches the frontend's expectations
+        return {
+            "status": "error",
+            "message": str(e),
+            "error": str(e)
+        }
 
