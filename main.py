@@ -401,6 +401,7 @@ async def submit_candidate(
     1. Process the PDF resume (both text and image)
     2. Analyze resume content with OpenAI
     3. Store candidate data in vector database
+    4. Initiate Retell AI call
     """
     try:
         # Generate a unique candidate ID
@@ -505,19 +506,55 @@ async def submit_candidate(
                 detail=f"Failed to store candidate data: {str(e)}"
             )
         
-        return {
-            "status": "success",
-            "message": "Candidate profile created successfully",
-            "candidate_id": candidate_id,
-            "profile": {
-                "name": name,
-                "email": email,
-                "phone_number": phone,
-                "linkedin": linkedin
-            },
-            "resume_analysis": resume_analysis.get("structured_data", {}),
-            "stored_in_vector_db": True
-        }
+        # Step 4: Initiate Retell AI call
+        print("Initiating Retell AI call...")
+        try:
+            # Create a copy of the resume for the make_call function
+            resume_copy = UploadFile(
+                filename=resume.filename,
+                file=io.BytesIO(await resume.read())
+            )
+            await resume.seek(0)  # Reset the original file pointer
+            
+            call_result = await make_call(
+                name=name,
+                email=email,
+                phone_number=phone,
+                linkedin=linkedin or "",
+                resume=resume_copy
+            )
+            
+            return {
+                "status": "success",
+                "message": "Candidate profile created and call initiated successfully",
+                "candidate_id": candidate_id,
+                "profile": {
+                    "name": name,
+                    "email": email,
+                    "phone_number": phone,
+                    "linkedin": linkedin
+                },
+                "resume_analysis": resume_analysis.get("structured_data", {}),
+                "stored_in_vector_db": True,
+                "call_details": call_result.get("call_details", {})
+            }
+        except Exception as call_error:
+            print(f"Warning: Failed to initiate call: {str(call_error)}")
+            # Return success for profile creation but include call error
+            return {
+                "status": "partial_success",
+                "message": "Candidate profile created successfully but failed to initiate call",
+                "candidate_id": candidate_id,
+                "profile": {
+                    "name": name,
+                    "email": email,
+                    "phone_number": phone,
+                    "linkedin": linkedin
+                },
+                "resume_analysis": resume_analysis.get("structured_data", {}),
+                "stored_in_vector_db": True,
+                "call_error": str(call_error)
+            }
                 
     except HTTPException as e:
         raise e
