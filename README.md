@@ -16,6 +16,8 @@ An intelligent recruitment platform built with FastAPI that automates candidate 
 - **Profile Processing**: Extracts and structures candidate information from conversations
 - **Intelligent Matching**: Matches candidates with suitable job positions
 - **Preference Tracking**: Maintains candidate preferences for better job recommendations
+- **Asynchronous Resume Processing**: Background processing of candidate resumes with detailed error tracking
+- **Enhanced Logging**: Comprehensive logging system for better debugging and monitoring
 
 ### Job Management
 
@@ -30,6 +32,7 @@ An intelligent recruitment platform built with FastAPI that automates candidate 
 - **Vector Store**: Pinecone for semantic search
 - **AI Integration**: OpenAI GPT-4 for natural language processing
 - **Data Processing**: Python with advanced regex for email parsing
+- **Asynchronous Processing**: FastAPI Background Tasks for non-blocking operations
 
 ## Setup
 
@@ -55,6 +58,9 @@ cp .env.example .env
 # - SENDER_EMAIL
 # - OPENAI_API_KEY
 # - SENDGRID_INBOUND_HOSTNAME
+# - RETELL_API_KEY
+# - RETELL_AGENT_ID
+# - RETELL_FROM_NUMBER
 ```
 
 4. Configure SendGrid:
@@ -66,7 +72,7 @@ cp .env.example .env
 5. Start the server:
 
 ```bash
-uvicorn main:app --reload
+uvicorn main:app --reload --log-level debug
 ```
 
 ## API Endpoints
@@ -78,15 +84,22 @@ uvicorn main:app --reload
 
 ### Candidate Management
 
-- `POST /candidates`: Submit new candidate information
+- `POST /candidates`: Submit new candidate information with asynchronous resume processing
 - `GET /candidates/{candidate_id}/profile`: Get candidate profile
 - `POST /candidates/match-jobs`: Find matching jobs for a candidate
+- `POST /candidate/retell-transcript`: Process and store call transcripts
+- `POST /api/makeCall`: Initiate AI-powered candidate calls
 
 ### Job Management
 
 - `POST /jobs/submit`: Submit new job posting
 - `GET /jobs/open-positions`: List all open positions
 - `POST /jobs/match-candidates`: Find matching candidates for a job
+
+### System Management
+
+- `POST /delete-knowledge-base/{knowledge_base_id}`: Clean up Retell AI knowledge bases
+- `POST /webhook/retell`: Handle Retell AI call status updates
 
 ## Development
 
@@ -104,6 +117,15 @@ Run tests with:
 ```bash
 pytest
 ```
+
+### Debugging
+
+The system includes comprehensive logging for debugging:
+
+- Background task processing logs
+- API endpoint request/response logs
+- Error tracking with full stack traces
+- Process status monitoring
 
 ## Contributing
 
