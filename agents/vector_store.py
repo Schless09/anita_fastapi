@@ -4,6 +4,83 @@ from typing import Dict, Any, List, Optional
 from datetime import datetime
 from openai import OpenAI
 
+def check_location_match(job_cities: List[str], job_states: List[str], candidate_metadata: Dict[str, Any]) -> bool:
+    """Check if candidate's location preferences match the job location."""
+    if not job_cities or not job_states:
+        return True  # If job location is not specified, consider it a match
+    
+    candidate_locations = candidate_metadata.get('preferred_locations', [])
+    if not candidate_locations:
+        return True  # If candidate has no location preferences, consider it a match
+    
+    for location in candidate_locations:
+        if (location.get('city', '').lower() in [city.lower() for city in job_cities] or
+            location.get('state', '').lower() in [state.lower() for state in job_states]):
+            return True
+    return False
+
+def check_work_environment_match(job_environment: str, candidate_metadata: Dict[str, Any]) -> bool:
+    """Check if candidate's preferred work environment matches the job."""
+    if not job_environment:
+        return True
+    
+    candidate_preference = candidate_metadata.get('preferred_work_environment', '').lower()
+    if not candidate_preference:
+        return True
+    
+    return job_environment.lower() in candidate_preference
+
+def check_compensation_match(job_salary_range: str, candidate_metadata: Dict[str, Any]) -> bool:
+    """Check if job's salary range meets candidate's minimum requirements."""
+    if not job_salary_range:
+        return True
+    
+    candidate_min_salary = candidate_metadata.get('minimum_salary')
+    if not candidate_min_salary:
+        return True
+    
+    # Extract minimum salary from job range (assuming format like "100000-150000")
+    try:
+        job_min_salary = float(job_salary_range.split('-')[0].strip())
+        return job_min_salary >= candidate_min_salary
+    except (ValueError, IndexError):
+        return True
+
+def check_work_authorization_match(required_authorization: str, visa_sponsorship: str, candidate_metadata: Dict[str, Any]) -> bool:
+    """Check if candidate's work authorization matches job requirements."""
+    if not required_authorization:
+        return True
+    
+    candidate_authorization = candidate_metadata.get('work_authorization', '').lower()
+    if not candidate_authorization:
+        return True
+    
+    if 'citizen' in candidate_authorization or 'permanent resident' in candidate_authorization:
+        return True
+    
+    return visa_sponsorship.lower() == 'yes'
+
+def generate_match_reason(dealbreakers: Dict[str, bool], job_metadata: Dict[str, Any]) -> str:
+    """Generate a human-readable explanation for why this is a good match."""
+    reasons = []
+    
+    if dealbreakers.get('location_match'):
+        location = job_metadata.get('role_details', {}).get('city', [''])[0]
+        reasons.append(f"Location match with {location}")
+    
+    if dealbreakers.get('work_environment_match'):
+        env = job_metadata.get('company_information', {}).get('company_culture', {}).get('work_environment', '')
+        reasons.append(f"Preferred work environment: {env}")
+    
+    if dealbreakers.get('compensation_match'):
+        salary = job_metadata.get('role_details', {}).get('salary_range', '')
+        reasons.append(f"Salary requirements met: {salary}")
+    
+    if dealbreakers.get('work_authorization_match'):
+        reasons.append("Work authorization requirements met")
+    
+    return "; ".join(reasons) if reasons else "General match based on experience and skills"
+
 class VectorStore:
     def __init__(self):
         """Initialize Pinecone with environment variables."""
