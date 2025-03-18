@@ -1,185 +1,35 @@
 import os
-import traceback
-import logging
-
-# Configure logging
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
-
-try:
-    from pinecone import Pinecone, ServerlessSpec, CloudProvider, AwsRegion, VectorType
-    logger.info("Successfully imported Pinecone SDK")
-except ImportError as e:
-    logger.error(f"Failed to import Pinecone SDK: {str(e)}")
-    logger.error(f"Traceback: {traceback.format_exc()}")
-    raise
-
+from pinecone import Pinecone, PodSpec
 from typing import Dict, Any, List, Optional
 from datetime import datetime
-from openai import OpenAI
-
-def check_location_match(job_cities: List[str], job_states: List[str], candidate_metadata: Dict[str, Any]) -> bool:
-    """Check if candidate's location preferences match the job location."""
-    if not job_cities or not job_states:
-        return True  # If job location is not specified, consider it a match
-    
-    candidate_locations = candidate_metadata.get('preferred_locations', [])
-    if not candidate_locations:
-        return True  # If candidate has no location preferences, consider it a match
-    
-    for location in candidate_locations:
-        if (location.get('city', '').lower() in [city.lower() for city in job_cities] or
-            location.get('state', '').lower() in [state.lower() for state in job_states]):
-            return True
-    return False
-
-def check_work_environment_match(job_environment: str, candidate_metadata: Dict[str, Any]) -> bool:
-    """Check if candidate's preferred work environment matches the job."""
-    if not job_environment:
-        return True
-    
-    candidate_preference = candidate_metadata.get('preferred_work_environment', '').lower()
-    if not candidate_preference:
-        return True
-    
-    return job_environment.lower() in candidate_preference
-
-def check_compensation_match(job_salary_range: str, candidate_metadata: Dict[str, Any]) -> bool:
-    """Check if job's salary range meets candidate's minimum requirements."""
-    if not job_salary_range:
-        return True
-    
-    candidate_min_salary = candidate_metadata.get('minimum_salary')
-    if not candidate_min_salary:
-        return True
-    
-    # Extract minimum salary from job range (assuming format like "100000-150000")
-    try:
-        job_min_salary = float(job_salary_range.split('-')[0].strip())
-        return job_min_salary >= candidate_min_salary
-    except (ValueError, IndexError):
-        return True
-
-def check_work_authorization_match(required_authorization: str, visa_sponsorship: str, candidate_metadata: Dict[str, Any]) -> bool:
-    """Check if candidate's work authorization matches job requirements."""
-    if not required_authorization:
-        return True
-    
-    candidate_authorization = candidate_metadata.get('work_authorization', '').lower()
-    if not candidate_authorization:
-        return True
-    
-    if 'citizen' in candidate_authorization or 'permanent resident' in candidate_authorization:
-        return True
-    
-    return visa_sponsorship.lower() == 'yes'
-
-def generate_match_reason(dealbreakers: Dict[str, bool], job_metadata: Dict[str, Any]) -> str:
-    """Generate a human-readable explanation for why this is a good match."""
-    reasons = []
-    
-    if dealbreakers.get('location_match'):
-        location = job_metadata.get('role_details', {}).get('city', [''])[0]
-        reasons.append(f"Location match with {location}")
-    
-    if dealbreakers.get('work_environment_match'):
-        env = job_metadata.get('company_information', {}).get('company_culture', {}).get('work_environment', '')
-        reasons.append(f"Preferred work environment: {env}")
-    
-    if dealbreakers.get('compensation_match'):
-        salary = job_metadata.get('role_details', {}).get('salary_range', '')
-        reasons.append(f"Salary requirements met: {salary}")
-    
-    if dealbreakers.get('work_authorization_match'):
-        reasons.append("Work authorization requirements met")
-    
-    return "; ".join(reasons) if reasons else "General match based on experience and skills"
+import openai
 
 class VectorStore:
     def __init__(self):
         """Initialize Pinecone with environment variables."""
-        logger.info("Initializing Pinecone...")
+        print("Initializing Pinecone...")
         
-        try:
-            # Check for API key
-            api_key = os.getenv('PINECONE_API_KEY')
-            if not api_key:
-                logger.error("PINECONE_API_KEY environment variable is not set")
-                raise ValueError("PINECONE_API_KEY environment variable is not set")
-            
-            # Initialize Pinecone with new SDK v3
-            self.pc = Pinecone(api_key=api_key)
-            logger.info("Pinecone client initialized successfully")
-            
-            # List existing indexes
-            logger.info("Attempting to list existing indexes...")
-            existing_indexes = self.pc.list_indexes()
-            logger.info(f"Existing indexes: {existing_indexes}")
-            
-            # Create or connect to indexes
-            logger.info("Checking anita-candidates index...")
-            if not existing_indexes.get("anita-candidates"):
-                logger.info("Creating anita-candidates index...")
-                try:
-                    self.pc.create_index(
-                        name="anita-candidates",
-                        dimension=1536,  # OpenAI ada-002 dimension
-                        metric="cosine",
-                        spec=ServerlessSpec(
-                            cloud=CloudProvider.AWS,
-                            region=AwsRegion.US_EAST_1
-                        )
-                    )
-                    logger.info("Successfully created anita-candidates index")
-                except Exception as e:
-                    logger.error(f"Failed to create anita-candidates index: {str(e)}")
-                    logger.error(f"Traceback: {traceback.format_exc()}")
-                    raise
-            
-            logger.info("Checking job-details index...")
-            if not existing_indexes.get("job-details"):
-                logger.info("Creating job-details index...")
-                try:
-                    self.pc.create_index(
-                        name="job-details",
-                        dimension=1536,  # OpenAI ada-002 dimension
-                        metric="cosine",
-                        spec=ServerlessSpec(
-                            cloud=CloudProvider.AWS,
-                            region=AwsRegion.US_EAST_1
-                        )
-                    )
-                    logger.info("Successfully created job-details index")
-                except Exception as e:
-                    logger.error(f"Failed to create job-details index: {str(e)}")
-                    logger.error(f"Traceback: {traceback.format_exc()}")
-                    raise
-            
-            # Connect to indexes
-            logger.info("Connecting to indexes...")
-            try:
-                self.candidates_index = self.pc.Index("anita-candidates")
-                self.jobs_index = self.pc.Index("job-details")
-                logger.info("Successfully connected to both indexes")
-            except Exception as e:
-                logger.error(f"Failed to connect to indexes: {str(e)}")
-                logger.error(f"Traceback: {traceback.format_exc()}")
-                raise
-            
-            # Initialize OpenAI client
-            logger.info("Initializing OpenAI client...")
-            self.openai_client = OpenAI()
-            logger.info("VectorStore initialization completed successfully")
-            
-        except Exception as e:
-            logger.error(f"Error during VectorStore initialization: {str(e)}")
-            logger.error(f"Traceback: {traceback.format_exc()}")
-            raise
+        # Initialize Pinecone
+        self.pc = Pinecone(api_key=os.getenv('PINECONE_API_KEY'))
+        
+        print("Pinecone initialized successfully")
+        print("Attempting to connect to indexes: anita-candidates, job-details")
+        
+        # Get list of existing indexes
+        existing_indexes = self.pc.list_indexes()
+        print("Existing indexes:", existing_indexes)
+        
+        # Connect to indexes
+        self.candidates_index = self.pc.Index("anita-candidates")
+        self.jobs_index = self.pc.Index("job-details")
+        
+        # Use global OpenAI configuration
+        self.openai_client = openai
 
     def get_embedding(self, text: str) -> List[float]:
         """Get embedding for text using OpenAI's API."""
         try:
-            response = self.openai_client.embeddings.create(
+            response = self.openai_client.Embedding.create(
                 model="text-embedding-ada-002",
                 input=text
             )
@@ -199,10 +49,10 @@ class VectorStore:
             
             # Store in Pinecone
             self.candidates_index.upsert(
-                vectors=[{
-                    "id": candidate_id,
-                    "values": vector,
-                    "metadata": {
+                vectors=[(
+                    candidate_id,
+                    vector,
+                    {
                         "name": candidate_data.get("name"),
                         "email": candidate_data.get("email"),
                         "phone_number": candidate_data.get("phone_number"),
@@ -210,7 +60,7 @@ class VectorStore:
                         "resume_text": candidate_data.get("resume_text"),
                         "timestamp": datetime.utcnow().isoformat()
                     }
-                }]
+                )]
             )
             
             return {
@@ -229,8 +79,8 @@ class VectorStore:
         """Find jobs similar to a candidate's profile."""
         try:
             # Get candidate vector
-            candidate_data = self.candidates_index.fetch(ids=[candidate_id])
-            if not candidate_data['vectors']:
+            candidate_data = self.candidates_index.fetch([candidate_id])
+            if not candidate_data.vectors:
                 return {
                     "status": "error",
                     "message": f"Candidate {candidate_id} not found"
@@ -238,17 +88,17 @@ class VectorStore:
             
             # Query jobs index
             results = self.jobs_index.query(
-                vector=candidate_data['vectors'][candidate_id]['values'],
+                vector=candidate_data.vectors[candidate_id].values,
                 top_k=top_k,
                 include_metadata=True
             )
             
             matches = []
-            for match in results['matches']:
+            for match in results.matches:
                 matches.append({
-                    "job_id": match['id'],
-                    "score": match['score'],
-                    "metadata": match['metadata']
+                    "job_id": match.id,
+                    "score": match.score,
+                    "metadata": match.metadata
                 })
             
             return {
@@ -268,11 +118,11 @@ class VectorStore:
         try:
             # Get job data
             job_response = self.jobs_index.fetch(ids=[job_id])
-            if not job_response['vectors']:
+            if not job_response.vectors:
                 return {"status": "error", "message": "Job not found"}
             
-            job_vector = job_response['vectors'][job_id]['values']
-            job_metadata = job_response['vectors'][job_id]['metadata']
+            job_vector = job_response.vectors[job_id].values
+            job_metadata = job_response.vectors[job_id].metadata
             
             # Query candidates using vector similarity
             query_response = self.candidates_index.query(
@@ -283,11 +133,11 @@ class VectorStore:
             
             matches = []
             
-            for match in query_response['matches']:
-                if not match['metadata']:
+            for match in query_response.matches:
+                if not match.metadata:
                     continue
                 
-                candidate_metadata = match['metadata']
+                candidate_metadata = match.metadata
                 role_details = job_metadata.get('role_details', {})
                 
                 # Check dealbreakers
@@ -315,8 +165,8 @@ class VectorStore:
                 # Only include matches that pass all dealbreakers
                 if all(dealbreakers.values()):
                     matches.append({
-                        'candidate_id': match['id'],
-                        'score': float(match['score']),
+                        'candidate_id': match.id,
+                        'score': float(match.score),
                         'metadata': candidate_metadata,
                         'dealbreakers': dealbreakers,
                         'match_reason': generate_match_reason(dealbreakers, job_metadata)
