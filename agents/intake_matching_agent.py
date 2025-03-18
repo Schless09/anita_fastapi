@@ -25,8 +25,8 @@ class IntakeMatchingAgent:
                 'job_id': best_match['job_id'],
                 'match_score': best_match['score'],
                 'job_details': best_match['metadata'],
-                'dealbreakers': best_match['dealbreakers'],
-                'match_reason': best_match['match_reason'],
+                'dealbreakers': best_match.get('dealbreakers'),
+                'match_reason': best_match.get('match_reason'),
                 'phone_number': candidate_data.get('phone_number'),
                 'email': candidate_data.get('email')
             }
@@ -38,18 +38,18 @@ class IntakeMatchingAgent:
             # Query all vectors in the jobs index
             # Note: In a production environment, you might want to paginate this
             response = self.vector_store.jobs_index.query(
-                vector=[0] * 384,  # Dummy vector to get all jobs
+                vector=[0] * 1536,  # Dummy vector for OpenAI ada-002 dimension
                 top_k=100,  # Adjust based on your needs
                 include_metadata=True
             )
             
             return [
                 {
-                    'job_id': match.id,
-                    'metadata': match.metadata
+                    'job_id': match['id'],
+                    'metadata': match['metadata']
                 }
-                for match in (response.matches or [])
-                if match.metadata
+                for match in (response['matches'] or [])
+                if match['metadata']
             ]
         except Exception as e:
             print(f"Error fetching open positions: {str(e)}")
