@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException, status, UploadFile, File, Form, Depends, Request
+from fastapi import FastAPI, HTTPException, status, UploadFile, File, Form, Depends, Request, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from agents.brain_agent import BrainAgent
 from agents.interaction_agent import InteractionAgent
@@ -388,52 +388,30 @@ async def process_resume_text(resume_data: Dict[str, Any]) -> Dict[str, Any]:
             "error": str(e)
         }
 
-@app.post("/candidates", response_model=Dict[str, Any])
-async def submit_candidate(
-    name: str = Form(...),
-    email: str = Form(...),
-    phone_number: str = Form(...),
-    linkedin: Optional[str] = Form(None),
-    resume: UploadFile = File(...)
-):
-    """
-    Submit a new candidate.
-    1. Process the PDF resume (both text and image)
-    2. Analyze resume content with OpenAI
-    3. Store candidate data in vector database
-    4. Initiate Retell AI call
-    """
+async def process_resume_background(candidate_id: str, resume: UploadFile, name: str, email: str, phone: str, linkedin: Optional[str]):
+    """Background task to process resume and store in vector database"""
     try:
-        # Generate a unique candidate ID
-        candidate_id = f"candidate_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}"
-        
-        # Format phone number to E.164 format
-        phone = phone_number.strip()
-        phone = '+' + ''.join(filter(str.isdigit, phone.replace('+', '')))
-        if not phone.startswith('+'):
-            phone = '+' + phone
-        
-        # Step 1: Process the PDF resume
+        print(f"\n=== Starting Background Resume Processing for {candidate_id} ===")
         print(f"Processing resume: {resume.filename}")
+        
+        # Process the PDF resume
+        print("Step 1: Processing PDF to text...")
         pdf_data = await process_pdf_to_text(resume)
         
         if not pdf_data.get("text") and not pdf_data.get("base64_image"):
-            raise HTTPException(
-                status_code=400,
-                detail="Could not extract any content from the PDF. Please ensure the file is valid and contains readable content."
-            )
+            print(f"ERROR: Could not extract content from PDF for candidate {candidate_id}")
+            return
         
-        # Step 2: Process resume content through OpenAI
-        print(f"Analyzing resume content for candidate {candidate_id}...")
+        # Process resume content through OpenAI
+        print("Step 2: Analyzing resume content with OpenAI...")
         resume_analysis = await process_resume_text(pdf_data)
         
         if not resume_analysis.get("processed"):
-            raise HTTPException(
-                status_code=500,
-                detail=f"Failed to process resume content: {resume_analysis.get('error', 'Unknown error')}"
-            )
+            print(f"ERROR: Failed to process resume content for candidate {candidate_id}: {resume_analysis.get('error', 'Unknown error')}")
+            return
         
         # Create comprehensive context from resume analysis
+        print("Step 3: Creating context from resume analysis...")
         context_data = {}
         if resume_analysis.get("structured_data"):
             data = resume_analysis["structured_data"]
@@ -480,48 +458,113 @@ async def submit_candidate(
                 context_parts.append(f"{key.replace('_', ' ').title()}: {value}")
         
         # Store candidate data
-        print(f"Storing candidate data for {candidate_id}...")
+        print("Step 4: Storing candidate data in Pinecone...")
         candidate_data = {
             "name": name,
             "email": email,
             "phone_number": phone,
-            "linkedin": linkedin,
+            "linkedin": linkedin or "",
             "resume_text": pdf_data.get("text", ""),
             "resume_analysis": resume_analysis,
-            "context": " | ".join(context_parts)
+            "context": " | ".join(context_parts),
+            "status": "completed"  # Add status to track completion
         }
         
         try:
+            print(f"Attempting to store data for candidate {candidate_id}...")
             vector_result = vector_store.store_candidate(candidate_id, candidate_data)
             if vector_result.get('status') != 'success':
-                print(f"Warning: Failed to store candidate data: {vector_result.get('message')}")
-                raise HTTPException(
-                    status_code=500,
-                    detail=f"Failed to store candidate data: {vector_result.get('message')}"
-                )
+                print(f"ERROR: Failed to store candidate data for {candidate_id}: {vector_result.get('message')}")
+            else:
+                print(f"Successfully stored candidate data for {candidate_id}")
         except Exception as e:
-            print(f"Error storing candidate data: {str(e)}")
-            raise HTTPException(
-                status_code=500,
-                detail=f"Failed to store candidate data: {str(e)}"
-            )
+            print(f"ERROR: Exception while storing candidate data for {candidate_id}: {str(e)}")
+            print(f"Error type: {type(e)}")
+            print(f"Error traceback: {traceback.format_exc()}")
+            
+    except Exception as e:
+        print(f"ERROR: Exception in background resume processing for {candidate_id}: {str(e)}")
+        print(f"Error type: {type(e)}")
+        print(f"Error traceback: {traceback.format_exc()}")
+    finally:
+        print(f"=== Background Resume Processing Complete for {candidate_id} ===\n")
+
+@app.post("/candidates", response_model=Dict[str, Any])
+async def submit_candidate(
+    background_tasks: BackgroundTasks,
+    name: str = Form(...),
+    email: str = Form(...),
+    phone_number: str = Form(...),
+    linkedin: Optional[str] = Form(None),
+    resume: UploadFile = File(...)
+):
+    """
+    Submit a new candidate.
+    1. Create candidate ID and store basic info
+    2. Start Retell AI call immediately
+    3. Process resume in background
+    """
+    try:
+        # Generate a unique candidate ID
+        candidate_id = f"candidate_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}"
         
-        # Step 4: Initiate Retell AI call
-        print("Initiating Retell AI call...")
+        # Format phone number to E.164 format
+        phone = phone_number.strip()
+        phone = '+' + ''.join(filter(str.isdigit, phone.replace('+', '')))
+        if not phone.startswith('+'):
+            phone = '+' + phone
+        
+        # Store basic candidate info with empty resume_text
+        basic_candidate_data = {
+            "name": name,
+            "email": email,
+            "phone_number": phone,
+            "linkedin": linkedin or "",
+            "status": "processing",
+            "resume_text": ""  # Initialize with empty string instead of null
+        }
+        
         try:
-            # Create a copy of the resume for the make_call function
-            resume_copy = UploadFile(
+            vector_result = vector_store.store_candidate(candidate_id, basic_candidate_data)
+            if vector_result.get('status') != 'success':
+                print(f"Warning: Failed to store basic candidate data: {vector_result.get('message')}")
+        except Exception as e:
+            print(f"Error storing basic candidate data: {str(e)}")
+        
+        # Create a copy of the resume file for background processing
+        resume_content = await resume.read()
+        resume_copy = UploadFile(
+            filename=resume.filename,
+            file=io.BytesIO(resume_content)
+        )
+        await resume.seek(0)  # Reset the original file pointer
+        
+        # Add resume processing to background tasks
+        background_tasks.add_task(
+            process_resume_background,
+            candidate_id,
+            resume_copy,
+            name,
+            email,
+            phone,
+            linkedin
+        )
+        
+        # Start Retell AI call immediately
+        try:
+            # Create another copy for the make_call function
+            resume_copy_for_call = UploadFile(
                 filename=resume.filename,
-                file=io.BytesIO(await resume.read())
+                file=io.BytesIO(resume_content)
             )
-            await resume.seek(0)  # Reset the original file pointer
+            await resume.seek(0)  # Reset the original file pointer again
             
             call_result = await make_call(
                 name=name,
                 email=email,
                 phone_number=phone,
                 linkedin=linkedin or "",
-                resume=resume_copy
+                resume=resume_copy_for_call
             )
             
             return {
@@ -534,8 +577,6 @@ async def submit_candidate(
                     "phone_number": phone,
                     "linkedin": linkedin
                 },
-                "resume_analysis": resume_analysis.get("structured_data", {}),
-                "stored_in_vector_db": True,
                 "call_details": call_result.get("call_details", {})
             }
         except Exception as call_error:
@@ -551,8 +592,6 @@ async def submit_candidate(
                     "phone_number": phone,
                     "linkedin": linkedin
                 },
-                "resume_analysis": resume_analysis.get("structured_data", {}),
-                "stored_in_vector_db": True,
                 "call_error": str(call_error)
             }
                 
@@ -875,10 +914,10 @@ async def delete_retell_knowledge_base(knowledge_base_id: str) -> bool:
         raise HTTPException(status_code=500, detail="Retell AI API key not configured")
 
     try:
-        print(f"\n=== Deleting Knowledge Base {knowledge_base_id} ===")
+        print(f"\n=== Deleting Knowledge Base {knowledge_baseid} ===")
         async with httpx.AsyncClient(timeout=30.0) as client:
             response = await client.delete(
-                f"{RETELL_API_BASE}/knowledge-bases/{knowledge_base_id}",
+                f"{RETELL_API_BASE}/knowledge-bases/{knowledge_baseid}",
                 headers={
                     "Authorization": f"Bearer {RETELL_API_KEY}",
                     "Content-Type": "application/json"
@@ -889,10 +928,10 @@ async def delete_retell_knowledge_base(knowledge_base_id: str) -> bool:
             print(f"Delete response body: {response.text}")
 
             if response.status_code == 404:
-                print(f"Knowledge base {knowledge_base_id} not found - considering it already deleted")
+                print(f"Knowledge base {knowledge_baseid} not found - considering it already deleted")
                 return True
             elif response.status_code == 200:
-                print(f"Successfully deleted knowledge base {knowledge_base_id}")
+                print(f"Successfully deleted knowledge base {knowledge_baseid}")
                 return True
             else:
                 print(f"Failed to delete knowledge base: {response.text}")
@@ -1300,13 +1339,12 @@ async def make_call(
                         "source": "anita_ai",
                         "knowledge_base_id": knowledge_base_id
                     },
-                    # Update voice and audio configuration to match dashboard settings
-                    "voice_id": "kathrine",  # Using Kathrine voice as shown in dashboard
+                    "voice_id": "kathrine",
                     "voice_config": {
-                        "model": "elevenlabs-turbo-v2",  # Auto(Elevenlabs Turbo V2)
-                        "speed": 1.0,  # Default speed from dashboard
-                        "temperature": 1.0,  # Default temperature from dashboard
-                        "volume": 1.0  # Default volume from dashboard
+                        "model": "elevenlabs-turbo-v2",
+                        "speed": 1.0,
+                        "temperature": 1.0,
+                        "volume": 1.0
                     },
                     "audio_config": {
                         "noise_reduction": True,
@@ -1333,7 +1371,8 @@ async def make_call(
                 print(f"Retell AI response headers: {dict(response.headers)}")
                 print(f"Retell AI response body: {response.text}")
                 
-                if response.status_code != 200:
+                # Consider both 200 and 201 as success
+                if response.status_code not in (200, 201):
                     error_msg = response.text
                     try:
                         error_data = response.json()
