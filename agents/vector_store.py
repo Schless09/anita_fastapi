@@ -1,18 +1,16 @@
 import os
-from pinecone import Pinecone
+from pinecone import Pinecone, PodSpec
 from typing import Dict, Any, List, Optional
 from datetime import datetime
-from openai import OpenAI
+import openai
 
 class VectorStore:
     def __init__(self):
         """Initialize Pinecone with environment variables."""
         print("Initializing Pinecone...")
         
-        # Initialize Pinecone with new SDK v3
-        self.pc = Pinecone(
-            api_key=os.getenv('PINECONE_API_KEY')
-        )
+        # Initialize Pinecone
+        self.pc = Pinecone(api_key=os.getenv('PINECONE_API_KEY'))
         
         print("Pinecone initialized successfully")
         print("Attempting to connect to indexes: anita-candidates, job-details")
@@ -25,13 +23,13 @@ class VectorStore:
         self.candidates_index = self.pc.Index("anita-candidates")
         self.jobs_index = self.pc.Index("job-details")
         
-        # Initialize OpenAI client
-        self.openai_client = OpenAI()
+        # Use global OpenAI configuration
+        self.openai_client = openai
 
     def get_embedding(self, text: str) -> List[float]:
         """Get embedding for text using OpenAI's API."""
         try:
-            response = self.openai_client.embeddings.create(
+            response = self.openai_client.Embedding.create(
                 model="text-embedding-ada-002",
                 input=text
             )
