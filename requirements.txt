@@ -2,8 +2,8 @@ fastapi
 uvicorn
 python-dotenv
 sendgrid
-pinecone
-sentence-transformers
+pinecone-client
 pydantic
 python-multipart
 httpx
+openai

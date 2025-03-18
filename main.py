@@ -40,6 +40,10 @@ app = FastAPI(
     version="2.0.0"
 )
 
+@app.get("/health")
+def health_check():
+    return {"status": "healthy"}
+
 interaction_agent = InteractionAgent()
 brain_agent = BrainAgent()
 vector_store = VectorStore()
@@ -1452,52 +1456,4 @@ async def delete_knowledge_base(knowledge_base_id: str):
             detail=str(e)
         )
 
-@app.post("/webhook/retell", response_model=Dict[str, Any])
-async def retell_webhook(request: Request):
-    """
-    Webhook endpoint for Retell AI call status updates.
-    This endpoint will be called by Retell AI when call status changes.
-    """
-    try:
-        # Get the raw body
-        body = await request.json()
-        print(f"\n=== Received Retell AI Webhook ===\nPayload: {json.dumps(body, indent=2)}")
-        
-        # Extract relevant information
-        call_id = body.get('call_id')
-        call_status = body.get('call_status')
-        metadata = body.get('metadata', {})
-        knowledge_base_id = (
-            metadata.get('knowledge_base_id') or
-            body.get('knowledge_base_id') or
-            metadata.get('knowledgeBaseId')
-        )
-        
-        if not call_id:
-            raise HTTPException(status_code=400, detail="Missing call_id in webhook payload")
-            
-        print(f"Processing webhook for call {call_id} with status {call_status}")
-        
-        # If call has ended, clean up the knowledge base
-        if call_status == RetellCallStatus.ENDED and knowledge_base_id:
-            print(f"Call {call_id} has ended - cleaning up knowledge base {knowledge_base_id}")
-            asyncio.create_task(retry_knowledge_base_cleanup(knowledge_base_id))
-            
-        return {
-            "status": "success",
-            "message": "Webhook processed successfully",
-            "call_id": call_id,
-            "call_status": call_status,
-            "knowledge_base_id": knowledge_base_id
-        }
-        
-    except Exception as e:
-        print(f"Error processing webhook: {str(e)}")
-        print(f"Error type: {type(e)}")
-        print(f"Error traceback: {traceback.format_exc()}")
-        raise HTTPException(
-            status_code=500,
-            detail=f"Failed to process webhook: {str(e)}"
-        )
-    finally:
-        print("=== Webhook Processing Complete ===\n")
+app = app
