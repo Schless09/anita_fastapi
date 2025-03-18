@@ -22,6 +22,7 @@ from typing import Annotated
 import aiohttp
 import traceback
 import asyncio
+from pinecone import Pinecone, ServerlessSpec, CloudProvider, AwsRegion, VectorType
 
 # Load environment variables
 load_dotenv()
