@@ -15,9 +15,7 @@ from pydantic import ValidationError
 import json
 import base64
 from openai import AsyncOpenAI
-import PyPDF2
 import io
-from pdf2image import convert_from_bytes
 import tempfile
 import requests
 from typing import Annotated
@@ -252,7 +250,7 @@ app.add_middleware(
 )
 
 async def process_pdf_to_text(file: UploadFile) -> Dict[str, Any]:
-    """Process a PDF file and extract its text and image content."""
+    """Process a PDF file and extract its text and image content using OpenAI Vision API."""
     if not file.filename.lower().endswith('.pdf'):
         raise HTTPException(status_code=400, detail="File must be a PDF")
         
@@ -261,44 +259,13 @@ async def process_pdf_to_text(file: UploadFile) -> Dict[str, Any]:
         contents = await file.read()
         pdf_file = io.BytesIO(contents)
         
-        # First try to extract text using PyPDF2
-        try:
-            pdf_reader = PyPDF2.PdfReader(pdf_file)
-            text = ""
-            for page in pdf_reader.pages:
-                text += page.extract_text() + "\n"
-            text = text.strip()
-        except Exception as e:
-            print(f"PyPDF2 extraction failed: {str(e)}")
-            text = ""
-
-        # Convert PDF to images for OCR processing
-        try:
-            # Create a temporary directory for PDF processing
-            with tempfile.TemporaryDirectory() as temp_dir:
-                images = convert_from_bytes(contents, output_folder=temp_dir)
-                
-                # Convert first page to base64 for vision processing
-                if images:
-                    img_byte_arr = io.BytesIO()
-                    images[0].save(img_byte_arr, format='PNG')
-                    img_byte_arr = img_byte_arr.getvalue()
-                    base64_image = base64.b64encode(img_byte_arr).decode('utf-8')
-                else:
-                    base64_image = None
-                    
-                return {
-                    "text": text,
-                    "base64_image": base64_image,
-                    "total_pages": len(images)
-                }
-        except Exception as e:
-            print(f"PDF to image conversion failed: {str(e)}")
-            return {
-                "text": text,
-                "base64_image": None,
-                "total_pages": 0
-            }
+        # Convert PDF to base64 for OpenAI Vision API
+        base64_pdf = base64.b64encode(contents).decode('utf-8')
+            
+        return {
+            "base64_pdf": base64_pdf,
+            "filename": file.filename
+        }
             
     except Exception as e:
         print(f"Error processing PDF: {str(e)}")
@@ -918,10 +885,10 @@ async def delete_retell_knowledge_base(knowledge_base_id: str) -> bool:
         raise HTTPException(status_code=500, detail="Retell AI API key not configured")
 
     try:
-        print(f"\n=== Deleting Knowledge Base {knowledge_baseid} ===")
+        print(f"\n=== Deleting Knowledge Base {knowledge_base_id} ===")
         async with httpx.AsyncClient(timeout=30.0) as client:
             response = await client.delete(
-                f"{RETELL_API_BASE}/knowledge-bases/{knowledge_baseid}",
+                f"{RETELL_API_BASE}/knowledge-bases/{knowledge_base_id}",
                 headers={
                     "Authorization": f"Bearer {RETELL_API_KEY}",
                     "Content-Type": "application/json"
@@ -932,10 +899,10 @@ async def delete_retell_knowledge_base(knowledge_base_id: str) -> bool:
             print(f"Delete response body: {response.text}")
 
             if response.status_code == 404:
-                print(f"Knowledge base {knowledge_baseid} not found - considering it already deleted")
+                print(f"Knowledge base {knowledge_base_id} not found - considering it already deleted")
                 return True
             elif response.status_code == 200:
-                print(f"Successfully deleted knowledge base {knowledge_baseid}")
+                print(f"Successfully deleted knowledge base {knowledge_base_id}")
                 return True
             else:
                 print(f"Failed to delete knowledge base: {response.text}")
