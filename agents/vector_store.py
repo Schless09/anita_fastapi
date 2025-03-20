@@ -211,73 +211,90 @@ class VectorStore:
         finally:
             print("=== Store candidate operation complete ===\n")
 
+    def get_candidate_chunks(self, candidate_id: str) -> Dict[str, Any]:
+        """Retrieve all chunks for a candidate and reconstruct the full profile."""
+        try:
+            print(f"\n=== Retrieving chunks for candidate {candidate_id} ===")
+            
+            # Query all chunks for this candidate
+            chunks = self.candidates_index.query(
+                vector=[0] * 1536,  # Dummy vector for metadata query
+                filter={"candidate_id": candidate_id},
+                include_metadata=True,
+                top_k=10  # Adjust based on your max chunks per candidate
+            )
+            
+            if not chunks.matches:
+                return {
+                    "status": "error",
+                    "message": f"No chunks found for candidate {candidate_id}"
+                }
+            
+            # Sort chunks by index
+            sorted_chunks = sorted(
+                chunks.matches,
+                key=lambda x: x.metadata.get("chunk_index", 0)
+            )
+            
+            # Reconstruct the full profile
+            full_resume = " ".join(chunk.metadata.get("resume_text", "") for chunk in sorted_chunks)
+            
+            # Get the first chunk's metadata (contains the main profile info)
+            main_metadata = sorted_chunks[0].metadata
+            
+            return {
+                "status": "success",
+                "candidate_id": candidate_id,
+                "total_chunks": len(sorted_chunks),
+                "profile": {
+                    "name": main_metadata.get("name"),
+                    "email": main_metadata.get("email"),
+                    "phone_number": main_metadata.get("phone_number"),
+                    "linkedin": main_metadata.get("linkedin"),
+                    "timestamp": main_metadata.get("timestamp")
+                },
+                "resume_text": full_resume
+            }
+            
+        except Exception as e:
+            print(f"Error retrieving candidate chunks: {str(e)}")
+            return {
+                "status": "error",
+                "message": str(e)
+            }
+
     def find_similar_jobs(self, candidate_id: str, top_k: int = 5) -> Dict[str, Any]:
         """Find jobs similar to a candidate's profile."""
         try:
             print(f"\n=== Finding jobs for candidate {candidate_id} ===")
-            # First try to find the candidate using the candidate_id in metadata
-            print("Searching by candidate_id in metadata...")
-            candidate_chunks = self.candidates_index.query(
-                vector=[0] * 1536,  # Dummy vector for metadata query
-                filter={"candidate_id": candidate_id},  # Search by candidate_id in metadata
-                include_metadata=True,
-                top_k=10  # Get all chunks
-            )
             
-            if not candidate_chunks.matches:
-                print("No matches found by candidate_id in metadata, trying exact ID match...")
-                # Try exact ID match as fallback
-                candidate_chunks = self.candidates_index.query(
-                    vector=[0] * 1536,
-                    filter={"id": candidate_id},  # Try exact match
-                    include_metadata=True,
-                    top_k=1
-                )
+            # Get all chunks for the candidate
+            candidate_data = self.get_candidate_chunks(candidate_id)
+            if candidate_data["status"] == "error":
+                return candidate_data
                 
-                if not candidate_chunks.matches:
-                    print("No exact match found, trying with chunk suffix...")
-                    # Try with chunk suffix as last resort
-                    candidate_chunks = self.candidates_index.query(
-                        vector=[0] * 1536,
-                        filter={"id": f"{candidate_id}_chunk_0"},  # Try first chunk
-                        include_metadata=True,
-                        top_k=1
-                    )
+            # Create a single vector from the full resume
+            full_resume = candidate_data["resume_text"]
+            vector = self.get_embedding(full_resume)
             
-            if not candidate_chunks.matches:
-                print(f"No matches found for candidate {candidate_id}")
-                return {
-                    "status": "error",
-                    "message": f"Candidate {candidate_id} not found"
-                }
-            
-            print(f"Found {len(candidate_chunks.matches)} matches")
-            # Use the first chunk's vector for job matching (usually contains the most relevant info)
-            first_match = candidate_chunks.matches[0]
-            print(f"Using vector from: {first_match.id}")
-            
-            # Query jobs index with the candidate's vector
-            print("\nQuerying jobs index...")
-            results = self.jobs_index.query(
-                vector=first_match.values,
+            # Search for similar jobs
+            similar_jobs = self.jobs_index.query(
+                vector=vector,
                 top_k=top_k,
                 include_metadata=True
             )
             
-            matches = []
-            for match in results.matches:
-                matches.append({
-                    "job_id": match.id,
-                    "score": match.score,
-                    "metadata": match.metadata
-                })
-            
-            print(f"Found {len(matches)} job matches")
             return {
                 "status": "success",
-                "matches": matches,
-                "candidate_id": first_match.metadata.get("candidate_id", first_match.id),
-                "candidate_metadata": first_match.metadata
+                "candidate_id": candidate_id,
+                "matches": [
+                    {
+                        "job_id": match.id,
+                        "score": match.score,
+                        "metadata": match.metadata
+                    }
+                    for match in similar_jobs.matches
+                ]
             }
             
         except Exception as e:
@@ -286,8 +303,6 @@ class VectorStore:
                 "status": "error",
                 "message": str(e)
             }
-        finally:
-            print("=== Job search complete ===\n")
 
     def find_similar_candidates(self, job_id: str, top_k: int = 5) -> Dict[str, Any]:
         """Find candidates that match a job posting with enhanced matching"""
@@ -436,4 +451,70 @@ class VectorStore:
             return {
                 "status": "error",
                 "message": str(e)
-            } 
+            }
+
+    def get_candidate_profile(self, candidate_id: str) -> Dict[str, Any]:
+        """Get a candidate's complete profile including all chunks and metadata."""
+        try:
+            print(f"\n=== Retrieving profile for candidate {candidate_id} ===")
+            
+            # Get all chunks for the candidate
+            chunks_data = self.get_candidate_chunks(candidate_id)
+            if chunks_data["status"] == "error":
+                return chunks_data
+            
+            # Get the full resume text
+            full_resume = chunks_data["resume_text"]
+            
+            # Process the resume with OpenAI to extract structured information
+            try:
+                processed_data = self.process_resume_with_openai(full_resume)
+            except Exception as e:
+                print(f"Warning: Failed to process resume with OpenAI: {str(e)}")
+                processed_data = None
+            
+            # Combine all data
+            profile = {
+                "status": "success",
+                "candidate_id": candidate_id,
+                "basic_info": chunks_data["profile"],
+                "resume_text": full_resume,
+                "processed_data": processed_data,
+                "total_chunks": chunks_data["total_chunks"]
+            }
+            
+            return profile
+            
+        except Exception as e:
+            print(f"Error retrieving candidate profile: {str(e)}")
+            return {
+                "status": "error",
+                "message": str(e)
+            }
+
+    def process_resume_with_openai(self, resume_text: str) -> Dict[str, Any]:
+        """Process resume text with OpenAI to extract structured information."""
+        try:
+            response = self.openai_client.chat.completions.create(
+                model="gpt-4-turbo-preview",
+                messages=[
+                    {"role": "system", "content": """You are an expert resume analyzer. Extract the following information in a structured format:
+                    - skills: List of technical and soft skills
+                    - experience: List of work experiences with company, role, and duration
+                    - education: List of educational qualifications
+                    - achievements: List of key achievements
+                    - summary: A brief professional summary
+
+                    Format the response as a valid JSON object with these exact keys."""},
+                    {"role": "user", "content": f"Please analyze this resume and extract the key information:\n\n{resume_text}"}
+                ],
+                temperature=0.3,
+                max_tokens=1500,
+                response_format={ "type": "json_object" }
+            )
+            
+            return response.choices[0].message.content
+            
+        except Exception as e:
+            print(f"Error processing resume with OpenAI: {str(e)}")
+            raise 

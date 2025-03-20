@@ -24,6 +24,8 @@ import traceback
 import asyncio
 from PyPDF2 import PdfReader
 from pinecone import Pinecone, ServerlessSpec, CloudProvider, AwsRegion, VectorType
+import phonenumbers
+from retell import Retell
 
 # Load environment variables
 load_dotenv()
@@ -35,6 +37,9 @@ if not OPENAI_API_KEY:
 
 # Initialize OpenAI client
 openai_client = openai.OpenAI(api_key=OPENAI_API_KEY)
+
+# Initialize call status tracking
+call_statuses = {}
 
 app = FastAPI(
     title="Anita AI Recruitment API",
@@ -55,6 +60,7 @@ RETELL_API_KEY = os.getenv('RETELL_API_KEY')
 RETELL_API_BASE = "https://api.retellai.com/v2"
 RETELL_FROM_NUMBER = os.getenv('RETELL_FROM_NUMBER')
 RETELL_AGENT_ID = os.getenv('RETELL_AGENT_ID')
+RETELL_PHONE_NUMBER = os.getenv('RETELL_PHONE_NUMBER')
 
 class Location(BaseModel):
     city: Optional[str] = None
@@ -447,11 +453,11 @@ async def submit_candidate(
     linkedin: Optional[str] = Form(None)
 ):
     try:
-        # Generate a unique candidate ID and store it to ensure consistency
+        # Generate a unique candidate ID
         candidate_id = f"candidate_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}"
         print(f"\n=== Processing candidate submission {candidate_id} ===")
         
-        # Process the PDF file first
+        # Process the PDF file
         try:
             pdf_result = await process_pdf_to_text(resume)
             resume_text = pdf_result["text"]
@@ -462,9 +468,9 @@ async def submit_candidate(
                 detail=f"Failed to process resume: {pdf_error.detail}"
             )
 
-        # Create the candidate profile with the consistent ID
+        # Create the candidate profile
         profile = {
-            "id": candidate_id,  # Use the same ID
+            "id": candidate_id,
             "name": name,
             "email": email,
             "phone_number": phone_number,
@@ -478,7 +484,7 @@ async def submit_candidate(
             print("Initializing VectorStore with OpenAI support...")
             vector_store = VectorStore(init_openai=True)
             print("Storing candidate in Pinecone...")
-            vector_result = vector_store.store_candidate(candidate_id, profile)  # Use the same ID
+            vector_result = vector_store.store_candidate(candidate_id, profile)
             if vector_result.get('status') == 'error':
                 print(f"Error storing candidate in vector database: {vector_result.get('message')}")
                 raise HTTPException(
@@ -486,12 +492,6 @@ async def submit_candidate(
                     detail=f"Failed to store candidate in vector database: {vector_result.get('message')}"
                 )
             print("Successfully stored candidate in Pinecone")
-        except ValueError as ve:
-            print(f"Configuration error: {str(ve)}")
-            raise HTTPException(
-                status_code=500,
-                detail=str(ve)
-            )
         except Exception as e:
             print(f"Error storing candidate: {str(e)}")
             raise HTTPException(
@@ -506,34 +506,22 @@ async def submit_candidate(
         )
         await resume.seek(0)
 
-        # Add resume processing to background tasks with the same ID
-        background_tasks.add_task(
-            process_resume_text,
-            {"text": resume_text, "candidate_id": candidate_id}  # Use the same ID
-        )
-        print("Added resume processing to background tasks")
-
-        # Call the makeCall endpoint with the same candidate_id
+        # Trigger the makeCall endpoint
         try:
-            print(f"Initiating call with candidate {candidate_id}...")  # Log the ID being used
+            print(f"Initiating call with candidate {candidate_id}...")
             make_call_response = await make_call(
+                candidate_id=candidate_id,
                 name=name,
                 email=email,
                 phone_number=phone_number,
                 linkedin=linkedin or "",
-                resume=resume_copy,
-                candidate_id=candidate_id  # Use the same ID
+                resume=resume_copy
             )
-            
-            # Ensure the response uses our candidate_id
-            if make_call_response.get("candidate_id") != candidate_id:
-                print(f"Warning: make_call returned different candidate_id: {make_call_response.get('candidate_id')} vs {candidate_id}")
-                make_call_response["candidate_id"] = candidate_id
             
             return {
                 "status": "success",
                 "message": "Candidate profile created and call initiated successfully",
-                "candidate_id": candidate_id,  # Use the same ID
+                "candidate_id": candidate_id,
                 "profile": profile,
                 "vector_store_status": vector_result.get('status', 'unknown'),
                 "call_data": make_call_response
@@ -544,12 +532,12 @@ async def submit_candidate(
             return {
                 "status": "partial_success",
                 "message": "Candidate profile created but failed to initiate call",
-                "candidate_id": candidate_id,  # Use the same ID
+                "candidate_id": candidate_id,
                 "profile": profile,
                 "vector_store_status": vector_result.get('status', 'unknown'),
                 "error": str(call_error)
             }
-
+        
     except HTTPException as he:
         raise he
     except Exception as e:
@@ -818,22 +806,26 @@ async def match_jobs_to_candidate(candidate_id: str, top_k: Optional[int] = 5):
         "total_matches": len(result['matches'])
     }
 
-@app.get("/candidates/{candidate_id}/profile", response_model=Dict[str, Any])
+@app.get("/candidates/{candidate_id}/profile")
 async def get_candidate_profile(candidate_id: str):
-    """
-    Retrieve a candidate's full profile including match history.
-    
-    Returns the candidate's information, preferences, and any matching results.
-    """
-    profile = brain_agent.candidate_profiles.get(candidate_id)
-    if not profile:
-        raise HTTPException(status_code=404, detail="Candidate not found")
-    
-    return {
-        "status": "success",
-        "profile": profile,
-        "current_state": brain_agent.state.get(candidate_id, "unknown")
-    }
+    """Get a candidate's complete profile including processed resume data."""
+    try:
+        vector_store = VectorStore(init_openai=True)
+        profile = vector_store.get_candidate_profile(candidate_id)
+        
+        if profile["status"] == "error":
+            raise HTTPException(
+                status_code=404,
+                detail=profile["message"]
+            )
+            
+        return profile
+        
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=str(e)
+        )
 
 @app.post("/test-email")
 async def test_email():
@@ -1184,7 +1176,7 @@ async def create_retell_knowledge_base(resume_file: UploadFile, name: str) -> st
             os.unlink(temp_file.name)
             print(f"\nCleaned up temporary file: {temp_file.name}")
 
-            if response.status_code != 201:
+            if response.status_code not in (200, 201):
                 print(f"Error creating knowledge base: {response.text}")
                 raise HTTPException(
                     status_code=response.status_code,
@@ -1212,183 +1204,177 @@ async def create_retell_knowledge_base(resume_file: UploadFile, name: str) -> st
         print(f"Error traceback: {traceback.format_exc()}")
         raise HTTPException(status_code=500, detail=f"Failed to create knowledge base: {str(e)}")
 
-@app.post("/api/makeCall", response_model=Dict[str, Any])
-async def make_call(
-    name: Annotated[str, Form()],
-    email: Annotated[str, Form()],
-    phone_number: Annotated[str, Form()],
-    linkedin: Annotated[str, Form()],
-    resume: UploadFile = File(...),
-    candidate_id: Optional[str] = None
-):
-    """
-    Create a new Retell AI call for a candidate.
-    1. Upload the PDF resume directly to Retell AI knowledge base
-    2. Set up context with Retell AI
-    3. Initiate the call
-    """
+async def add_to_knowledge_base(resume_file: UploadFile, knowledge_base_id: str) -> bool:
+    """Add a resume to an existing knowledge base"""
+    if not RETELL_API_KEY:
+        raise HTTPException(status_code=500, detail="Retell AI API key not configured")
+
     try:
-        print("\n=== Starting Make Call Process ===")
+        # Read the resume file content
+        file_content = await resume_file.read()
+        print(f"\n=== Adding file to knowledge base ===")
+        print(f"File name: {resume_file.filename}")
+        print(f"File size: {len(file_content)} bytes")
+        print(f"Knowledge base ID: {knowledge_base_id}")
         
-        # Validate API configuration
-        if not RETELL_API_KEY:
-            raise HTTPException(status_code=500, detail="Retell AI API key not configured")
-        if not RETELL_AGENT_ID:
-            raise HTTPException(status_code=500, detail="Retell AI Agent ID not configured")
-        if not RETELL_FROM_NUMBER:
-            raise HTTPException(status_code=500, detail="Retell AI From Number not configured")
-
-        print("API configuration validated successfully")
-
-        # Ensure we have a valid candidate_id
-        if not candidate_id:
-            raise HTTPException(status_code=400, detail="candidate_id is required")
-        print(f"Using candidate ID: {candidate_id}")
-        
-        # Format phone number to E.164 format
-        phone = phone_number.strip()
-        phone = '+' + ''.join(filter(str.isdigit, phone.replace('+', '')))
-        if not phone.startswith('+'):
-            phone = '+' + phone
-        print(f"Formatted phone number: {phone}")
-        
-        # Validate file type
-        if not resume.filename.lower().endswith('.pdf'):
-            raise HTTPException(status_code=400, detail="File must be a PDF")
-        print(f"Validated resume file: {resume.filename}")
-
-        # Create knowledge base with resume file
-        print("\nCreating Retell AI knowledge base...")
-        knowledge_base_id = await create_retell_knowledge_base(resume, name)
-        print(f"Created knowledge base with ID: {knowledge_base_id}")
-
-        # Create the request object with validated data
-        request = MakeCallRequest(
-            name=name,
-            email=email,
-            phone_number=phone,
-            linkedin=linkedin
-        )
-        print("\nCreated MakeCallRequest object")
-        
-        # Create dynamic variables for Retell AI context
-        dynamic_variables = {
-            "user_name": request.name,
-            "email": request.email,
-            "phone_number": phone,
-            "linkedin": request.linkedin or ""
-        }
-        print(f"Dynamic variables prepared: {dynamic_variables}")
-        
-        # Create a new call with Retell AI
-        print("\nInitiating call with Retell AI...")
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            try:
-                retell_payload = {
-                    "to_number": phone,
-                    "from_number": RETELL_FROM_NUMBER,
-                    "override_agent_id": RETELL_AGENT_ID,
-                    "dynamic_variables": dynamic_variables,
-                    "knowledge_base_id": knowledge_base_id,
-                    "metadata": {
-                        "candidate_id": candidate_id,  # Use the provided candidate_id
-                        "name": request.name,
-                        "email": request.email,
-                        "linkedin": request.linkedin or "",
-                        "source": "anita_ai",
-                        "knowledge_base_id": knowledge_base_id
-                    },
-                    "voice_id": "kathrine",
-                    "voice_config": {
-                        "model": "elevenlabs-turbo-v2",
-                        "speed": 1.0,
-                        "temperature": 1.0,
-                        "volume": 1.0
-                    },
-                    "audio_config": {
-                        "noise_reduction": True,
-                        "voice_activity_detection": True,
-                        "auto_gain_control": True
-                    },
-                    "conversation_config": {
-                        "initiation": "agent_first",
-                        "welcome_message": f"Hi {request.name}, this is Anita calling from our recruiting team. I received your resume and I'd love to learn more about your background and interests. Do you have a few minutes to chat?"
-                    }
-                }
-                print(f"\nPrepared Retell AI payload: {json.dumps(retell_payload, indent=2)}")
-
-                response = await client.post(
-                    f"{RETELL_API_BASE}/create-phone-call",
-                    headers={
-                        "Authorization": f"Bearer {RETELL_API_KEY}",
-                        "Content-Type": "application/json"
-                    },
-                    json=retell_payload
-                )
-                
-                print(f"\nRetell AI response status: {response.status_code}")
-                print(f"Retell AI response headers: {dict(response.headers)}")
-                print(f"Retell AI response body: {response.text}")
-                
-                # Consider both 200 and 201 as success
-                if response.status_code not in (200, 201):
-                    error_msg = response.text
-                    try:
-                        error_data = response.json()
-                        if isinstance(error_data, dict):
-                            error_msg = error_data.get('message', error_data.get('error', response.text))
-                    except:
-                        pass
-                    raise HTTPException(
-                        status_code=response.status_code,
-                        detail=f"Retell AI service error: {error_msg}"
+        # Create a temporary file
+        with tempfile.NamedTemporaryFile(suffix='.pdf', delete=False) as temp_file:
+            temp_file.write(file_content)
+            temp_file.flush()
+            print(f"Created temporary file: {temp_file.name}")
+            
+            # Initialize Retell client
+            client = Retell(api_key=RETELL_API_KEY)
+            
+            # Open the file and add it to the knowledge base
+            with open(temp_file.name, "rb") as file:
+                try:
+                    knowledge_base_response = client.knowledge_base.add_sources(
+                        knowledge_base_id=knowledge_base_id,
+                        knowledge_base_files=[file]
                     )
-                
-                call_data = response.json()
-                call_id = call_data.get("callId") or call_data.get("call_id")
-                if not call_id:
-                    raise HTTPException(
-                        status_code=500,
-                        detail="No call ID in response from Retell AI"
-                    )
-                
-                print(f"\nCall initiated successfully with ID: {call_id}")
-                
-                return {
-                    "status": "success",
-                    "message": "Resume uploaded and call initiated successfully",
-                    "candidate_id": candidate_id,  # Use the provided candidate_id
-                    "call_id": call_id,
-                    "call_details": {
-                        "status": call_data.get("status", "unknown"),
-                        "created_at": datetime.utcnow().isoformat(),
-                        "phone_number": phone,
-                        "name": request.name,
-                        "email": request.email,
-                        "knowledge_base_id": knowledge_base_id
-                    }
-                }
-                
-            except httpx.TimeoutException:
-                print("\nTimeout error while calling Retell AI")
-                raise HTTPException(
-                    status_code=504,
-                    detail="Request to Retell AI timed out"
-                )
-                
-    except HTTPException as e:
-        print(f"\nHTTPException in make_call: {str(e)}")
-        raise e
+                    print(f"\nSuccessfully added to knowledge base: {knowledge_base_response.knowledge_base_id}")
+                    return True
+                except Exception as e:
+                    print(f"\nError from Retell client:")
+                    print(f"Error type: {type(e)}")
+                    print(f"Error message: {str(e)}")
+                    return False
+                finally:
+                    # Clean up the temporary file
+                    os.unlink(temp_file.name)
+                    print(f"\nCleaned up temporary file: {temp_file.name}")
+
     except Exception as e:
-        print(f"\nUnexpected error in make_call: {str(e)}")
+        print(f"\nERROR in add_to_knowledge_base:")
         print(f"Error type: {type(e)}")
+        print(f"Error message: {str(e)}")
         print(f"Error traceback: {traceback.format_exc()}")
         raise HTTPException(
             status_code=500,
-            detail=str(e)
+            detail=f"Failed to add resume to knowledge base: {str(e)}"
         )
-    finally:
-        print("=== Make Call Process Complete ===\n")
+
+@app.post("/api/makeCall")
+async def make_call(
+    candidate_id: str = Form(...),
+    name: str = Form(...),
+    email: str = Form(...),
+    phone_number: str = Form(...),
+    linkedin: str = Form(None),
+    resume: UploadFile = File(...)
+):
+    """Create a new Retell AI call for a candidate"""
+    try:
+        # Validate API configuration
+        if not RETELL_API_KEY or not RETELL_AGENT_ID or not RETELL_FROM_NUMBER:
+            raise HTTPException(
+                status_code=500,
+                detail="Retell AI configuration is missing. Please check your environment variables."
+            )
+
+        # Format phone number to E.164 format
+        try:
+            parsed_number = phonenumbers.parse(phone_number)
+            if not phonenumbers.is_valid_number(parsed_number):
+                raise ValueError("Invalid phone number")
+            formatted_number = phonenumbers.format_number(parsed_number, phonenumbers.PhoneNumberFormat.E164)
+        except Exception as e:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid phone number format: {str(e)}"
+            )
+
+        # Validate resume file
+        if not resume.filename.lower().endswith('.pdf'):
+            raise HTTPException(
+                status_code=400,
+                detail="Resume must be a PDF file"
+            )
+
+        # Use the fixed knowledge base ID
+        knowledge_base_id = "knowledge_base_b1df2fc51182f47b"
+
+        # Add the resume to the knowledge base
+        success = await add_to_knowledge_base(resume, knowledge_base_id)
+        if not success:
+            raise HTTPException(
+                status_code=500,
+                detail="Failed to add resume to knowledge base"
+            )
+
+        # Prepare the request object
+        retell_payload = {
+            "from_number": RETELL_FROM_NUMBER,
+            "to_number": formatted_number,
+            "agent_id": RETELL_AGENT_ID,
+            "knowledge_base_id": knowledge_base_id,
+            "metadata": {
+                "candidate_id": candidate_id,
+                "name": name,
+                "email": email,
+                "linkedin": linkedin
+            },
+            "retell_llm_dynamic_variables": {
+                "candidate_name": name,
+                "candidate_email": email,
+                "candidate_linkedin": linkedin
+            }
+        }
+
+        print(f"\nMaking call with payload: {json.dumps(retell_payload, indent=2)}")
+
+        # Make the call
+        async with httpx.AsyncClient() as client:
+            print(f"Sending request to {RETELL_API_BASE}/create-phone-call")
+            response = await client.post(
+                f"{RETELL_API_BASE}/create-phone-call",
+                headers={
+                    "Authorization": f"Bearer {RETELL_API_KEY}",
+                    "Content-Type": "application/json"
+                },
+                json=retell_payload
+            )
+            
+            print(f"Response status: {response.status_code}")
+            print(f"Response body: {response.text}")
+            
+            if response.status_code not in (200, 201):
+                error_detail = response.json() if response.text else "No error details available"
+                print(f"Error creating call: {error_detail}")
+                raise HTTPException(
+                    status_code=response.status_code,
+                    detail=f"Failed to create call: {error_detail}"
+                )
+
+            call_data = response.json()
+            call_id = call_data.get("call_id")
+            
+            if not call_id:
+                raise HTTPException(
+                    status_code=500,
+                    detail="No call_id in response"
+                )
+
+            # Register call status
+            call_statuses[call_id] = {
+                "status": "registered",
+                "candidate_id": candidate_id,
+                "timestamp": datetime.utcnow().isoformat()
+            }
+
+            return {
+                "message": "Call initiated successfully",
+                "call_id": call_id,
+                "status": "registered"
+            }
+
+    except Exception as e:
+        print(f"Error in make_call: {str(e)}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to create call: {str(e)}"
+        )
 
 @app.post("/delete-knowledge-base/{knowledge_base_id}")
 async def delete_knowledge_base(knowledge_base_id: str):
