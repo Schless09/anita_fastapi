@@ -5,8 +5,8 @@ sendgrid
 pinecone
 pydantic
 python-multipart
-httpx==0.23.3
-openai==0.28.1
+httpx==0.24.1
+openai>=1.3.5,<1.9.0
 aiohttp
 twilio
 pdf2image
