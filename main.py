@@ -391,7 +391,7 @@ async def process_resume_text(resume_data: Dict[str, Any]) -> Dict[str, Any]:
                 # If we have a candidate_id, update the vector store with the processed data
                 if candidate_id:
                     try:
-                        vector_store = VectorStore()
+                        vector_store = VectorStore(init_openai=True)
                         # Update the candidate's profile with the processed data
                         vector_store.update_candidate_profile(candidate_id, {
                             "processed_resume": processed_data,
@@ -447,33 +447,57 @@ async def submit_candidate(
     linkedin: Optional[str] = Form(None)
 ):
     try:
-        # Generate a unique candidate ID
+        # Generate a unique candidate ID and store it to ensure consistency
         candidate_id = f"candidate_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}"
+        print(f"\n=== Processing candidate submission {candidate_id} ===")
         
         # Process the PDF file first
         try:
             pdf_result = await process_pdf_to_text(resume)
             resume_text = pdf_result["text"]
+            print("Successfully extracted text from resume")
         except HTTPException as pdf_error:
             raise HTTPException(
                 status_code=pdf_error.status_code,
                 detail=f"Failed to process resume: {pdf_error.detail}"
             )
 
-        # Create the candidate profile
+        # Create the candidate profile with the consistent ID
         profile = {
-            "id": candidate_id,
+            "id": candidate_id,  # Use the same ID
             "name": name,
             "email": email,
             "phone_number": phone_number,
             "linkedin": linkedin,
             "resume_text": resume_text
         }
+        print("Created candidate profile")
 
         # Store candidate in vector database
-        vector_result = vector_store.store_candidate(candidate_id, profile)
-        if vector_result.get('status') == 'error':
-            print(f"Warning: Failed to store candidate in vector database: {vector_result.get('message')}")
+        try:
+            print("Initializing VectorStore with OpenAI support...")
+            vector_store = VectorStore(init_openai=True)
+            print("Storing candidate in Pinecone...")
+            vector_result = vector_store.store_candidate(candidate_id, profile)  # Use the same ID
+            if vector_result.get('status') == 'error':
+                print(f"Error storing candidate in vector database: {vector_result.get('message')}")
+                raise HTTPException(
+                    status_code=500,
+                    detail=f"Failed to store candidate in vector database: {vector_result.get('message')}"
+                )
+            print("Successfully stored candidate in Pinecone")
+        except ValueError as ve:
+            print(f"Configuration error: {str(ve)}")
+            raise HTTPException(
+                status_code=500,
+                detail=str(ve)
+            )
+        except Exception as e:
+            print(f"Error storing candidate: {str(e)}")
+            raise HTTPException(
+                status_code=500,
+                detail=f"Failed to store candidate: {str(e)}"
+            )
 
         # Create a copy of the resume file for the make_call function
         resume_copy = UploadFile(
@@ -482,26 +506,34 @@ async def submit_candidate(
         )
         await resume.seek(0)
 
-        # Add resume processing to background tasks
+        # Add resume processing to background tasks with the same ID
         background_tasks.add_task(
             process_resume_text,
-            {"text": resume_text, "candidate_id": candidate_id}
+            {"text": resume_text, "candidate_id": candidate_id}  # Use the same ID
         )
+        print("Added resume processing to background tasks")
 
-        # Call the makeCall endpoint
+        # Call the makeCall endpoint with the same candidate_id
         try:
+            print(f"Initiating call with candidate {candidate_id}...")  # Log the ID being used
             make_call_response = await make_call(
                 name=name,
                 email=email,
                 phone_number=phone_number,
                 linkedin=linkedin or "",
-                resume=resume_copy
+                resume=resume_copy,
+                candidate_id=candidate_id  # Use the same ID
             )
+            
+            # Ensure the response uses our candidate_id
+            if make_call_response.get("candidate_id") != candidate_id:
+                print(f"Warning: make_call returned different candidate_id: {make_call_response.get('candidate_id')} vs {candidate_id}")
+                make_call_response["candidate_id"] = candidate_id
             
             return {
                 "status": "success",
                 "message": "Candidate profile created and call initiated successfully",
-                "candidate_id": candidate_id,
+                "candidate_id": candidate_id,  # Use the same ID
                 "profile": profile,
                 "vector_store_status": vector_result.get('status', 'unknown'),
                 "call_data": make_call_response
@@ -512,18 +544,22 @@ async def submit_candidate(
             return {
                 "status": "partial_success",
                 "message": "Candidate profile created but failed to initiate call",
-                "candidate_id": candidate_id,
+                "candidate_id": candidate_id,  # Use the same ID
                 "profile": profile,
                 "vector_store_status": vector_result.get('status', 'unknown'),
                 "error": str(call_error)
             }
 
+    except HTTPException as he:
+        raise he
     except Exception as e:
         print(f"Error in submit_candidate: {str(e)}")
         raise HTTPException(
             status_code=500,
             detail=str(e)
         )
+    finally:
+        print("=== Candidate submission processing complete ===\n")
 
 async def process_transcript_with_openai(transcript: str) -> Dict[str, Any]:
     """Process transcript using OpenAI to extract structured information."""
@@ -1182,7 +1218,8 @@ async def make_call(
     email: Annotated[str, Form()],
     phone_number: Annotated[str, Form()],
     linkedin: Annotated[str, Form()],
-    resume: UploadFile = File(...)
+    resume: UploadFile = File(...),
+    candidate_id: Optional[str] = None
 ):
     """
     Create a new Retell AI call for a candidate.
@@ -1203,9 +1240,10 @@ async def make_call(
 
         print("API configuration validated successfully")
 
-        # Generate a unique candidate ID
-        candidate_id = f"candidate_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}"
-        print(f"Generated candidate ID: {candidate_id}")
+        # Ensure we have a valid candidate_id
+        if not candidate_id:
+            raise HTTPException(status_code=400, detail="candidate_id is required")
+        print(f"Using candidate ID: {candidate_id}")
         
         # Format phone number to E.164 format
         phone = phone_number.strip()
@@ -1253,7 +1291,7 @@ async def make_call(
                     "dynamic_variables": dynamic_variables,
                     "knowledge_base_id": knowledge_base_id,
                     "metadata": {
-                        "candidate_id": candidate_id,
+                        "candidate_id": candidate_id,  # Use the provided candidate_id
                         "name": request.name,
                         "email": request.email,
                         "linkedin": request.linkedin or "",
@@ -1319,7 +1357,7 @@ async def make_call(
                 return {
                     "status": "success",
                     "message": "Resume uploaded and call initiated successfully",
-                    "candidate_id": candidate_id,
+                    "candidate_id": candidate_id,  # Use the provided candidate_id
                     "call_id": call_id,
                     "call_details": {
                         "status": call_data.get("status", "unknown"),
