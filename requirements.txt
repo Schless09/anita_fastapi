@@ -5,7 +5,7 @@ sendgrid
 pinecone
 pydantic
 python-multipart
-httpx==0.24.1
+httpx==0.23.3
 openai==0.28.1
 aiohttp
 twilio
