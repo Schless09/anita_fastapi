@@ -321,7 +321,7 @@ async def process_resume_text(resume_data: Dict[str, Any]) -> Dict[str, Any]:
         }
     
     try:
-        client = AsyncOpenAI(api_key=OPENAI_API_KEY)
+        client = OpenAI(api_key=OPENAI_API_KEY)
         
         # Prepare the content for GPT-4
         content = resume_data.get("text", "").strip()
@@ -343,7 +343,7 @@ async def process_resume_text(resume_data: Dict[str, Any]) -> Dict[str, Any]:
         Format the response as a valid JSON object with these exact keys."""
 
         try:
-            response = await client.chat.completions.create(
+            response = client.chat.completions.create(
                 model="gpt-4-turbo-preview",
                 messages=[
                     {"role": "system", "content": system_message},
