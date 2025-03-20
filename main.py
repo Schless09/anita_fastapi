@@ -367,18 +367,25 @@ async def process_resume_text(resume_data: Dict[str, Any]) -> Dict[str, Any]:
 
         try:
             response = client.chat.completions.create(
-                model="gpt-4-turbo",
+                model="gpt-4-turbo-preview",
                 messages=[
                     {"role": "system", "content": system_message},
                     {"role": "user", "content": f"Please analyze this resume and extract the key information:\n\n{content}"}
                 ],
                 temperature=0.3,
                 max_tokens=1500,
-                response_format={ "type": "json_object" }
+                response_format={ "type": "json_object" },
+                stream=True  # Enable streaming
             )
             
+            # Collect the streamed response
+            full_response = ""
+            async for chunk in response:
+                if chunk.choices[0].delta.content is not None:
+                    full_response += chunk.choices[0].delta.content
+            
             try:
-                processed_data = json.loads(response.choices[0].message.content)
+                processed_data = json.loads(full_response)
                 return {
                     "raw_text": resume_data.get("text", ""),
                     "processed": True,
