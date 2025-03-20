@@ -15,5 +15,5 @@
       "dest": "main.py"
     }
   ],
-  "buildCommand": "apt-get update && apt-get install -y poppler-utils && pip install -r requirements.txt"
+  "buildCommand": "apt-get update && apt-get install -y poppler-utils && pip install --no-cache-dir -r requirements.txt"
 }
