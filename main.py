@@ -25,7 +25,7 @@ import asyncio
 from PyPDF2 import PdfReader
 from pinecone import Pinecone, ServerlessSpec, CloudProvider, AwsRegion, VectorType
 import phonenumbers
-from retell import Retell
+from retell_sdk import Retell
 
 # Load environment variables
 load_dotenv()
