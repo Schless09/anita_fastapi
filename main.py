@@ -14,7 +14,7 @@ import openai
 from pydantic import ValidationError
 import json
 import base64
-from openai import AsyncOpenAI
+from openai import OpenAI
 import io
 import tempfile
 import requests
