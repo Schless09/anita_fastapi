@@ -380,7 +380,7 @@ async def process_resume_text(resume_data: Dict[str, Any]) -> Dict[str, Any]:
             
             # Collect the streamed response
             full_response = ""
-            async for chunk in response:
+            for chunk in response:
                 if chunk.choices[0].delta.content is not None:
                     full_response += chunk.choices[0].delta.content
             
