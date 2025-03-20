@@ -23,6 +23,8 @@ import aiohttp
 import traceback
 import asyncio
 from pinecone import Pinecone, ServerlessSpec, CloudProvider, AwsRegion, VectorType
+from pdf2image import convert_from_bytes
+import time
 
 # Load environment variables
 load_dotenv()
@@ -31,7 +33,9 @@ load_dotenv()
 OPENAI_API_KEY = os.getenv('OPENAI_API_KEY')
 if not OPENAI_API_KEY:
     raise ValueError("OPENAI_API_KEY environment variable is not set")
-openai.api_key = OPENAI_API_KEY
+
+# Initialize OpenAI client
+openai_client = openai.OpenAI(api_key=OPENAI_API_KEY)
 
 app = FastAPI(
     title="Anita AI Recruitment API",
@@ -278,297 +282,202 @@ async def process_pdf_to_text(file: UploadFile) -> Dict[str, Any]:
         await file.seek(0)
 
 async def process_resume_text(resume_data: Dict[str, Any]) -> Dict[str, Any]:
-    """Process resume using OpenAI GPT-4 Turbo to extract key information."""
+    """Process resume using OpenAI GPT-4 Turbo with Vision to extract key information."""
     if not OPENAI_API_KEY:
         print("Warning: OpenAI API key not configured, skipping resume processing")
         return {
-            "raw_text": resume_data.get("text", ""),
+            "raw_text": "",
             "processed": False,
             "error": "OpenAI API key not configured"
         }
     
     try:
-        client = AsyncOpenAI(api_key=OPENAI_API_KEY)
+        print(f"Using OpenAI API key: {OPENAI_API_KEY[:8]}...")  # Print first 8 chars for debugging
         
-        # Prepare the content for GPT-4
-        content = resume_data.get("text", "").strip()
+        # Initialize async client with base URL
+        async_client = AsyncOpenAI(
+            api_key=OPENAI_API_KEY
+        )
         
-        if not content:
+        # Get the base64 PDF content
+        base64_pdf = resume_data.get("base64_pdf")
+        if not base64_pdf:
             return {
-                "raw_text": resume_data.get("text", ""),
+                "raw_text": "",
                 "processed": False,
-                "error": "No content available for processing"
+                "error": "No PDF content available for processing"
             }
         
-        system_message = """You are an expert resume analyzer. Extract the following information in a structured format:
-        - skills: List of technical and soft skills
-        - experience: List of work experiences with company, role, and duration
-        - education: List of educational qualifications
-        - achievements: List of key achievements
-        - summary: A brief professional summary
-
-        Format the response as a valid JSON object with these exact keys."""
-
+        print("Converting PDF to images...")
+        
         try:
-            response = await client.chat.completions.create(
-                model="gpt-4-turbo-preview",
-                messages=[
-                    {"role": "system", "content": system_message},
-                    {"role": "user", "content": f"Please analyze this resume and extract the key information:\n\n{content}"}
-                ],
-                temperature=0.3,
-                max_tokens=1500,
-                response_format={ "type": "json_object" }
-            )
-            
-            try:
-                processed_data = json.loads(response.choices[0].message.content)
-                return {
-                    "raw_text": resume_data.get("text", ""),
-                    "processed": True,
-                    "structured_data": processed_data,
-                    "processed_at": datetime.utcnow().isoformat()
-                }
-            except json.JSONDecodeError as e:
-                print(f"Error parsing OpenAI response: {str(e)}")
-                return {
-                    "raw_text": resume_data.get("text", ""),
-                    "processed": True,
-                    "structured_data": {
-                        "skills": [],
-                        "experience": [],
-                        "education": [],
-                        "achievements": [],
-                        "summary": "Failed to parse structured data from resume"
-                    },
-                    "error": f"Failed to parse OpenAI response: {str(e)}",
-                    "processed_at": datetime.utcnow().isoformat()
-                }
-        except Exception as api_error:
-            print(f"OpenAI API error: {str(api_error)}")
+            # Convert PDF to images with proper error handling
+            pdf_bytes = base64.b64decode(base64_pdf)
+            images = convert_from_bytes(pdf_bytes, dpi=300)  # Use higher DPI for better quality
+            total_pages = len(images)
+            print(f"Successfully converted PDF to {total_pages} images")
+        except Exception as e:
+            print(f"Error converting PDF to images: {str(e)}")
             return {
-                "raw_text": resume_data.get("text", ""),
+                "raw_text": "",
                 "processed": False,
-                "error": f"OpenAI API error: {str(api_error)}"
+                "error": f"Failed to convert PDF to images: {str(e)}"
             }
-            
-    except Exception as e:
-        print(f"Error processing resume with OpenAI: {str(e)}")
+        
+        all_text = []
+        
+        # Process each page with progress tracking
+        for i, image in enumerate(images, 1):
+            try:
+                print(f"Processing page {i}/{total_pages}...")
+                
+                # Convert image to base64 with memory optimization
+                buffered = io.BytesIO()
+                image.save(buffered, format="JPEG", quality=85)  # Slightly reduce quality for better performance
+                base64_image = base64.b64encode(buffered.getvalue()).decode('utf-8')
+                
+                # Clear the buffer to free memory
+                buffered.close()
+                
+                # Send to OpenAI Vision API with updated parameters
+                response = await async_client.chat.completions.create(
+                    model="gpt-4-turbo-2024-04-09",  # Updated to use the latest GA model with vision capabilities
+                    messages=[
+                        {
+                            "role": "user",
+                            "content": [
+                                {
+                                    "type": "text",
+                                    "text": "Extract all text from this resume image. Include all text exactly as shown, including headers, bullet points, and any other text elements. Do not add any formatting or additional text. If there are any images or logos, describe them briefly in parentheses."
+                                },
+                                {
+                                    "type": "image_url",
+                                    "image_url": {
+                                        "url": f"data:image/jpeg;base64,{base64_image}",
+                                        "detail": "high"
+                                    }
+                                }
+                            ]
+                        }
+                    ],
+                    max_tokens=4096,
+                    temperature=0.1  # Lower temperature for more consistent results
+                )
+                
+                # Extract text from response
+                if response.choices and response.choices[0].message.content:
+                    page_text = response.choices[0].message.content.strip()
+                    all_text.append(f"Page {i}:\n{page_text}")
+                    print(f"Successfully processed page {i}")
+                else:
+                    print(f"Warning: No text extracted from page {i}")
+                    all_text.append(f"Page {i}: [No text extracted]")
+                
+                # Clear the base64 image string to free memory
+                base64_image = None
+                
+            except Exception as e:
+                print(f"Error processing page {i}: {str(e)}")
+                all_text.append(f"Page {i}: [Error processing page]")
+                continue
+        
+        # Combine all text
+        combined_text = "\n\n".join(all_text)
+        
         return {
-            "raw_text": resume_data.get("text", ""),
+            "raw_text": combined_text,
+            "processed": True,
+            "error": None
+        }
+        
+    except Exception as e:
+        print(f"Error in process_resume_text: {str(e)}")
+        return {
+            "raw_text": "",
             "processed": False,
             "error": str(e)
         }
 
-async def process_resume_background(candidate_id: str, resume: UploadFile, name: str, email: str, phone: str, linkedin: Optional[str]):
-    """Background task to process resume and store in vector database"""
-    try:
-        print(f"\n=== Starting Background Resume Processing for {candidate_id} ===")
-        print(f"Processing resume: {resume.filename}")
-        
-        # Process the PDF resume
-        print("Step 1: Processing PDF to text...")
-        pdf_data = await process_pdf_to_text(resume)
-        
-        if not pdf_data.get("text") and not pdf_data.get("base64_image"):
-            print(f"ERROR: Could not extract content from PDF for candidate {candidate_id}")
-            return
-        
-        # Process resume content through OpenAI
-        print("Step 2: Analyzing resume content with OpenAI...")
-        resume_analysis = await process_resume_text(pdf_data)
-        
-        if not resume_analysis.get("processed"):
-            print(f"ERROR: Failed to process resume content for candidate {candidate_id}: {resume_analysis.get('error', 'Unknown error')}")
-            return
-        
-        # Create comprehensive context from resume analysis
-        print("Step 3: Creating context from resume analysis...")
-        context_data = {}
-        if resume_analysis.get("structured_data"):
-            data = resume_analysis["structured_data"]
-            
-            # Add skills
-            if data.get("skills"):
-                if isinstance(data["skills"], list):
-                    context_data["skills"] = ", ".join(data["skills"][:10])
-                else:
-                    context_data["skills"] = str(data["skills"])
-            
-            # Add experience summary
-            if data.get("experience"):
-                if isinstance(data["experience"], list):
-                    exp_summary = "; ".join([str(exp) for exp in data["experience"][:3]])
-                    context_data["experience"] = exp_summary
-                else:
-                    context_data["experience"] = str(data["experience"])
-            
-            # Add education
-            if data.get("education"):
-                if isinstance(data["education"], list):
-                    edu_summary = "; ".join([str(edu) for edu in data["education"]])
-                    context_data["education"] = edu_summary
-                else:
-                    context_data["education"] = str(data["education"])
-            
-            # Add professional summary
-            if data.get("summary"):
-                context_data["professional_summary"] = str(data["summary"])
-            
-            # Add achievements
-            if data.get("achievements"):
-                if isinstance(data["achievements"], list):
-                    achievements_summary = "; ".join([str(ach) for ach in data["achievements"][:3]])
-                    context_data["achievements"] = achievements_summary
-                else:
-                    context_data["achievements"] = str(data["achievements"])
-        
-        # Create a comprehensive context string
-        context_parts = []
-        for key, value in context_data.items():
-            if value:
-                context_parts.append(f"{key.replace('_', ' ').title()}: {value}")
-        
-        # Store candidate data
-        print("Step 4: Storing candidate data in Pinecone...")
-        candidate_data = {
-            "name": name,
-            "email": email,
-            "phone_number": phone,
-            "linkedin": linkedin or "",
-            "resume_text": pdf_data.get("text", ""),
-            "resume_analysis": resume_analysis,
-            "context": " | ".join(context_parts),
-            "status": "completed"  # Add status to track completion
-        }
-        
-        try:
-            print(f"Attempting to store data for candidate {candidate_id}...")
-            vector_result = vector_store.store_candidate(candidate_id, candidate_data)
-            if vector_result.get('status') != 'success':
-                print(f"ERROR: Failed to store candidate data for {candidate_id}: {vector_result.get('message')}")
-            else:
-                print(f"Successfully stored candidate data for {candidate_id}")
-        except Exception as e:
-            print(f"ERROR: Exception while storing candidate data for {candidate_id}: {str(e)}")
-            print(f"Error type: {type(e)}")
-            print(f"Error traceback: {traceback.format_exc()}")
-            
-    except Exception as e:
-        print(f"ERROR: Exception in background resume processing for {candidate_id}: {str(e)}")
-        print(f"Error type: {type(e)}")
-        print(f"Error traceback: {traceback.format_exc()}")
-    finally:
-        print(f"=== Background Resume Processing Complete for {candidate_id} ===\n")
-
-@app.post("/candidates", response_model=Dict[str, Any])
+@app.post("/candidates")
 async def submit_candidate(
     background_tasks: BackgroundTasks,
     name: str = Form(...),
     email: str = Form(...),
     phone_number: str = Form(...),
-    linkedin: Optional[str] = Form(None),
-    resume: UploadFile = File(...)
+    resume: UploadFile = File(...),
+    linkedin: Optional[str] = Form(None)
 ):
-    """
-    Submit a new candidate.
-    1. Create candidate ID and store basic info
-    2. Start Retell AI call immediately
-    3. Process resume in background
-    """
     try:
         # Generate a unique candidate ID
         candidate_id = f"candidate_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}"
         
-        # Format phone number to E.164 format
-        phone = phone_number.strip()
-        phone = '+' + ''.join(filter(str.isdigit, phone.replace('+', '')))
-        if not phone.startswith('+'):
-            phone = '+' + phone
+        # Read and process the resume file
+        resume_content = await resume.read()
+        base64_pdf = base64.b64encode(resume_content).decode('utf-8')
         
-        # Store basic candidate info with empty resume_text
-        basic_candidate_data = {
+        # Process resume with GPT-4 Vision
+        resume_result = await process_resume_text({
+            "base64_pdf": base64_pdf
+        })
+        
+        if not resume_result["processed"]:
+            raise HTTPException(
+                status_code=500,
+                detail=f"Failed to process resume: {resume_result.get('error', 'Unknown error')}"
+            )
+
+        # Create the candidate profile
+        profile = {
+            "id": candidate_id,
             "name": name,
             "email": email,
-            "phone_number": phone,
-            "linkedin": linkedin or "",
-            "status": "processing",
-            "resume_text": ""  # Initialize with empty string instead of null
+            "phone_number": phone_number,
+            "linkedin": linkedin,
+            "resume_text": resume_result["raw_text"]
         }
-        
-        try:
-            vector_result = vector_store.store_candidate(candidate_id, basic_candidate_data)
-            if vector_result.get('status') != 'success':
-                print(f"Warning: Failed to store basic candidate data: {vector_result.get('message')}")
-        except Exception as e:
-            print(f"Error storing basic candidate data: {str(e)}")
-        
-        # Create a copy of the resume file for background processing
-        resume_content = await resume.read()
+
+        # Store candidate in vector database
+        vector_result = vector_store.store_candidate(candidate_id, profile)
+        if vector_result.get('status') == 'error':
+            print(f"Warning: Failed to store candidate in vector database: {vector_result.get('message')}")
+
+        # Create a copy of the resume file for the make_call function
         resume_copy = UploadFile(
             filename=resume.filename,
             file=io.BytesIO(resume_content)
         )
         await resume.seek(0)  # Reset the original file pointer
-        
-        # Add resume processing to background tasks
-        background_tasks.add_task(
-            process_resume_background,
-            candidate_id,
-            resume_copy,
-            name,
-            email,
-            phone,
-            linkedin
-        )
-        
-        # Start Retell AI call immediately
+
+        # Call the makeCall endpoint
         try:
-            # Create another copy for the make_call function
-            resume_copy_for_call = UploadFile(
-                filename=resume.filename,
-                file=io.BytesIO(resume_content)
-            )
-            await resume.seek(0)  # Reset the original file pointer again
-            
-            call_result = await make_call(
+            make_call_response = await make_call(
                 name=name,
                 email=email,
-                phone_number=phone,
+                phone_number=phone_number,
                 linkedin=linkedin or "",
-                resume=resume_copy_for_call
+                resume=resume_copy
             )
             
             return {
                 "status": "success",
                 "message": "Candidate profile created and call initiated successfully",
                 "candidate_id": candidate_id,
-                "profile": {
-                    "name": name,
-                    "email": email,
-                    "phone_number": phone,
-                    "linkedin": linkedin
-                },
-                "call_details": call_result.get("call_details", {})
+                "profile": profile,
+                "vector_store_status": vector_result.get('status', 'unknown'),
+                "call_data": make_call_response
             }
+            
         except Exception as call_error:
             print(f"Warning: Failed to initiate call: {str(call_error)}")
-            # Return success for profile creation but include call error
             return {
                 "status": "partial_success",
-                "message": "Candidate profile created successfully but failed to initiate call",
+                "message": "Candidate profile created but failed to initiate call",
                 "candidate_id": candidate_id,
-                "profile": {
-                    "name": name,
-                    "email": email,
-                    "phone_number": phone,
-                    "linkedin": linkedin
-                },
-                "call_error": str(call_error)
+                "profile": profile,
+                "vector_store_status": vector_result.get('status', 'unknown'),
+                "error": str(call_error)
             }
-                
-    except HTTPException as e:
-        raise e
+
     except Exception as e:
         print(f"Error in submit_candidate: {str(e)}")
         raise HTTPException(
@@ -585,8 +494,7 @@ async def process_transcript_with_openai(transcript: str) -> Dict[str, Any]:
         )
 
     try:
-        client = openai.OpenAI(api_key=OPENAI_API_KEY)
-        response = await client.chat.completions.create(
+        response = openai_client.chat.completions.create(
             model="gpt-4",
             messages=[
                 {"role": "system", "content": """You are an expert at analyzing interview transcripts and extracting key information.

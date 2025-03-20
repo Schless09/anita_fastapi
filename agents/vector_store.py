@@ -23,16 +23,17 @@ class VectorStore:
         self.candidates_index = self.pc.Index("anita-candidates")
         self.jobs_index = self.pc.Index("job-details")
         
-        # Use global OpenAI configuration
-        self.openai_client = openai
+        # Initialize OpenAI client with new API format
+        self.openai_client = openai.OpenAI()
 
     def get_embedding(self, text: str) -> List[float]:
         """Get embedding for text using OpenAI's API."""
         try:
-            response = self.openai_client.Embedding.create(
+            response = self.openai_client.embeddings.create(
                 model="text-embedding-ada-002",
                 input=text
             )
+            # In the new API, we access the embedding directly from the response object
             return response.data[0].embedding
         except Exception as e:
             print(f"Error getting embedding: {str(e)}")
