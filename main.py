@@ -22,9 +22,8 @@ from typing import Annotated
 import aiohttp
 import traceback
 import asyncio
+from PyPDF2 import PdfReader
 from pinecone import Pinecone, ServerlessSpec, CloudProvider, AwsRegion, VectorType
-from pdf2image import convert_from_bytes
-import time
 
 # Load environment variables
 load_dotenv()
@@ -255,23 +254,53 @@ app.add_middleware(
 )
 
 async def process_pdf_to_text(file: UploadFile) -> Dict[str, Any]:
-    """Process a PDF file and extract its text and image content using OpenAI Vision API."""
+    """Process a PDF file and extract its text content."""
     if not file.filename.lower().endswith('.pdf'):
         raise HTTPException(status_code=400, detail="File must be a PDF")
         
     try:
         # Read the uploaded file
         contents = await file.read()
+        
+        # Validate PDF content
+        if not contents.startswith(b'%PDF'):
+            raise HTTPException(status_code=400, detail="Invalid PDF file format")
+            
         pdf_file = io.BytesIO(contents)
         
-        # Convert PDF to base64 for OpenAI Vision API
-        base64_pdf = base64.b64encode(contents).decode('utf-8')
-            
+        # Read PDF with PyPDF2
+        pdf_reader = PdfReader(pdf_file)
+        
+        # Validate PDF structure
+        if len(pdf_reader.pages) == 0:
+            raise HTTPException(status_code=400, detail="PDF file is empty")
+        
+        # Extract text from all pages
+        text_content = []
+        for page in pdf_reader.pages:
+            try:
+                text = page.extract_text()
+                if text and text.strip():
+                    text_content.append(text)
+            except Exception as page_error:
+                print(f"Error extracting text from page: {str(page_error)}")
+                continue
+        
+        if not text_content:
+            raise HTTPException(status_code=400, detail="No text content found in PDF")
+        
+        # Combine all text
+        combined_text = "\n\n".join(text_content)
+        
         return {
-            "base64_pdf": base64_pdf,
-            "filename": file.filename
+            "text": combined_text,
+            "filename": file.filename,
+            "page_count": len(pdf_reader.pages),
+            "text_pages": len(text_content)
         }
             
+    except HTTPException:
+        raise
     except Exception as e:
         print(f"Error processing PDF: {str(e)}")
         raise HTTPException(
@@ -282,118 +311,84 @@ async def process_pdf_to_text(file: UploadFile) -> Dict[str, Any]:
         await file.seek(0)
 
 async def process_resume_text(resume_data: Dict[str, Any]) -> Dict[str, Any]:
-    """Process resume using OpenAI GPT-4 Turbo with Vision to extract key information."""
+    """Process resume using OpenAI GPT-4 Turbo to extract key information."""
     if not OPENAI_API_KEY:
         print("Warning: OpenAI API key not configured, skipping resume processing")
         return {
-            "raw_text": "",
+            "raw_text": resume_data.get("text", ""),
             "processed": False,
             "error": "OpenAI API key not configured"
         }
     
     try:
-        print(f"Using OpenAI API key: {OPENAI_API_KEY[:8]}...")  # Print first 8 chars for debugging
+        client = AsyncOpenAI(api_key=OPENAI_API_KEY)
         
-        # Initialize async client with base URL
-        async_client = AsyncOpenAI(
-            api_key=OPENAI_API_KEY
-        )
+        # Prepare the content for GPT-4
+        content = resume_data.get("text", "").strip()
         
-        # Get the base64 PDF content
-        base64_pdf = resume_data.get("base64_pdf")
-        if not base64_pdf:
+        if not content:
             return {
-                "raw_text": "",
+                "raw_text": resume_data.get("text", ""),
                 "processed": False,
-                "error": "No PDF content available for processing"
+                "error": "No content available for processing"
             }
         
-        print("Converting PDF to images...")
-        
+        system_message = """You are an expert resume analyzer. Extract the following information in a structured format:
+        - skills: List of technical and soft skills
+        - experience: List of work experiences with company, role, and duration
+        - education: List of educational qualifications
+        - achievements: List of key achievements
+        - summary: A brief professional summary
+
+        Format the response as a valid JSON object with these exact keys."""
+
         try:
-            # Convert PDF to images with proper error handling
-            pdf_bytes = base64.b64decode(base64_pdf)
-            images = convert_from_bytes(pdf_bytes, dpi=300)  # Use higher DPI for better quality
-            total_pages = len(images)
-            print(f"Successfully converted PDF to {total_pages} images")
-        except Exception as e:
-            print(f"Error converting PDF to images: {str(e)}")
-            return {
-                "raw_text": "",
-                "processed": False,
-                "error": f"Failed to convert PDF to images: {str(e)}"
-            }
-        
-        all_text = []
-        
-        # Process each page with progress tracking
-        for i, image in enumerate(images, 1):
+            response = await client.chat.completions.create(
+                model="gpt-4-turbo-preview",
+                messages=[
+                    {"role": "system", "content": system_message},
+                    {"role": "user", "content": f"Please analyze this resume and extract the key information:\n\n{content}"}
+                ],
+                temperature=0.3,
+                max_tokens=1500,
+                response_format={ "type": "json_object" }
+            )
+            
             try:
-                print(f"Processing page {i}/{total_pages}...")
-                
-                # Convert image to base64 with memory optimization
-                buffered = io.BytesIO()
-                image.save(buffered, format="JPEG", quality=85)  # Slightly reduce quality for better performance
-                base64_image = base64.b64encode(buffered.getvalue()).decode('utf-8')
-                
-                # Clear the buffer to free memory
-                buffered.close()
-                
-                # Send to OpenAI Vision API with updated parameters
-                response = await async_client.chat.completions.create(
-                    model="gpt-4-turbo-2024-04-09",  # Updated to use the latest GA model with vision capabilities
-                    messages=[
-                        {
-                            "role": "user",
-                            "content": [
-                                {
-                                    "type": "text",
-                                    "text": "Extract all text from this resume image. Include all text exactly as shown, including headers, bullet points, and any other text elements. Do not add any formatting or additional text. If there are any images or logos, describe them briefly in parentheses."
-                                },
-                                {
-                                    "type": "image_url",
-                                    "image_url": {
-                                        "url": f"data:image/jpeg;base64,{base64_image}",
-                                        "detail": "high"
-                                    }
-                                }
-                            ]
-                        }
-                    ],
-                    max_tokens=4096,
-                    temperature=0.1  # Lower temperature for more consistent results
-                )
-                
-                # Extract text from response
-                if response.choices and response.choices[0].message.content:
-                    page_text = response.choices[0].message.content.strip()
-                    all_text.append(f"Page {i}:\n{page_text}")
-                    print(f"Successfully processed page {i}")
-                else:
-                    print(f"Warning: No text extracted from page {i}")
-                    all_text.append(f"Page {i}: [No text extracted]")
-                
-                # Clear the base64 image string to free memory
-                base64_image = None
-                
-            except Exception as e:
-                print(f"Error processing page {i}: {str(e)}")
-                all_text.append(f"Page {i}: [Error processing page]")
-                continue
-        
-        # Combine all text
-        combined_text = "\n\n".join(all_text)
-        
-        return {
-            "raw_text": combined_text,
-            "processed": True,
-            "error": None
-        }
-        
+                processed_data = json.loads(response.choices[0].message.content)
+                return {
+                    "raw_text": resume_data.get("text", ""),
+                    "processed": True,
+                    "structured_data": processed_data,
+                    "processed_at": datetime.utcnow().isoformat()
+                }
+            except json.JSONDecodeError as e:
+                print(f"Error parsing OpenAI response: {str(e)}")
+                return {
+                    "raw_text": resume_data.get("text", ""),
+                    "processed": True,
+                    "structured_data": {
+                        "skills": [],
+                        "experience": [],
+                        "education": [],
+                        "achievements": [],
+                        "summary": "Failed to parse structured data from resume"
+                    },
+                    "error": f"Failed to parse OpenAI response: {str(e)}",
+                    "processed_at": datetime.utcnow().isoformat()
+                }
+        except Exception as api_error:
+            print(f"OpenAI API error: {str(api_error)}")
+            return {
+                "raw_text": resume_data.get("text", ""),
+                "processed": False,
+                "error": f"OpenAI API error: {str(api_error)}"
+            }
+            
     except Exception as e:
-        print(f"Error in process_resume_text: {str(e)}")
+        print(f"Error processing resume with OpenAI: {str(e)}")
         return {
-            "raw_text": "",
+            "raw_text": resume_data.get("text", ""),
             "processed": False,
             "error": str(e)
         }
@@ -417,7 +412,7 @@ async def submit_candidate(
         
         # Process resume with GPT-4 Vision
         resume_result = await process_resume_text({
-            "base64_pdf": base64_pdf
+            "text": base64_pdf
         })
         
         if not resume_result["processed"]:
