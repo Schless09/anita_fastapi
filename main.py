@@ -269,49 +269,58 @@ async def process_pdf_to_text(file: UploadFile) -> Dict[str, Any]:
                 detail="Invalid PDF file format. The file does not appear to be a valid PDF."
             )
             
-        pdf_file = io.BytesIO(contents)
-        
-        try:
-            # Read PDF with PyPDF2
-            pdf_reader = PdfReader(pdf_file)
+        # Create a temporary file to handle the PDF
+        with tempfile.NamedTemporaryFile(suffix='.pdf', delete=False) as temp_file:
+            temp_file.write(contents)
+            temp_file.flush()
             
-            # Validate PDF structure
-            if len(pdf_reader.pages) == 0:
-                raise HTTPException(status_code=400, detail="PDF file is empty")
-            
-            # Extract text from all pages
-            text_content = []
-            for page in pdf_reader.pages:
-                try:
-                    text = page.extract_text()
-                    if text and text.strip():
-                        text_content.append(text)
-                except Exception as page_error:
-                    print(f"Error extracting text from page: {str(page_error)}")
-                    continue
-            
-            if not text_content:
-                raise HTTPException(
-                    status_code=400, 
-                    detail="No text content could be extracted from the PDF. The file might be scanned or image-based."
-                )
-            
-            # Combine all text
-            combined_text = "\n\n".join(text_content)
-            
-            return {
-                "text": combined_text,
-                "filename": file.filename,
-                "page_count": len(pdf_reader.pages),
-                "text_pages": len(text_content)
-            }
+            try:
+                # Read PDF with PyPDF2
+                pdf_reader = PdfReader(temp_file.name)
                 
-        except Exception as pdf_error:
-            print(f"Error reading PDF: {str(pdf_error)}")
-            raise HTTPException(
-                status_code=400,
-                detail=f"The PDF file appears to be corrupted or in an unsupported format. Please ensure you're uploading a valid PDF file. Error: {str(pdf_error)}"
-            )
+                # Validate PDF structure
+                if len(pdf_reader.pages) == 0:
+                    raise HTTPException(status_code=400, detail="PDF file is empty")
+                
+                # Extract text from all pages
+                text_content = []
+                for page in pdf_reader.pages:
+                    try:
+                        text = page.extract_text()
+                        if text and text.strip():
+                            text_content.append(text)
+                    except Exception as page_error:
+                        print(f"Error extracting text from page: {str(page_error)}")
+                        continue
+                
+                if not text_content:
+                    raise HTTPException(
+                        status_code=400, 
+                        detail="No text content could be extracted from the PDF. The file might be scanned or image-based."
+                    )
+                
+                # Combine all text
+                combined_text = "\n\n".join(text_content)
+                
+                return {
+                    "text": combined_text,
+                    "filename": file.filename,
+                    "page_count": len(pdf_reader.pages),
+                    "text_pages": len(text_content)
+                }
+                    
+            except Exception as pdf_error:
+                print(f"Error reading PDF: {str(pdf_error)}")
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"The PDF file appears to be corrupted or in an unsupported format. Please ensure you're uploading a valid PDF file. Error: {str(pdf_error)}"
+                )
+            finally:
+                # Clean up the temporary file
+                try:
+                    os.unlink(temp_file.name)
+                except Exception as cleanup_error:
+                    print(f"Warning: Failed to clean up temporary file: {str(cleanup_error)}")
             
     except HTTPException:
         raise
@@ -358,7 +367,7 @@ async def process_resume_text(resume_data: Dict[str, Any]) -> Dict[str, Any]:
 
         try:
             response = client.chat.completions.create(
-                model="gpt-4-turbo-preview",
+                model="gpt-4-turbo",
                 messages=[
                     {"role": "system", "content": system_message},
                     {"role": "user", "content": f"Please analyze this resume and extract the key information:\n\n{content}"}
