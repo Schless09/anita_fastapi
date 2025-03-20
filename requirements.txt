@@ -6,7 +6,7 @@ pinecone
 pydantic
 python-multipart
 httpx==0.24.1
-openai==1.3.0
+openai==0.28.1
 aiohttp
 twilio
 pdf2image
