@@ -264,40 +264,54 @@ async def process_pdf_to_text(file: UploadFile) -> Dict[str, Any]:
         
         # Validate PDF content
         if not contents.startswith(b'%PDF'):
-            raise HTTPException(status_code=400, detail="Invalid PDF file format")
+            raise HTTPException(
+                status_code=400, 
+                detail="Invalid PDF file format. The file does not appear to be a valid PDF."
+            )
             
         pdf_file = io.BytesIO(contents)
         
-        # Read PDF with PyPDF2
-        pdf_reader = PdfReader(pdf_file)
-        
-        # Validate PDF structure
-        if len(pdf_reader.pages) == 0:
-            raise HTTPException(status_code=400, detail="PDF file is empty")
-        
-        # Extract text from all pages
-        text_content = []
-        for page in pdf_reader.pages:
-            try:
-                text = page.extract_text()
-                if text and text.strip():
-                    text_content.append(text)
-            except Exception as page_error:
-                print(f"Error extracting text from page: {str(page_error)}")
-                continue
-        
-        if not text_content:
-            raise HTTPException(status_code=400, detail="No text content found in PDF")
-        
-        # Combine all text
-        combined_text = "\n\n".join(text_content)
-        
-        return {
-            "text": combined_text,
-            "filename": file.filename,
-            "page_count": len(pdf_reader.pages),
-            "text_pages": len(text_content)
-        }
+        try:
+            # Read PDF with PyPDF2
+            pdf_reader = PdfReader(pdf_file)
+            
+            # Validate PDF structure
+            if len(pdf_reader.pages) == 0:
+                raise HTTPException(status_code=400, detail="PDF file is empty")
+            
+            # Extract text from all pages
+            text_content = []
+            for page in pdf_reader.pages:
+                try:
+                    text = page.extract_text()
+                    if text and text.strip():
+                        text_content.append(text)
+                except Exception as page_error:
+                    print(f"Error extracting text from page: {str(page_error)}")
+                    continue
+            
+            if not text_content:
+                raise HTTPException(
+                    status_code=400, 
+                    detail="No text content could be extracted from the PDF. The file might be scanned or image-based."
+                )
+            
+            # Combine all text
+            combined_text = "\n\n".join(text_content)
+            
+            return {
+                "text": combined_text,
+                "filename": file.filename,
+                "page_count": len(pdf_reader.pages),
+                "text_pages": len(text_content)
+            }
+                
+        except Exception as pdf_error:
+            print(f"Error reading PDF: {str(pdf_error)}")
+            raise HTTPException(
+                status_code=400,
+                detail=f"The PDF file appears to be corrupted or in an unsupported format. Please ensure you're uploading a valid PDF file. Error: {str(pdf_error)}"
+            )
             
     except HTTPException:
         raise
@@ -406,13 +420,19 @@ async def submit_candidate(
         # Generate a unique candidate ID
         candidate_id = f"candidate_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}"
         
-        # Read and process the resume file
-        resume_content = await resume.read()
-        base64_pdf = base64.b64encode(resume_content).decode('utf-8')
+        # Process the PDF file first
+        try:
+            pdf_result = await process_pdf_to_text(resume)
+            resume_text = pdf_result["text"]
+        except HTTPException as pdf_error:
+            raise HTTPException(
+                status_code=pdf_error.status_code,
+                detail=f"Failed to process resume: {pdf_error.detail}"
+            )
         
         # Process resume with GPT-4 Vision
         resume_result = await process_resume_text({
-            "text": base64_pdf
+            "text": resume_text
         })
         
         if not resume_result["processed"]:
@@ -428,7 +448,7 @@ async def submit_candidate(
             "email": email,
             "phone_number": phone_number,
             "linkedin": linkedin,
-            "resume_text": resume_result["raw_text"]
+            "resume_text": resume_text
         }
 
         # Store candidate in vector database
@@ -439,9 +459,9 @@ async def submit_candidate(
         # Create a copy of the resume file for the make_call function
         resume_copy = UploadFile(
             filename=resume.filename,
-            file=io.BytesIO(resume_content)
+            file=io.BytesIO(await resume.read())
         )
-        await resume.seek(0)  # Reset the original file pointer
+        await resume.seek(0)
 
         # Call the makeCall endpoint
         try:
@@ -490,7 +510,7 @@ async def process_transcript_with_openai(transcript: str) -> Dict[str, Any]:
 
     try:
         response = openai_client.chat.completions.create(
-            model="gpt-4",
+            model="gpt-4-turbo-preview",
             messages=[
                 {"role": "system", "content": """You are an expert at analyzing interview transcripts and extracting key information.
                 Please analyze the transcript and extract the following information in JSON format:
@@ -574,7 +594,8 @@ async def process_transcript_with_openai(transcript: str) -> Dict[str, Any]:
                 {"role": "user", "content": f"Please analyze this transcript and extract the information: {transcript}"}
             ],
             temperature=0.1,
-            max_tokens=3000
+            max_tokens=3000,
+            response_format={ "type": "json_object" }
         )
         
         # Extract the JSON response
