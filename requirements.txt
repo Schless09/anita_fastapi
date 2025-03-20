@@ -12,4 +12,5 @@ twilio
 PyPDF2>=3.0.0
 tiktoken==0.6.0
 tenacity==8.2.3
-phonenumbers
+phonenumbers==8.13.31
+retell==0.5.1
