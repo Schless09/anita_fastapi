@@ -348,6 +348,7 @@ async def process_resume_text(resume_data: Dict[str, Any]) -> Dict[str, Any]:
         
         # Prepare the content for GPT-4
         content = resume_data.get("text", "").strip()
+        candidate_id = resume_data.get("candidate_id")
         
         if not content:
             return {
@@ -386,6 +387,19 @@ async def process_resume_text(resume_data: Dict[str, Any]) -> Dict[str, Any]:
             
             try:
                 processed_data = json.loads(full_response)
+                
+                # If we have a candidate_id, update the vector store with the processed data
+                if candidate_id:
+                    try:
+                        vector_store = VectorStore()
+                        # Update the candidate's profile with the processed data
+                        vector_store.update_candidate_profile(candidate_id, {
+                            "processed_resume": processed_data,
+                            "processed_at": datetime.utcnow().isoformat()
+                        })
+                    except Exception as store_error:
+                        print(f"Warning: Failed to store processed resume data: {str(store_error)}")
+                
                 return {
                     "raw_text": resume_data.get("text", ""),
                     "processed": True,
@@ -445,17 +459,6 @@ async def submit_candidate(
                 status_code=pdf_error.status_code,
                 detail=f"Failed to process resume: {pdf_error.detail}"
             )
-        
-        # Process resume with GPT-4 Vision
-        resume_result = await process_resume_text({
-            "text": resume_text
-        })
-        
-        if not resume_result["processed"]:
-            raise HTTPException(
-                status_code=500,
-                detail=f"Failed to process resume: {resume_result.get('error', 'Unknown error')}"
-            )
 
         # Create the candidate profile
         profile = {
@@ -478,6 +481,12 @@ async def submit_candidate(
             file=io.BytesIO(await resume.read())
         )
         await resume.seek(0)
+
+        # Add resume processing to background tasks
+        background_tasks.add_task(
+            process_resume_text,
+            {"text": resume_text, "candidate_id": candidate_id}
+        )
 
         # Call the makeCall endpoint
         try:
