@@ -5,7 +5,8 @@
       "src": "main.py",
       "use": "@vercel/python",
       "config": {
-        "maxLambdaSize": "15mb"
+        "maxLambdaSize": "15mb",
+        "runtime": "python3.9"
       }
     }
   ],
@@ -15,5 +16,5 @@
       "dest": "main.py"
     }
   ],
-  "buildCommand": "apt-get update && apt-get install -y poppler-utils && pip install --no-cache-dir -r requirements.txt"
+  "buildCommand": "pip install --upgrade pip && pip install --no-cache-dir -r requirements.txt"
 }
