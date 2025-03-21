@@ -1446,26 +1446,26 @@ async def fetch_and_store_retell_transcript(call_data: RetellCallData):
             # Check if call has ended and attempt knowledge base cleanup
             if retell_data.get('call_status') == RetellCallStatus.ENDED and source_id:
                 print("\nCall has ended - attempting to clean up knowledge base source")
-                    print(f"Found knowledge base ID: {knowledge_base_id}")
+                print(f"Found knowledge base ID: {knowledge_base_id}")
                 print(f"Found source ID: {source_id}")
-                    try:
+                try:
                     # Delete the specific source from the knowledge base
-                        delete_response = await client.delete(
+                    delete_response = await client.delete(
                         f"https://api.retellai.com/delete-knowledge-base-source/{knowledge_base_id}/source/{source_id}",
-                                headers={
-                                    "Authorization": f"Bearer {RETELL_API_KEY}",
-                                    "Content-Type": "application/json"
-                                }
-                            )
-                        
-                        print(f"Delete response status: {delete_response.status_code}")
-                        if delete_response.status_code in (200, 404):
-                            knowledge_base_cleaned = True
-                    print("Successfully cleaned up knowledge base source")
-                    except Exception as e:
+                        headers={
+                            "Authorization": f"Bearer {RETELL_API_KEY}",
+                            "Content-Type": "application/json"
+                        }
+                    )
+                    
+                    print(f"Delete response status: {delete_response.status_code}")
+                    if delete_response.status_code in (200, 404):
+                        knowledge_base_cleaned = True
+                        print("Successfully cleaned up knowledge base source")
+                except Exception as e:
                     print(f"Error deleting knowledge base source: {str(e)}")
-                        print(f"Error type: {type(e)}")
-                        print(f"Error traceback: {traceback.format_exc()}")
+                    print(f"Error type: {type(e)}")
+                    print(f"Error traceback: {traceback.format_exc()}")
             else:
                 print(f"Call status is {retell_data.get('call_status')} - skipping knowledge base cleanup")
             
@@ -1537,19 +1537,19 @@ async def retry_knowledge_base_source_cleanup(knowledge_base_id: str, source_id:
             await asyncio.sleep(delay_seconds * (2 ** attempt))  # Exponential backoff
             
             async with httpx.AsyncClient(timeout=30.0) as client:
-                        response = await client.delete(
+                response = await client.delete(
                     f"https://api.retellai.com/delete-knowledge-base-source/{knowledge_base_id}/source/{source_id}",
-                            headers={
-                                "Authorization": f"Bearer {RETELL_API_KEY}",
-                                "Content-Type": "application/json"
-                            }
-                        )
-                        
-                        if response.status_code in (200, 404):
-                    print(f"Successfully deleted knowledge base source {source_id} on retry attempt {attempt + 1}")
-                            return True
+                    headers={
+                        "Authorization": f"Bearer {RETELL_API_KEY}",
+                        "Content-Type": "application/json"
+                    }
+                )
                 
-            print(f"Retry attempt {attempt + 1} failed for knowledge base source {source_id}")
+                if response.status_code in (200, 404):
+                    print(f"Successfully deleted knowledge base source {source_id} on retry attempt {attempt + 1}")
+                    return True
+                
+                print(f"Retry attempt {attempt + 1} failed for knowledge base source {source_id}")
             
         except Exception as e:
             print(f"Error in retry attempt {attempt + 1}: {str(e)}")
@@ -1662,11 +1662,11 @@ async def add_to_knowledge_base(resume: UploadFile, knowledge_base_id: str) -> T
             print(f"Created temporary file: {temp_file.name}")
             
             try:
-            # Initialize Retell client
-            retell_client = Retell(api_key=RETELL_API_KEY)
-            
-            # Open the file and add it to the knowledge base
-            with open(temp_file.name, "rb") as file:
+                # Initialize Retell client
+                retell_client = Retell(api_key=RETELL_API_KEY)
+                
+                # Open the file and add it to the knowledge base
+                with open(temp_file.name, "rb") as file:
                     print("Adding file to knowledge base using Retell client...")
                     response = retell_client.knowledge_base.add_sources(
                         knowledge_base_id=knowledge_base_id,
@@ -1688,24 +1688,26 @@ async def add_to_knowledge_base(resume: UploadFile, knowledge_base_id: str) -> T
                         if hasattr(response, 'knowledge_base_sources'):
                             print(f"Sources: {response.knowledge_base_sources}")
                         return False, None
-                        
-                except Exception as e:
-                    print(f"Error from Retell client: {str(e)}")
-                    print(f"Error type: {type(e)}")
-                    print(f"Error traceback: {traceback.format_exc()}")
-                    return False, None
-                finally:
-            # Clean up the temporary file
-            os.unlink(temp_file.name)
+                    
+            except Exception as e:
+                print(f"Error adding file to knowledge base: {str(e)}")
+                print(f"Error type: {type(e)}")
+                print(f"Error traceback: {traceback.format_exc()}")
+                return False, None
+            
+            finally:
+                # Clean up the temporary file
+                try:
+                    os.unlink(temp_file.name)
                     print(f"Cleaned up temporary file: {temp_file.name}")
-
+                except Exception as e:
+                    print(f"Error cleaning up temporary file: {str(e)}")
+                    
     except Exception as e:
-        print(f"Error adding file to knowledge base: {str(e)}")
+        print(f"Error in add_to_knowledge_base: {str(e)}")
         print(f"Error type: {type(e)}")
         print(f"Error traceback: {traceback.format_exc()}")
         return False, None
-    finally:
-        print("=== Add to knowledge base operation complete ===\n")
 
 @app.post("/api/makeCall")
 async def make_call(
