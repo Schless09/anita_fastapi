@@ -26,6 +26,9 @@ from PyPDF2 import PdfReader
 from pinecone import Pinecone, ServerlessSpec, CloudProvider, AwsRegion, VectorType
 import phonenumbers
 from retell import Retell
+import time
+import re
+from urllib.parse import urlparse
 
 # Load environment variables
 load_dotenv()
@@ -40,6 +43,10 @@ openai_client = openai.OpenAI(api_key=OPENAI_API_KEY)
 
 # Initialize call status tracking
 call_statuses = {}
+
+# Initialize Pinecone
+pc = Pinecone(api_key=os.getenv("PINECONE_API_KEY"))
+job_index = pc.Index("job-details")
 
 app = FastAPI(
     title="Anita AI Recruitment API",
@@ -259,105 +266,48 @@ class TechnicalAssessmentType(str, Enum):
     ML_DESIGN = "ML design"
 
 class JobSubmission(BaseModel):
-    # Company Information
-    company_name: Optional[str] = None
-    company_url: Optional[str] = None
-    company_stage: Optional[str] = None
-    most_recent_funding_round_amount: Optional[str] = None
-    total_funding_amount: Optional[str] = None
-    investors: Optional[List[str]] = None
-    team_size: Optional[str] = None
-    founding_year: Optional[str] = None
-    company_mission: Optional[str] = None
-    target_market: Optional[List[str]] = None
-    industry_vertical: Optional[str] = None
-    company_vision: Optional[str] = None
-    company_growth_story: Optional[str] = None
-    company_culture: Optional[CompanyCulture] = None
-    scaling_plans: Optional[str] = None
-    mission_and_impact: Optional[str] = None
-    tech_innovation: Optional[str] = None
+    raw_text: str
 
-    # Role Details
-    job_title: Optional[str] = None
-    job_url: Optional[str] = None
-    positions_available: Optional[str] = None
-    hiring_urgency: Optional[str] = None
-    seniority_level: Optional[str] = None
-    work_arrangement: Optional[str] = None
-    city: Optional[List[str]] = None
-    state: Optional[List[str]] = None
-    visa_sponsorship: Optional[str] = None
-    work_authorization: Optional[List[str]] = None
-    salary_range: Optional[str] = None
-    equity_range: Optional[str] = None
-    reporting_structure: Optional[str] = None
-    team_composition: Optional[str] = None
-    role_status: Optional[str] = None
-
-    # Technical Requirements
-    role_category: Optional[str] = None
-    tech_stack_must_haves: Optional[List[str]] = None
-    tech_stack_nice_to_haves: Optional[List[str]] = None
-    tech_stack_tags: Optional[List[str]] = None
-    tech_breadth_requirement: Optional[str] = None
-    minimum_years_of_experience: Optional[str] = None
-    domain_expertise: Optional[List[str]] = None
-    ai_ml_experience: Optional[str] = None
-    infrastructure_experience: Optional[List[str]] = None
-    system_design_level: Optional[str] = None
-    coding_proficiency_required: Optional[str] = None
-    coding_languages_versions: Optional[List[str]] = None
-    version_control_experience: Optional[List[str]] = None
-    ci_cd_tools: Optional[List[str]] = None
-    collaborative_tools: Optional[List[str]] = None
-
-    # Qualification Requirements
-    leadership_requirement: Optional[str] = None
-    education_requirement: Optional[str] = None
-    advanced_degree_preference: Optional[str] = None
-    papers_publications_preferred: Optional[str] = None
-    prior_startup_experience: Optional[str] = None
-    advancement_history_required: Optional[bool] = None
-    independent_work_capacity: Optional[str] = None
-    skills_must_have: Optional[List[str]] = None
-    skills_preferred: Optional[List[str]] = None
-
-    # Product and Role Context
-    product_details: Optional[str] = None
-    product_development_stage: Optional[str] = None
-    technical_challenges: Optional[List[str]] = None
-    key_responsibilities: Optional[List[str]] = None
-    scope_of_impact: Optional[List[str]] = None
-    expected_deliverables: Optional[List[str]] = None
-    product_development_methodology: Optional[List[str]] = None
-
-    # Startup Specific Factors
-    stage_of_codebase: Optional[str] = None
-    growth_trajectory: Optional[str] = None
-    founder_background: Optional[str] = None
-    funding_stability: Optional[str] = None
-    expected_hours: Optional[str] = None
-
-    # Candidate Targeting
-    ideal_companies: Optional[List[str]] = None
-    disqualifying_traits: Optional[List[str]] = None
-    deal_breakers: Optional[List[str]] = None
-    culture_fit_indicators: Optional[List[str]] = None
-    startup_mindset_requirements: Optional[List[str]] = None
-    autonomy_level_required: Optional[str] = None
-    growth_mindset_indicators: Optional[List[str]] = None
-    ideal_candidate_profile: Optional[str] = None
-
-    # Interview Process
-    interview_process_tags: Optional[List[str]] = None
-    technical_assessment_type: Optional[List[str]] = None
-    interview_focus_areas: Optional[List[str]] = None
-    time_to_hire: Optional[str] = None
-    decision_makers: Optional[List[str]] = None
-
-    # Recruiter Pitch Points
-    recruiter_pitch_points: Optional[List[str]] = None
+    @validator('raw_text')
+    def clean_text(cls, v):
+        print(f"\n=== Validating input text ===")
+        print(f"Input value type: {type(v)}")
+        print(f"Input value length: {len(str(v)) if v else 0}")
+        print(f"First 100 chars: {str(v)[:100] if v else 'None'}")
+        
+        if not v:
+            print("Validation Error: Empty input")
+            raise ValueError("Text cannot be empty")
+        
+        # Convert to string if not already
+        v = str(v)
+        
+        # Handle escaped characters first
+        v = v.replace("\\'", "'")  # Replace escaped single quotes
+        v = v.replace('\\"', '"')  # Replace escaped double quotes
+        v = v.replace('\\\\', '\\')  # Handle escaped backslashes
+        v = v.replace('\\n', '\n')  # Handle escaped newlines
+        v = v.replace('\\t', '\t')  # Handle escaped tabs
+        v = v.replace('\\r', '\r')  # Handle escaped carriage returns
+        
+        # Remove any BOM characters
+        v = v.replace('\ufeff', '')
+        
+        # Remove null bytes and other problematic control characters
+        # Keep newlines, tabs, and carriage returns
+        v = ''.join(char for char in v if ord(char) >= 32 or char in '\n\r\t')
+        
+        # Normalize newlines
+        v = v.replace('\r\n', '\n').replace('\r', '\n')
+        
+        # Strip whitespace from start and end
+        v = v.strip()
+        
+        print(f"Cleaned value length: {len(v)}")
+        print(f"First 100 chars after cleaning: {v[:100]}")
+        print("=== Validation complete ===\n")
+        
+        return v
 
 class MatchResponse(BaseModel):
     status: str
@@ -911,160 +861,392 @@ async def match_candidates_to_job(request: JobMatchRequest):
         "total_matches": len(result['matches'])
     }
 
-@app.post("/jobs/submit", response_model=Dict[str, Any])
-async def submit_job(job: JobSubmission):
+class JobSubmissionInput(BaseModel):
+    url: str
+    transcript: str
+
+async def process_transcript(transcript: str) -> Dict[str, Any]:
     """
-    Submit a new job posting.
-    
-    The job will be vectorized and stored in the jobs index,
-    ready for matching with candidates.
+    Process the transcript using OpenAI to extract job-related information.
     """
     try:
-        # Initialize VectorStore with OpenAI support
-        vector_store = VectorStore(init_openai=True)
+        client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+        
+        prompt = f"""
+        Extract job-related information from the following transcript and format it according to the JobSubmission model.
+        Only include information that is explicitly mentioned in the transcript.
+        Format the response as a JSON object with the following structure:
+        {{
+            "company_name": string or null,
+            "company_url": string or null,
+            "company_stage": string or null,
+            "most_recent_funding_round_amount": string or null,
+            "total_funding_amount": string or null,
+            "investors": array of strings or null,
+            "team_size": string or null,
+            "founding_year": string or null,
+            "company_mission": string or null,
+            "target_market": array of strings or null,
+            "industry_vertical": string or null,
+            "company_vision": string or null,
+            "company_growth_story": string or null,
+            "company_culture": {{
+                "work_environment": string,
+                "decision_making": string,
+                "collaboration_style": string,
+                "risk_tolerance": string,
+                "values": string
+            }},
+            "job_title": string or null,
+            "job_url": string or null,
+            "positions_available": string or null,
+            "hiring_urgency": string or null,
+            "seniority_level": string or null,
+            "work_arrangement": string or null,
+            "city": array of strings or null,
+            "state": array of strings or null,
+            "visa_sponsorship": string or null,
+            "work_authorization": array of strings or null,
+            "salary_range": string or null,
+            "equity_range": string or null,
+            "reporting_structure": string or null,
+            "team_composition": string or null,
+            "role_status": string or null,
+            "role_category": string or null,
+            "tech_stack_must_haves": array of strings or null,
+            "tech_stack_nice_to_haves": array of strings or null,
+            "tech_stack_tags": array of strings or null,
+            "tech_breadth_requirement": string or null,
+            "minimum_years_of_experience": string or null,
+            "domain_expertise": array of strings or null,
+            "ai_ml_experience": string or null,
+            "infrastructure_experience": array of strings or null,
+            "system_design_level": string or null,
+            "coding_proficiency_required": string or null,
+            "coding_languages_versions": array of strings or null,
+            "version_control_experience": array of strings or null,
+            "ci_cd_tools": array of strings or null,
+            "collaborative_tools": array of strings or null,
+            "leadership_requirement": string or null,
+            "education_requirement": string or null,
+            "advanced_degree_preference": string or null,
+            "papers_publications_preferred": string or null,
+            "prior_startup_experience": string or null,
+            "advancement_history_required": boolean or null,
+            "independent_work_capacity": string or null,
+            "skills_must_have": array of strings or null,
+            "skills_preferred": array of strings or null,
+            "product_details": string or null,
+            "product_development_stage": string or null,
+            "technical_challenges": array of strings or null,
+            "key_responsibilities": array of strings or null,
+            "scope_of_impact": array of strings or null,
+            "expected_deliverables": array of strings or null,
+            "product_development_methodology": array of strings or null,
+            "stage_of_codebase": string or null,
+            "growth_trajectory": string or null,
+            "founder_background": string or null,
+            "funding_stability": string or null,
+            "expected_hours": string or null,
+            "ideal_companies": array of strings or null,
+            "disqualifying_traits": array of strings or null,
+            "deal_breakers": array of strings or null,
+            "culture_fit_indicators": array of strings or null,
+            "startup_mindset_requirements": array of strings or null,
+            "autonomy_level_required": string or null,
+            "growth_mindset_indicators": array of strings or null,
+            "ideal_candidate_profile": string or null,
+            "interview_process_tags": array of strings or null,
+            "technical_assessment_type": array of strings or null,
+            "interview_focus_areas": array of strings or null,
+            "time_to_hire": string or null,
+            "decision_makers": array of strings or null,
+            "recruiter_pitch_points": array of strings or null
+        }}
+
+        Transcript:
+        {transcript}
+        """
+
+        response = await asyncio.to_thread(
+            client.chat.completions.create,
+            model="gpt-4-turbo-preview",
+            messages=[
+                {"role": "system", "content": "You are a job data extraction specialist. Extract relevant information from the transcript and format it according to the specified JSON structure. Only include information that is explicitly mentioned in the transcript."},
+                {"role": "user", "content": prompt}
+            ],
+            temperature=0.3,
+            max_tokens=2000
+        )
+
+        extracted_data = json.loads(response.choices[0].message.content)
+        return extracted_data
+
+    except Exception as e:
+        print(f"Error processing transcript: {str(e)}")
+        return {}
+
+async def merge_job_data(scraped_data: Dict[str, Any], transcript_data: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Merge scraped job data with transcript data, preferring transcript data when available.
+    """
+    merged_data = scraped_data.copy()
+    
+    # Update with transcript data, only if the field exists in transcript_data
+    for key, value in transcript_data.items():
+        if value is not None:
+            merged_data[key] = value
+    
+    return merged_data
+
+@app.post("/jobs/submit")
+async def submit_job(file: UploadFile = File(...)):
+    """Submit a job posting from a raw text file."""
+    try:
+        print("\n=== Starting Job Submission Process ===")
+        print(f"Timestamp: {datetime.utcnow().isoformat()}")
         
         # Generate a unique job ID
-        job_id = f"job_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}"
+        job_id = str(int(time.time() * 1000))
+        print(f"\nGenerated Job ID: {job_id}")
         
-        # Create text representation for embedding
-        job_text = f"""
-        Company: {job.company_name or ''}
-        Role: {job.job_title or ''}
-        Location: {', '.join(job.city) if job.city else ''} {', '.join(job.state) if job.state else ''}
-        Tech Stack (Must Have): {', '.join(job.tech_stack_must_haves) if job.tech_stack_must_haves else ''}
-        Tech Stack (Nice to Have): {', '.join(job.tech_stack_nice_to_haves) if job.tech_stack_nice_to_haves else ''}
-        Experience: {job.minimum_years_of_experience or ''}
-        Skills (Must Have): {', '.join(job.skills_must_have) if job.skills_must_have else ''}
-        Skills (Preferred): {', '.join(job.skills_preferred) if job.skills_preferred else ''}
-        Product Details: {job.product_details or ''}
-        Key Responsibilities: {', '.join(job.key_responsibilities) if job.key_responsibilities else ''}
+        # Read and validate the uploaded file
+        print(f"\nProcessing uploaded file: {file.filename}")
+        content = await file.read()
+        
+        try:
+            raw_text = content.decode('utf-8')
+        except UnicodeDecodeError:
+            try:
+                raw_text = content.decode('latin-1')
+            except UnicodeDecodeError as e:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Unable to decode file content. Please ensure the file is a valid text file."
+                )
+        
+        print(f"File content length: {len(raw_text)} characters")
+        
+        # Extract Paraform URL if present
+        paraform_url = None
+        paraform_url_match = re.search(r'https?://(?:www\.)?paraform\.com/[^\s]+', raw_text)
+        if paraform_url_match:
+            paraform_url = paraform_url_match.group(0)
+            print(f"Found Paraform URL: {paraform_url}")
+        
+        # Clean the text
+        raw_text = raw_text.replace('\x00', '')  # Remove null bytes
+        raw_text = '\n'.join(line.strip('\r') for line in raw_text.splitlines())  # Normalize line endings
+        raw_text = raw_text.strip()
+        
+        if not raw_text:
+            raise HTTPException(
+                status_code=400,
+                detail="The uploaded file is empty"
+            )
+        
+        # Process the text through OpenAI to extract structured information
+        print("\nInitializing OpenAI client...")
+        client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+        
+        # Create a prompt for OpenAI to extract structured information
+        print("Preparing OpenAI prompt...")
+        prompt = f"""
+        Please analyze the following job posting text and extract detailed information into a structured format.
+        The text may include a transcript of a conversation about the role and/or a formal job description.
+        
+        Return the information as a JSON object with the following fields:
+        {{
+            "company_name": string,
+            "company_website": string,
+            "paraform_url": string,
+            "company_stage": string,
+            "funding_details": {{
+                "most_recent_round": string,
+                "total_funding": string,
+                "key_investors": [string]
+            }},
+            "team_size": string,
+            "founding_year": string,
+            "company_mission": string,
+            "target_market": [string],
+            "industry_vertical": string,
+            "company_vision": string,
+            "company_growth_story": string,
+            "company_culture": {{
+                "work_environment": string,
+                "decision_making": string,
+                "collaboration_style": string,
+                "risk_tolerance": string,
+                "values": string
+            }},
+            "job_title": string,
+            "positions_available": string,
+            "hiring_urgency": string,
+            "seniority_level": string,
+            "work_arrangement": string,
+            "location": {{
+                "city": string,
+                "state": string,
+                "office_details": string
+            }},
+            "visa_sponsorship": string,
+            "compensation": {{
+                "base_salary_range": string,
+                "equity_details": string,
+                "total_comp_range": string
+            }},
+            "reporting_structure": string,
+            "team_composition": string,
+            "role_category": string,
+            "tech_stack": {{
+                "must_haves": [string],
+                "nice_to_haves": [string],
+                "tools_and_frameworks": [string]
+            }},
+            "experience_requirements": {{
+                "minimum_years": string,
+                "level": string,
+                "domain_expertise": [string],
+                "specific_skills": string
+            }},
+            "education_requirements": {{
+                "minimum": string,
+                "preferred": string,
+                "notes": string
+            }},
+            "key_responsibilities": [string],
+            "ideal_candidate_profile": string,
+            "interview_process": {{
+                "stages": [string],
+                "work_trial_details": string,
+                "timeline": string
+            }},
+            "deal_breakers": [string],
+            "growth_opportunities": string
+        }}
+
+        For any fields where information is not explicitly mentioned in the text, use "Not specified" for string fields and [] for array fields.
+        
+        Be particularly careful to:
+        1. Extract the company website URL if mentioned
+        2. Extract the Paraform job posting URL if present
+        3. Capture compensation details including base salary, equity, and total comp ranges
+        4. Extract technical requirements and must-have skills
+        5. Identify work arrangement and location details
+        6. Note interview process specifics
+        7. Include company stage and funding information
+
+        Text to analyze:
+        {raw_text}
         """
         
-        # Get embedding for the job text
-        vector = vector_store.get_embedding(job_text)
+        print("Sending request to OpenAI for processing...")
+        response = client.chat.completions.create(
+            model="gpt-4-turbo-preview",
+            messages=[
+                {"role": "system", "content": "You are a job posting analyzer. Extract structured information from job details and transcripts."},
+                {"role": "user", "content": prompt}
+            ],
+            response_format={ "type": "json_object" }
+        )
+        print("Received response from OpenAI")
         
-        # Helper function to handle null values
-        def clean_metadata_value(value):
-            if value is None:
-                return ""  # Convert None to empty string
-            if isinstance(value, (str, int, float, bool)):
-                return value
-            if isinstance(value, list):
-                return [str(item) for item in value] if value else []
-            return str(value)
+        # Parse the OpenAI response
+        print("\nParsing OpenAI response...")
+        job_data = json.loads(response.choices[0].message.content)
         
-        # Flatten metadata for Pinecone with null handling
-        metadata = {
-            # Company Information
-            "company_name": clean_metadata_value(job.company_name),
-            "company_url": clean_metadata_value(job.company_url),
-            "company_stage": clean_metadata_value(job.company_stage),
-            "most_recent_funding_round_amount": clean_metadata_value(job.most_recent_funding_round_amount),
-            "total_funding_amount": clean_metadata_value(job.total_funding_amount),
-            "investors": clean_metadata_value(job.investors),
-            "team_size": clean_metadata_value(job.team_size),
-            "founding_year": clean_metadata_value(job.founding_year),
-            "company_mission": clean_metadata_value(job.company_mission),
-            "target_market": clean_metadata_value(job.target_market),
-            "industry_vertical": clean_metadata_value(job.industry_vertical),
-            "company_vision": clean_metadata_value(job.company_vision),
-            "company_growth_story": clean_metadata_value(job.company_growth_story),
-            "company_culture": clean_metadata_value(job.company_culture),
-            "scaling_plans": clean_metadata_value(job.scaling_plans),
-            "mission_and_impact": clean_metadata_value(job.mission_and_impact),
-            "tech_innovation": clean_metadata_value(job.tech_innovation),
-            
-            # Role Details
-            "job_title": clean_metadata_value(job.job_title),
-            "job_url": clean_metadata_value(job.job_url),
-            "positions_available": clean_metadata_value(job.positions_available),
-            "hiring_urgency": clean_metadata_value(job.hiring_urgency),
-            "seniority_level": clean_metadata_value(job.seniority_level),
-            "work_arrangement": clean_metadata_value(job.work_arrangement),
-            "cities": clean_metadata_value(job.city),
-            "states": clean_metadata_value(job.state),
-            "visa_sponsorship": clean_metadata_value(job.visa_sponsorship),
-            "work_authorization": clean_metadata_value(job.work_authorization),
-            "salary_range": clean_metadata_value(job.salary_range),
-            "equity_range": clean_metadata_value(job.equity_range),
-            "reporting_structure": clean_metadata_value(job.reporting_structure),
-            "team_composition": clean_metadata_value(job.team_composition),
-            "role_status": clean_metadata_value(job.role_status),
-            
-            # Technical Requirements
-            "role_category": clean_metadata_value(job.role_category),
-            "tech_stack_must_haves": clean_metadata_value(job.tech_stack_must_haves),
-            "tech_stack_nice_to_haves": clean_metadata_value(job.tech_stack_nice_to_haves),
-            "tech_stack_tags": clean_metadata_value(job.tech_stack_tags),
-            "tech_breadth": clean_metadata_value(job.tech_breadth_requirement),
-            "min_years_experience": clean_metadata_value(job.minimum_years_of_experience),
-            "domain_expertise": clean_metadata_value(job.domain_expertise),
-            "ai_ml_experience": clean_metadata_value(job.ai_ml_experience),
-            "infrastructure_experience": clean_metadata_value(job.infrastructure_experience),
-            "system_design_level": clean_metadata_value(job.system_design_level),
-            "coding_proficiency": clean_metadata_value(job.coding_proficiency_required),
-            
-            # Qualification Requirements
-            "leadership_requirement": clean_metadata_value(job.leadership_requirement),
-            "education_requirement": clean_metadata_value(job.education_requirement),
-            "advanced_degree": clean_metadata_value(job.advanced_degree_preference),
-            "papers_required": clean_metadata_value(job.papers_publications_preferred),
-            "startup_experience": clean_metadata_value(job.prior_startup_experience),
-            "advancement_required": clean_metadata_value(job.advancement_history_required),
-            "independence_level": clean_metadata_value(job.independent_work_capacity),
-            "skills_must_have": clean_metadata_value(job.skills_must_have),
-            "skills_preferred": clean_metadata_value(job.skills_preferred),
-            
-            # Product and Role Context
-            "product_details": clean_metadata_value(job.product_details),
-            "product_stage": clean_metadata_value(job.product_development_stage),
-            "technical_challenges": clean_metadata_value(job.technical_challenges),
-            "key_responsibilities": clean_metadata_value(job.key_responsibilities),
-            "scope_of_impact": clean_metadata_value(job.scope_of_impact),
-            "expected_deliverables": clean_metadata_value(job.expected_deliverables),
-            "dev_methodology": clean_metadata_value(job.product_development_methodology),
-            
-            # Startup Specific Factors
-            "codebase_stage": clean_metadata_value(job.stage_of_codebase),
-            "growth_trajectory": clean_metadata_value(job.growth_trajectory),
-            "founder_background": clean_metadata_value(job.founder_background),
-            "funding_stability": clean_metadata_value(job.funding_stability),
-            "expected_hours": clean_metadata_value(job.expected_hours),
-            
-            # Interview Process
-            "interview_tags": clean_metadata_value(job.interview_process_tags),
-            "assessment_type": clean_metadata_value(job.technical_assessment_type),
-            "interview_focus": clean_metadata_value(job.interview_focus_areas),
-            "time_to_hire": clean_metadata_value(job.time_to_hire),
-            "decision_makers": clean_metadata_value(job.decision_makers),
-            
-            # Recruiter Pitch Points
-            "recruiter_pitch_points": clean_metadata_value(job.recruiter_pitch_points),
-            
-            # Additional Metadata
+        # Add the Paraform URL if found but not extracted by OpenAI
+        if paraform_url and (not job_data.get('paraform_url') or job_data['paraform_url'] == "Not specified"):
+            job_data['paraform_url'] = paraform_url
+            print("Added Paraform URL from regex match")
+        
+        print("\n=== Extracted Job Data ===")
+        print(json.dumps(job_data, indent=2))
+        print(f"Successfully extracted {len(job_data)} fields")
+        
+        # Create embeddings for the job content
+        print("\nGenerating embeddings for job content...")
+        embedding_response = client.embeddings.create(
+            model="text-embedding-3-small",
+            input=raw_text
+        )
+        embedding = embedding_response.data[0].embedding
+        print("Embeddings generated successfully")
+        
+        # Prepare metadata for Pinecone
+        print("\nPreparing metadata for Pinecone...")
+        job_metadata = {
+            "job_id": job_id,
             "timestamp": datetime.utcnow().isoformat(),
-            "job_id": job_id
+            "source": "internal",
+            "original_filename": file.filename,
+            "paraform_url": paraform_url or "Not specified"
         }
         
-        # Store in Pinecone with flattened metadata
-        vector_store.jobs_index.upsert(vectors=[(
-            job_id,
-            vector,
-            metadata
-        )])
+        # Flatten nested structures and ensure all metadata values are strings or arrays of strings
+        def flatten_and_convert(data, prefix=""):
+            result = {}
+            for key, value in data.items():
+                if isinstance(value, dict):
+                    result.update(flatten_and_convert(value, f"{prefix}{key}_"))
+                elif isinstance(value, list):
+                    result[f"{prefix}{key}"] = [str(item) for item in value] if value else ["Not specified"]
+                elif value is None or value == "":
+                    result[f"{prefix}{key}"] = "Not specified"
+                else:
+                    result[f"{prefix}{key}"] = str(value)
+            return result
+        
+        # Flatten and convert the job data
+        flattened_data = flatten_and_convert(job_data)
+        job_metadata.update(flattened_data)
+        
+        print("\n=== Final Metadata for Pinecone ===")
+        print(json.dumps(job_metadata, indent=2))
+        print(f"Metadata prepared with {len(job_metadata)} fields")
+        
+        # Upsert to Pinecone
+        print("\nStoring job data in Pinecone...")
+        try:
+            job_index.upsert(
+                vectors=[{
+                    "id": job_id,
+                    "values": embedding,
+                    "metadata": job_metadata
+                }]
+            )
+            print("Successfully stored job data in Pinecone")
+        except Exception as e:
+            print(f"\nERROR storing in Pinecone:")
+            print(f"Error type: {type(e)}")
+            print(f"Error message: {str(e)}")
+            print(f"Error traceback: {traceback.format_exc()}")
+            raise
+        
+        print("\n=== Job Submission Process Complete ===")
+        print(f"Job ID: {job_id}")
+        print(f"Company: {job_metadata.get('company_name', 'Not specified')}")
+        print(f"Position: {job_metadata.get('job_title', 'Not specified')}")
+        print(f"Paraform URL: {job_metadata.get('paraform_url', 'Not specified')}")
+        print(f"Company Website: {job_metadata.get('company_website', 'Not specified')}")
+        print("=====================================\n")
         
         return {
             "status": "success",
             "job_id": job_id,
-            "message": "Job successfully submitted and indexed"
+            "message": "Job posting successfully submitted and processed",
+            "data": job_data
         }
         
     except Exception as e:
-        print(f"Error in submit_job: {str(e)}")
+        print(f"\nERROR in submit_job:")
+        print(f"Error type: {type(e)}")
+        print(f"Error message: {str(e)}")
         print(f"Error traceback: {traceback.format_exc()}")
         raise HTTPException(
             status_code=500,
-            detail=f"Failed to submit job: {str(e)}"
+            detail=f"Error processing job data: {str(e)}"
         )
 
 @app.get("/jobs/open-positions", response_model=List[Dict[str, Any]])
@@ -1264,26 +1446,26 @@ async def fetch_and_store_retell_transcript(call_data: RetellCallData):
             # Check if call has ended and attempt knowledge base cleanup
             if retell_data.get('call_status') == RetellCallStatus.ENDED and source_id:
                 print("\nCall has ended - attempting to clean up knowledge base source")
-                print(f"Found knowledge base ID: {knowledge_base_id}")
+                    print(f"Found knowledge base ID: {knowledge_base_id}")
                 print(f"Found source ID: {source_id}")
-                try:
+                    try:
                     # Delete the specific source from the knowledge base
-                    delete_response = await client.delete(
+                        delete_response = await client.delete(
                         f"https://api.retellai.com/delete-knowledge-base-source/{knowledge_base_id}/source/{source_id}",
-                        headers={
-                            "Authorization": f"Bearer {RETELL_API_KEY}",
-                            "Content-Type": "application/json"
-                        }
-                    )
-                    
-                    print(f"Delete response status: {delete_response.status_code}")
-                    if delete_response.status_code in (200, 404):
-                        knowledge_base_cleaned = True
-                        print("Successfully cleaned up knowledge base source")
-                except Exception as e:
+                                headers={
+                                    "Authorization": f"Bearer {RETELL_API_KEY}",
+                                    "Content-Type": "application/json"
+                                }
+                            )
+                        
+                        print(f"Delete response status: {delete_response.status_code}")
+                        if delete_response.status_code in (200, 404):
+                            knowledge_base_cleaned = True
+                    print("Successfully cleaned up knowledge base source")
+                    except Exception as e:
                     print(f"Error deleting knowledge base source: {str(e)}")
-                    print(f"Error type: {type(e)}")
-                    print(f"Error traceback: {traceback.format_exc()}")
+                        print(f"Error type: {type(e)}")
+                        print(f"Error traceback: {traceback.format_exc()}")
             else:
                 print(f"Call status is {retell_data.get('call_status')} - skipping knowledge base cleanup")
             
@@ -1355,17 +1537,17 @@ async def retry_knowledge_base_source_cleanup(knowledge_base_id: str, source_id:
             await asyncio.sleep(delay_seconds * (2 ** attempt))  # Exponential backoff
             
             async with httpx.AsyncClient(timeout=30.0) as client:
-                response = await client.delete(
+                        response = await client.delete(
                     f"https://api.retellai.com/delete-knowledge-base-source/{knowledge_base_id}/source/{source_id}",
-                    headers={
-                        "Authorization": f"Bearer {RETELL_API_KEY}",
-                        "Content-Type": "application/json"
-                    }
-                )
-                
-                if response.status_code in (200, 404):
+                            headers={
+                                "Authorization": f"Bearer {RETELL_API_KEY}",
+                                "Content-Type": "application/json"
+                            }
+                        )
+                        
+                        if response.status_code in (200, 404):
                     print(f"Successfully deleted knowledge base source {source_id} on retry attempt {attempt + 1}")
-                    return True
+                            return True
                 
             print(f"Retry attempt {attempt + 1} failed for knowledge base source {source_id}")
             
@@ -1480,11 +1662,11 @@ async def add_to_knowledge_base(resume: UploadFile, knowledge_base_id: str) -> T
             print(f"Created temporary file: {temp_file.name}")
             
             try:
-                # Initialize Retell client
-                retell_client = Retell(api_key=RETELL_API_KEY)
-                
-                # Open the file and add it to the knowledge base
-                with open(temp_file.name, "rb") as file:
+            # Initialize Retell client
+            retell_client = Retell(api_key=RETELL_API_KEY)
+            
+            # Open the file and add it to the knowledge base
+            with open(temp_file.name, "rb") as file:
                     print("Adding file to knowledge base using Retell client...")
                     response = retell_client.knowledge_base.add_sources(
                         knowledge_base_id=knowledge_base_id,
@@ -1507,15 +1689,15 @@ async def add_to_knowledge_base(resume: UploadFile, knowledge_base_id: str) -> T
                             print(f"Sources: {response.knowledge_base_sources}")
                         return False, None
                         
-            except Exception as e:
-                print(f"Error from Retell client: {str(e)}")
-                print(f"Error type: {type(e)}")
-                print(f"Error traceback: {traceback.format_exc()}")
-                return False, None
-            finally:
-                # Clean up the temporary file
-                os.unlink(temp_file.name)
-                print(f"Cleaned up temporary file: {temp_file.name}")
+                except Exception as e:
+                    print(f"Error from Retell client: {str(e)}")
+                    print(f"Error type: {type(e)}")
+                    print(f"Error traceback: {traceback.format_exc()}")
+                    return False, None
+                finally:
+            # Clean up the temporary file
+            os.unlink(temp_file.name)
+                    print(f"Cleaned up temporary file: {temp_file.name}")
 
     except Exception as e:
         print(f"Error adding file to knowledge base: {str(e)}")
@@ -1930,7 +2112,7 @@ async def cleanup_completed_calls():
             
             # Wait before next check
             print("\n--- Completed call status check cycle ---")
-            await asyncio.sleep(300)  # Check every 20 seconds
+            await asyncio.sleep(300)  # Check every 5 minutes
             
         except Exception as e:
             print(f"Error in cleanup task: {str(e)}")
@@ -1949,5 +2131,215 @@ async def startup_event():
         print(f"Error starting background tasks: {str(e)}")
         print(f"Error type: {type(e)}")
         print(f"Error traceback: {traceback.format_exc()}")
+
+class JobURL(BaseModel):
+    url: str
+
+async def scrape_job(url_data: JobURL) -> Dict[str, Any]:
+    """
+    Scrape job posting data from a provided URL using regular expressions.
+    """
+    try:
+        # Validate URL
+        parsed_url = urlparse(url_data.url)
+        if not parsed_url.scheme or not parsed_url.netloc:
+            raise HTTPException(status_code=400, detail="Invalid URL provided")
+
+        # Fetch the webpage
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+        }
+        response = requests.get(url_data.url, headers=headers)
+        response.raise_for_status()
+        text = response.text
+
+        # Initialize job data dictionary
+        job_data = {
+            "company_name": None,
+            "company_url": None,
+            "job_title": None,
+            "job_url": url_data.url,
+            "salary_range": None,
+            "work_arrangement": None,
+            "city": [],
+            "state": [],
+            "tech_stack_must_haves": [],
+            "tech_stack_nice_to_haves": [],
+            "tech_stack_tags": [],
+            "minimum_years_of_experience": None,
+            "domain_expertise": [],
+            "infrastructure_experience": [],
+            "key_responsibilities": [],
+            "company_culture": {
+                "work_environment": "Not specified",
+                "decision_making": "Not specified",
+                "collaboration_style": "Not specified",
+                "risk_tolerance": "Not specified",
+                "values": "Not specified"
+            }
+        }
+
+        # Extract company name from meta tags or title
+        company_name_match = re.search(r'<meta[^>]*property="og:site_name"[^>]*content="([^"]*)"', text)
+        if company_name_match:
+            job_data['company_name'] = company_name_match.group(1)
+        else:
+            title_match = re.search(r'<title[^>]*>([^<]+)</title>', text)
+            if title_match:
+                job_data['company_name'] = title_match.group(1).split(' - ')[0].strip()
+
+        # Extract job title from h1 tag
+        title_match = re.search(r'<h1[^>]*>([^<]+)</h1>', text)
+        if title_match:
+            job_data['job_title'] = title_match.group(1).strip()
+
+        # Salary range (look for common patterns)
+        salary_patterns = [
+            r'\$[\d,]+(?:\.\d{2})?\s*-\s*\$[\d,]+(?:\.\d{2})?',
+            r'\$[\d,]+(?:\.\d{2})?\s*to\s*\$[\d,]+(?:\.\d{2})?',
+            r'\$[\d,]+(?:\.\d{2})?\s*per\s*year'
+        ]
+        for pattern in salary_patterns:
+            salary_match = re.search(pattern, text)
+            if salary_match:
+                job_data['salary_range'] = salary_match.group(0)
+                break
+
+        # Location
+        location_match = re.search(r'location[:\s]+([^<]+)', text, re.I)
+        if location_match:
+            location_text = location_match.group(1).strip()
+            # Split location into city and state
+            parts = location_text.split(',')
+            if len(parts) >= 2:
+                job_data['city'] = [parts[0].strip()]
+                job_data['state'] = [parts[1].strip()]
+
+        # Work arrangement
+        work_arrangement_keywords = {
+            'remote': 'Remote',
+            'hybrid': 'Hybrid',
+            'on-site': 'On-site',
+            'onsite': 'On-site'
+        }
+        for keyword, arrangement in work_arrangement_keywords.items():
+            if re.search(keyword, text, re.I):
+                job_data['work_arrangement'] = arrangement
+                break
+
+        # Technical requirements
+        tech_keywords = {
+            'must_have': ['python', 'javascript', 'java', 'react', 'node.js', 'aws', 'docker', 'kubernetes'],
+            'nice_to_have': ['typescript', 'graphql', 'redis', 'elasticsearch', 'terraform']
+        }
+        
+        # Look for technical requirements section
+        requirements_section = re.search(r'(?:requirements|qualifications|skills|tech stack)[:\s]+([^<]+)', text, re.I)
+        if requirements_section:
+            tech_text = requirements_section.group(1).lower()
+            for category, keywords in tech_keywords.items():
+                for keyword in keywords:
+                    if keyword in tech_text:
+                        if category == 'must_have':
+                            job_data['tech_stack_must_haves'].append(keyword)
+                        else:
+                            job_data['tech_stack_nice_to_haves'].append(keyword)
+
+        # Years of experience
+        exp_match = re.search(r'(\d+)\+?\s*years?\s*of\s*experience', text, re.I)
+        if exp_match:
+            job_data['minimum_years_of_experience'] = exp_match.group(1)
+
+        # Key responsibilities
+        responsibilities_section = re.search(r'(?:responsibilities|duties|role)[:\s]+([^<]+)', text, re.I)
+        if responsibilities_section:
+            responsibilities_text = responsibilities_section.group(1)
+            # Split into bullet points if they exist
+            bullet_points = re.findall(r'[•\-\*]\s*([^\n]+)', responsibilities_text)
+            if bullet_points:
+                job_data['key_responsibilities'] = [point.strip() for point in bullet_points]
+            else:
+                # If no bullet points, split by newlines
+                job_data['key_responsibilities'] = [line.strip() for line in responsibilities_text.split('\n') if line.strip()]
+
+        return job_data
+
+    except requests.RequestException as e:
+        raise HTTPException(status_code=400, detail=f"Failed to fetch URL: {str(e)}")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error processing job data: {str(e)}")
+
+@app.get("/jobs/most-recent")
+async def get_most_recent_job():
+    """Get the most recent job posting from the Pinecone index."""
+    try:
+        # Query the index for the most recent job
+        query_response = job_index.query(
+            vector=[0] * 1536,  # Dummy vector since we're just getting metadata
+            top_k=1,
+            include_metadata=True
+        )
+        
+        if not query_response.matches:
+            raise HTTPException(
+                status_code=404,
+                detail="No jobs found in the database"
+            )
+        
+        # Get the most recent job's metadata
+        most_recent_job = query_response.matches[0].metadata
+        
+        return {
+            "status": "success",
+            "job": most_recent_job
+        }
+        
+    except Exception as e:
+        print(f"Error getting most recent job: {str(e)}")
+        print(f"Error traceback: {traceback.format_exc()}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to get most recent job: {str(e)}"
+        )
+
+@app.get("/jobs/{job_id}")
+async def get_job(job_id: str):
+    """Get a job posting by ID."""
+    try:
+        print(f"\n=== Attempting to retrieve job {job_id} ===")
+        print(f"Timestamp: {datetime.utcnow().isoformat()}")
+        
+        # Query Pinecone for the job
+        print("Querying Pinecone for job data...")
+        query_response = job_index.query(
+            vector=[0] * 1536,  # Dummy vector since we're querying by metadata
+            filter={"job_id": job_id},
+            top_k=1,
+            include_metadata=True
+        )
+        print(f"Pinecone query response: {query_response}")
+        
+        if not query_response.matches:
+            print(f"No matches found for job_id: {job_id}")
+            raise HTTPException(
+                status_code=404,
+                detail=f"Failed to get job: No job found with ID: {job_id}"
+            )
+        
+        # Extract job data from the first match
+        print("Extracting job data from Pinecone response...")
+        job_data = query_response.matches[0].metadata
+        print(f"Found job data: {job_data}")
+        
+        print("=== Job retrieval successful ===\n")
+        return job_data
+        
+    except Exception as e:
+        print(f"\nERROR in get_job: {str(e)}")
+        print(f"Error traceback: {traceback.format_exc()}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to get job: {str(e)}"
+        )
 
 app = app
