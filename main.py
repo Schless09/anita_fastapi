@@ -4,7 +4,7 @@ from agents.brain_agent import BrainAgent
 from agents.interaction_agent import InteractionAgent
 from agents.vector_store import VectorStore
 from pydantic import BaseModel, Field, validator
-from typing import List, Optional, Dict, Any, Literal, Union
+from typing import List, Optional, Dict, Any, Literal, Union, Tuple
 from datetime import datetime
 import os
 from dotenv import load_dotenv
@@ -175,107 +175,189 @@ class JobMatchRequest(BaseModel):
     top_k: Optional[int] = Field(default=5, gt=0, le=100)
 
 class CompanyCulture(BaseModel):
-    work_environment: str = "Not specified"
-    decision_making: str = "Not specified"
-    collaboration_style: str = "Not specified"
-    risk_tolerance: str = "Not specified"
-    values: Union[str, List[str]] = "Not specified"
+    work_environment: Optional[str] = "Not specified"
+    decision_making: Optional[str] = "Not specified"
+    collaboration_style: Optional[str] = "Not specified"
+    risk_tolerance: Optional[str] = "Not specified"
+    values: Optional[str] = "Not specified"
 
-class CompanyInformation(BaseModel):
-    company_name: str = "Not specified"
-    company_stage: str = "Not specified"
-    most_recent_funding_amount: str = "Not specified"
-    investors: List[str] = Field(default_factory=list)
-    team_size: Union[int, str] = "Not specified"
-    founding_year: Union[int, str] = "Not specified"
-    company_mission: str = "Not specified"
-    target_market: str = "Not specified"
-    industry_vertical: str = "Not specified"
-    company_culture: CompanyCulture
+class CompanyStage(str, Enum):
+    SEED = "Seed"
+    SERIES_A = "Series A"
+    SERIES_B = "Series B"
+    SERIES_C = "Series C"
+    GROWTH = "Growth"
 
-class RoleDetails(BaseModel):
-    job_title: str = "Not specified"
-    job_url: str = "Not specified"
-    positions_available: Union[int, str] = "Not specified"
-    hiring_urgency: str = "Not specified"
-    seniority_level: str = "Not specified"
-    work_arrangement: str = "Not specified"
-    city: List[str] = Field(default_factory=list)
-    state: List[str] = Field(default_factory=list)
-    visa_sponsorship: Union[bool, str] = "Not specified"
-    work_authorization: Union[str, List[str]] = "Not specified"
-    salary_range: str = "Not specified"
-    equity_range: str = "Not specified"
-    reporting_structure: str = "Not specified"
-    team_composition: str = "Not specified"
-    role_status: str = "Not specified"
+class TargetMarket(str, Enum):
+    B2B = "B2B"
+    B2C = "B2C"
+    ENTERPRISE = "Enterprise"
+    SMB = "SMB"
 
-class TechnicalRequirements(BaseModel):
-    role_category: str = "Not specified"
-    tech_stack_must_haves: List[str] = Field(default_factory=list)
-    tech_stack_nice_to_haves: List[str] = Field(default_factory=list)
-    tech_stack_tags: List[str] = Field(default_factory=list)
-    tech_breadth_requirement: str = "Not specified"
-    minimum_years_of_experience: Union[int, str] = "Not specified"
-    domain_expertise: str = "Not specified"
-    ai_ml_experience: str = "Not specified"
-    infrastructure_experience: str = "Not specified"
-    system_design_level: str = "Not specified"
-    coding_proficiency_required: str = "Not specified"
+class HiringUrgency(str, Enum):
+    ASAP = "ASAP"
+    WITHIN_30_DAYS = "Within 30 days"
+    WITHIN_60_DAYS = "Within 60 days"
+    ONGOING = "Ongoing"
 
-class QualificationRequirements(BaseModel):
-    leadership_requirement: str = "Not specified"
-    education_requirement: str = "Not specified"
-    advanced_degree_preference: Union[bool, str] = "Not specified"
-    papers_publications_preferred: Union[bool, str] = "Not specified"
-    prior_startup_experience: Union[bool, str] = "Not specified"
-    advancement_history_required: Union[bool, str] = "Not specified"
-    independent_work_capacity: str = "Not specified"
-    skills_must_have: List[str] = Field(default_factory=list)
-    skills_preferred: List[str] = Field(default_factory=list)
+class SeniorityLevel(str, Enum):
+    ONE_PLUS = "1+ years"
+    THREE_PLUS = "3+ years"
+    FIVE_PLUS = "5+ years"
+    SEVEN_PLUS = "7+ years"
+    TEN_PLUS = "10+ years"
 
-class ProductAndRoleContext(BaseModel):
-    product_details: str = "Not specified"
-    product_development_stage: str = "Not specified"
-    technical_challenges: Union[str, List[str]] = "Not specified"
-    key_responsibilities: List[str] = Field(default_factory=list)
-    scope_of_impact: str = "Not specified"
-    expected_deliverables: List[str] = Field(default_factory=list)
-    product_development_methodology: str = "Not specified"
+class WorkArrangement(str, Enum):
+    REMOTE = "Remote"
+    ON_SITE = "On-site"
+    HYBRID = "Hybrid"
 
-class StartupSpecificFactors(BaseModel):
-    stage_of_codebase: str = "Not specified"
-    growth_trajectory: str = "Not specified"
-    founder_background: str = "Not specified"
-    funding_stability: str = "Not specified"
-    expected_hours: str = "Not specified"
+class RoleCategory(str, Enum):
+    SWE = "SWE"
+    ML_ENGINEER = "ML Engineer"
+    AI_ENGINEER = "AI Engineer"
+    DATA_ENGINEER = "Data Engineer"
+    DEVOPS = "DevOps"
 
-class CandidateTargeting(BaseModel):
-    ideal_companies: List[str] = Field(default_factory=list)
-    disqualifying_traits: List[str] = Field(default_factory=list)
-    deal_breakers: List[str] = Field(default_factory=list)
-    culture_fit_indicators: List[str] = Field(default_factory=list)
-    startup_mindset_requirements: str = "Not specified"
-    autonomy_level_required: str = "Not specified"
-    growth_mindset_indicators: List[str] = Field(default_factory=list)
-    ideal_candidate_profile: str = "Not specified"
+class TechBreadthRequirement(str, Enum):
+    FULL_STACK = "Full-Stack"
+    FRONTEND_LEANING = "Frontend-Leaning"
+    BACKEND_LEANING = "Backend-Leaning"
+    ML_AI_FOCUSED = "ML/AI-Focused"
 
-class InterviewProcess(BaseModel):
-    interview_process_tags: List[str] = Field(default_factory=list)
-    technical_assessment_type: str = "Not specified"
-    interview_focus_areas: List[str] = Field(default_factory=list)
-    time_to_hire: str = "Not specified"
-    decision_makers: Union[str, List[str]] = "Not specified"
+class LeadershipRequirement(str, Enum):
+    NONE = "None"
+    PREFERRED = "Preferred"
+    REQUIRED = "Required"
+
+class ProductDevelopmentStage(str, Enum):
+    PROTOTYPE = "Prototype"
+    MVP = "MVP"
+    MARKET_READY = "Market-ready"
+    SCALING = "Scaling"
+
+class ScopeOfImpact(str, Enum):
+    TEAM = "Team"
+    DEPARTMENT = "Department"
+    COMPANY = "Company"
+    INDUSTRY = "Industry"
+
+class ProductDevelopmentMethodology(str, Enum):
+    AGILE = "Agile"
+    SCRUM = "Scrum"
+    KANBAN = "Kanban"
+
+class StageOfCodebase(str, Enum):
+    GREENFIELD = "Greenfield"
+    ESTABLISHED = "Established"
+    LEGACY_REFACTORING = "Legacy Refactoring"
+
+class TechnicalAssessmentType(str, Enum):
+    TAKE_HOME = "Take-home"
+    LIVE_CODING = "Live coding"
+    SYSTEM_DESIGN = "System design"
+    ML_DESIGN = "ML design"
 
 class JobSubmission(BaseModel):
-    company_information: CompanyInformation
-    role_details: RoleDetails
-    technical_requirements: TechnicalRequirements
-    qualification_requirements: QualificationRequirements
-    product_and_role_context: ProductAndRoleContext
-    startup_specific_factors: StartupSpecificFactors
-    candidate_targeting: CandidateTargeting
-    interview_process: InterviewProcess
+    # Company Information
+    company_name: Optional[str] = None
+    company_url: Optional[str] = None
+    company_stage: Optional[str] = None
+    most_recent_funding_round_amount: Optional[str] = None
+    total_funding_amount: Optional[str] = None
+    investors: Optional[List[str]] = None
+    team_size: Optional[str] = None
+    founding_year: Optional[str] = None
+    company_mission: Optional[str] = None
+    target_market: Optional[List[str]] = None
+    industry_vertical: Optional[str] = None
+    company_vision: Optional[str] = None
+    company_growth_story: Optional[str] = None
+    company_culture: Optional[CompanyCulture] = None
+    scaling_plans: Optional[str] = None
+    mission_and_impact: Optional[str] = None
+    tech_innovation: Optional[str] = None
+
+    # Role Details
+    job_title: Optional[str] = None
+    job_url: Optional[str] = None
+    positions_available: Optional[str] = None
+    hiring_urgency: Optional[str] = None
+    seniority_level: Optional[str] = None
+    work_arrangement: Optional[str] = None
+    city: Optional[List[str]] = None
+    state: Optional[List[str]] = None
+    visa_sponsorship: Optional[str] = None
+    work_authorization: Optional[List[str]] = None
+    salary_range: Optional[str] = None
+    equity_range: Optional[str] = None
+    reporting_structure: Optional[str] = None
+    team_composition: Optional[str] = None
+    role_status: Optional[str] = None
+
+    # Technical Requirements
+    role_category: Optional[str] = None
+    tech_stack_must_haves: Optional[List[str]] = None
+    tech_stack_nice_to_haves: Optional[List[str]] = None
+    tech_stack_tags: Optional[List[str]] = None
+    tech_breadth_requirement: Optional[str] = None
+    minimum_years_of_experience: Optional[str] = None
+    domain_expertise: Optional[List[str]] = None
+    ai_ml_experience: Optional[str] = None
+    infrastructure_experience: Optional[List[str]] = None
+    system_design_level: Optional[str] = None
+    coding_proficiency_required: Optional[str] = None
+    coding_languages_versions: Optional[List[str]] = None
+    version_control_experience: Optional[List[str]] = None
+    ci_cd_tools: Optional[List[str]] = None
+    collaborative_tools: Optional[List[str]] = None
+
+    # Qualification Requirements
+    leadership_requirement: Optional[str] = None
+    education_requirement: Optional[str] = None
+    advanced_degree_preference: Optional[str] = None
+    papers_publications_preferred: Optional[str] = None
+    prior_startup_experience: Optional[str] = None
+    advancement_history_required: Optional[bool] = None
+    independent_work_capacity: Optional[str] = None
+    skills_must_have: Optional[List[str]] = None
+    skills_preferred: Optional[List[str]] = None
+
+    # Product and Role Context
+    product_details: Optional[str] = None
+    product_development_stage: Optional[str] = None
+    technical_challenges: Optional[List[str]] = None
+    key_responsibilities: Optional[List[str]] = None
+    scope_of_impact: Optional[List[str]] = None
+    expected_deliverables: Optional[List[str]] = None
+    product_development_methodology: Optional[List[str]] = None
+
+    # Startup Specific Factors
+    stage_of_codebase: Optional[str] = None
+    growth_trajectory: Optional[str] = None
+    founder_background: Optional[str] = None
+    funding_stability: Optional[str] = None
+    expected_hours: Optional[str] = None
+
+    # Candidate Targeting
+    ideal_companies: Optional[List[str]] = None
+    disqualifying_traits: Optional[List[str]] = None
+    deal_breakers: Optional[List[str]] = None
+    culture_fit_indicators: Optional[List[str]] = None
+    startup_mindset_requirements: Optional[List[str]] = None
+    autonomy_level_required: Optional[str] = None
+    growth_mindset_indicators: Optional[List[str]] = None
+    ideal_candidate_profile: Optional[str] = None
+
+    # Interview Process
+    interview_process_tags: Optional[List[str]] = None
+    technical_assessment_type: Optional[List[str]] = None
+    interview_focus_areas: Optional[List[str]] = None
+    time_to_hire: Optional[str] = None
+    decision_makers: Optional[List[str]] = None
+
+    # Recruiter Pitch Points
+    recruiter_pitch_points: Optional[List[str]] = None
 
 class MatchResponse(BaseModel):
     status: str
@@ -338,6 +420,12 @@ class CallStatusRequest(BaseModel):
     """Request model for checking call status"""
     candidate_id: str
     call_id: str
+
+class RetellWebhookPayload(BaseModel):
+    call_id: str
+    call_status: RetellCallStatus
+    metadata: Dict[str, Any]
+    transcript: Optional[str] = None
 
 # Add CORS middleware
 app.add_middleware(
@@ -840,112 +928,118 @@ async def submit_job(job: JobSubmission):
         
         # Create text representation for embedding
         job_text = f"""
-        Company: {job.company_information.company_name}
-        Role: {job.role_details.job_title}
-        Location: {', '.join(job.role_details.city)} {', '.join(job.role_details.state)}
-        Tech Stack (Must Have): {', '.join(job.technical_requirements.tech_stack_must_haves)}
-        Tech Stack (Nice to Have): {', '.join(job.technical_requirements.tech_stack_nice_to_haves)}
-        Experience: {job.technical_requirements.minimum_years_of_experience}
-        Skills (Must Have): {', '.join(job.qualification_requirements.skills_must_have)}
-        Skills (Preferred): {', '.join(job.qualification_requirements.skills_preferred)}
-        Product Details: {job.product_and_role_context.product_details}
-        Key Responsibilities: {', '.join(job.product_and_role_context.key_responsibilities)}
+        Company: {job.company_name or ''}
+        Role: {job.job_title or ''}
+        Location: {', '.join(job.city) if job.city else ''} {', '.join(job.state) if job.state else ''}
+        Tech Stack (Must Have): {', '.join(job.tech_stack_must_haves) if job.tech_stack_must_haves else ''}
+        Tech Stack (Nice to Have): {', '.join(job.tech_stack_nice_to_haves) if job.tech_stack_nice_to_haves else ''}
+        Experience: {job.minimum_years_of_experience or ''}
+        Skills (Must Have): {', '.join(job.skills_must_have) if job.skills_must_have else ''}
+        Skills (Preferred): {', '.join(job.skills_preferred) if job.skills_preferred else ''}
+        Product Details: {job.product_details or ''}
+        Key Responsibilities: {', '.join(job.key_responsibilities) if job.key_responsibilities else ''}
         """
         
         # Get embedding for the job text
         vector = vector_store.get_embedding(job_text)
         
-        # Flatten metadata for Pinecone
+        # Helper function to handle null values
+        def clean_metadata_value(value):
+            if value is None:
+                return ""  # Convert None to empty string
+            if isinstance(value, (str, int, float, bool)):
+                return value
+            if isinstance(value, list):
+                return [str(item) for item in value] if value else []
+            return str(value)
+        
+        # Flatten metadata for Pinecone with null handling
         metadata = {
             # Company Information
-            "company_name": job.company_information.company_name,
-            "company_stage": job.company_information.company_stage,
-            "funding_amount": job.company_information.most_recent_funding_amount,
-            "investors": job.company_information.investors,
-            "team_size": job.company_information.team_size,
-            "founding_year": job.company_information.founding_year,
-            "company_mission": job.company_information.company_mission,
-            "target_market": job.company_information.target_market,
-            "industry_vertical": job.company_information.industry_vertical,
-            "work_environment": job.company_information.company_culture.work_environment,
-            "decision_making": job.company_information.company_culture.decision_making,
-            "collaboration_style": job.company_information.company_culture.collaboration_style,
-            "risk_tolerance": job.company_information.company_culture.risk_tolerance,
-            "company_values": job.company_information.company_culture.values,
+            "company_name": clean_metadata_value(job.company_name),
+            "company_url": clean_metadata_value(job.company_url),
+            "company_stage": clean_metadata_value(job.company_stage),
+            "most_recent_funding_round_amount": clean_metadata_value(job.most_recent_funding_round_amount),
+            "total_funding_amount": clean_metadata_value(job.total_funding_amount),
+            "investors": clean_metadata_value(job.investors),
+            "team_size": clean_metadata_value(job.team_size),
+            "founding_year": clean_metadata_value(job.founding_year),
+            "company_mission": clean_metadata_value(job.company_mission),
+            "target_market": clean_metadata_value(job.target_market),
+            "industry_vertical": clean_metadata_value(job.industry_vertical),
+            "company_vision": clean_metadata_value(job.company_vision),
+            "company_growth_story": clean_metadata_value(job.company_growth_story),
+            "company_culture": clean_metadata_value(job.company_culture),
+            "scaling_plans": clean_metadata_value(job.scaling_plans),
+            "mission_and_impact": clean_metadata_value(job.mission_and_impact),
+            "tech_innovation": clean_metadata_value(job.tech_innovation),
             
             # Role Details
-            "job_title": job.role_details.job_title,
-            "job_url": job.role_details.job_url,
-            "positions_available": job.role_details.positions_available,
-            "hiring_urgency": job.role_details.hiring_urgency,
-            "seniority_level": job.role_details.seniority_level,
-            "work_arrangement": job.role_details.work_arrangement,
-            "cities": job.role_details.city,
-            "states": job.role_details.state,
-            "visa_sponsorship": job.role_details.visa_sponsorship,
-            "work_authorization": job.role_details.work_authorization,
-            "salary_range": job.role_details.salary_range,
-            "equity_range": job.role_details.equity_range,
-            "reporting_structure": job.role_details.reporting_structure,
-            "team_composition": job.role_details.team_composition,
-            "role_status": job.role_details.role_status,
+            "job_title": clean_metadata_value(job.job_title),
+            "job_url": clean_metadata_value(job.job_url),
+            "positions_available": clean_metadata_value(job.positions_available),
+            "hiring_urgency": clean_metadata_value(job.hiring_urgency),
+            "seniority_level": clean_metadata_value(job.seniority_level),
+            "work_arrangement": clean_metadata_value(job.work_arrangement),
+            "cities": clean_metadata_value(job.city),
+            "states": clean_metadata_value(job.state),
+            "visa_sponsorship": clean_metadata_value(job.visa_sponsorship),
+            "work_authorization": clean_metadata_value(job.work_authorization),
+            "salary_range": clean_metadata_value(job.salary_range),
+            "equity_range": clean_metadata_value(job.equity_range),
+            "reporting_structure": clean_metadata_value(job.reporting_structure),
+            "team_composition": clean_metadata_value(job.team_composition),
+            "role_status": clean_metadata_value(job.role_status),
             
             # Technical Requirements
-            "role_category": job.technical_requirements.role_category,
-            "tech_stack_must_haves": job.technical_requirements.tech_stack_must_haves,
-            "tech_stack_nice_to_haves": job.technical_requirements.tech_stack_nice_to_haves,
-            "tech_stack_tags": job.technical_requirements.tech_stack_tags,
-            "tech_breadth": job.technical_requirements.tech_breadth_requirement,
-            "min_years_experience": job.technical_requirements.minimum_years_of_experience,
-            "domain_expertise": job.technical_requirements.domain_expertise,
-            "ai_ml_experience": job.technical_requirements.ai_ml_experience,
-            "infrastructure_experience": job.technical_requirements.infrastructure_experience,
-            "system_design_level": job.technical_requirements.system_design_level,
-            "coding_proficiency": job.technical_requirements.coding_proficiency_required,
+            "role_category": clean_metadata_value(job.role_category),
+            "tech_stack_must_haves": clean_metadata_value(job.tech_stack_must_haves),
+            "tech_stack_nice_to_haves": clean_metadata_value(job.tech_stack_nice_to_haves),
+            "tech_stack_tags": clean_metadata_value(job.tech_stack_tags),
+            "tech_breadth": clean_metadata_value(job.tech_breadth_requirement),
+            "min_years_experience": clean_metadata_value(job.minimum_years_of_experience),
+            "domain_expertise": clean_metadata_value(job.domain_expertise),
+            "ai_ml_experience": clean_metadata_value(job.ai_ml_experience),
+            "infrastructure_experience": clean_metadata_value(job.infrastructure_experience),
+            "system_design_level": clean_metadata_value(job.system_design_level),
+            "coding_proficiency": clean_metadata_value(job.coding_proficiency_required),
             
             # Qualification Requirements
-            "leadership_requirement": job.qualification_requirements.leadership_requirement,
-            "education_requirement": job.qualification_requirements.education_requirement,
-            "advanced_degree": job.qualification_requirements.advanced_degree_preference,
-            "papers_required": job.qualification_requirements.papers_publications_preferred,
-            "startup_experience": job.qualification_requirements.prior_startup_experience,
-            "advancement_required": job.qualification_requirements.advancement_history_required,
-            "independence_level": job.qualification_requirements.independent_work_capacity,
-            "skills_must_have": job.qualification_requirements.skills_must_have,
-            "skills_preferred": job.qualification_requirements.skills_preferred,
+            "leadership_requirement": clean_metadata_value(job.leadership_requirement),
+            "education_requirement": clean_metadata_value(job.education_requirement),
+            "advanced_degree": clean_metadata_value(job.advanced_degree_preference),
+            "papers_required": clean_metadata_value(job.papers_publications_preferred),
+            "startup_experience": clean_metadata_value(job.prior_startup_experience),
+            "advancement_required": clean_metadata_value(job.advancement_history_required),
+            "independence_level": clean_metadata_value(job.independent_work_capacity),
+            "skills_must_have": clean_metadata_value(job.skills_must_have),
+            "skills_preferred": clean_metadata_value(job.skills_preferred),
             
             # Product and Role Context
-            "product_details": job.product_and_role_context.product_details,
-            "product_stage": job.product_and_role_context.product_development_stage,
-            "technical_challenges": job.product_and_role_context.technical_challenges,
-            "key_responsibilities": job.product_and_role_context.key_responsibilities,
-            "scope_of_impact": job.product_and_role_context.scope_of_impact,
-            "expected_deliverables": job.product_and_role_context.expected_deliverables,
-            "dev_methodology": job.product_and_role_context.product_development_methodology,
+            "product_details": clean_metadata_value(job.product_details),
+            "product_stage": clean_metadata_value(job.product_development_stage),
+            "technical_challenges": clean_metadata_value(job.technical_challenges),
+            "key_responsibilities": clean_metadata_value(job.key_responsibilities),
+            "scope_of_impact": clean_metadata_value(job.scope_of_impact),
+            "expected_deliverables": clean_metadata_value(job.expected_deliverables),
+            "dev_methodology": clean_metadata_value(job.product_development_methodology),
             
             # Startup Specific Factors
-            "codebase_stage": job.startup_specific_factors.stage_of_codebase,
-            "growth_trajectory": job.startup_specific_factors.growth_trajectory,
-            "founder_background": job.startup_specific_factors.founder_background,
-            "funding_stability": job.startup_specific_factors.funding_stability,
-            "expected_hours": job.startup_specific_factors.expected_hours,
-            
-            # Candidate Targeting
-            "ideal_companies": job.candidate_targeting.ideal_companies,
-            "disqualifying_traits": job.candidate_targeting.disqualifying_traits,
-            "deal_breakers": job.candidate_targeting.deal_breakers,
-            "culture_indicators": job.candidate_targeting.culture_fit_indicators,
-            "startup_mindset": job.candidate_targeting.startup_mindset_requirements,
-            "autonomy_required": job.candidate_targeting.autonomy_level_required,
-            "growth_indicators": job.candidate_targeting.growth_mindset_indicators,
-            "ideal_profile": job.candidate_targeting.ideal_candidate_profile,
+            "codebase_stage": clean_metadata_value(job.stage_of_codebase),
+            "growth_trajectory": clean_metadata_value(job.growth_trajectory),
+            "founder_background": clean_metadata_value(job.founder_background),
+            "funding_stability": clean_metadata_value(job.funding_stability),
+            "expected_hours": clean_metadata_value(job.expected_hours),
             
             # Interview Process
-            "interview_tags": job.interview_process.interview_process_tags,
-            "assessment_type": job.interview_process.technical_assessment_type,
-            "interview_focus": job.interview_process.interview_focus_areas,
-            "time_to_hire": job.interview_process.time_to_hire,
-            "decision_makers": job.interview_process.decision_makers,
+            "interview_tags": clean_metadata_value(job.interview_process_tags),
+            "assessment_type": clean_metadata_value(job.technical_assessment_type),
+            "interview_focus": clean_metadata_value(job.interview_focus_areas),
+            "time_to_hire": clean_metadata_value(job.time_to_hire),
+            "decision_makers": clean_metadata_value(job.decision_makers),
+            
+            # Recruiter Pitch Points
+            "recruiter_pitch_points": clean_metadata_value(job.recruiter_pitch_points),
             
             # Additional Metadata
             "timestamp": datetime.utcnow().isoformat(),
@@ -1102,7 +1196,7 @@ async def delete_retell_knowledge_base(knowledge_base_id: str) -> bool:
 async def fetch_and_store_retell_transcript(call_data: RetellCallData):
     """
     Fetch transcript from Retell AI call and store it in the candidate's profile.
-    Also cleans up by deleting the knowledge base after the call is completed.
+    Also cleans up by deleting the knowledge base source after the call is completed.
     """
     if not RETELL_API_KEY:
         raise HTTPException(
@@ -1164,56 +1258,32 @@ async def fetch_and_store_retell_transcript(call_data: RetellCallData):
             
             # Handle knowledge base cleanup for completed calls
             knowledge_base_cleaned = False
-            knowledge_base_id = None
-            
-            # Extract knowledge base ID from multiple possible locations
-            metadata = retell_data.get('metadata', {})
-            knowledge_base_id = (
-                metadata.get('knowledge_base_id') or
-                retell_data.get('knowledge_base_id') or
-                metadata.get('knowledgeBaseId')
-            )
+            knowledge_base_id = "knowledge_base_b1df2fc51182f47b"  # Fixed knowledge base ID
+            source_id = retell_data.get('metadata', {}).get('source_id')  # Get source_id from metadata
 
             # Check if call has ended and attempt knowledge base cleanup
-            if retell_data.get('call_status') == RetellCallStatus.ENDED:
-                print("\nCall has ended - attempting to clean up knowledge base")
-                if knowledge_base_id:
-                    print(f"Found knowledge base ID: {knowledge_base_id}")
-                    try:
-                        # First try the new delete endpoint
-                        delete_response = await client.delete(
-                            f"{RETELL_API_BASE}/knowledge-bases/{knowledge_base_id}",
-                            headers={
-                                "Authorization": f"Bearer {RETELL_API_KEY}",
-                                "Content-Type": "application/json"
-                            }
-                        )
-                        
-                        # If that fails, try the alternative endpoint
-                        if delete_response.status_code not in (200, 404):
-                            print("First deletion attempt failed, trying alternative endpoint...")
-                            delete_response = await client.delete(
-                                f"https://api.retellai.com/delete-knowledge-base-source/{knowledge_base_id}/source/{knowledge_base_id}",
-                                headers={
-                                    "Authorization": f"Bearer {RETELL_API_KEY}",
-                                    "Content-Type": "application/json"
-                                }
-                            )
-                        
-                        print(f"Delete response status: {delete_response.status_code}")
-                        if delete_response.status_code in (200, 404):
-                            knowledge_base_cleaned = True
-                            print("Successfully cleaned up knowledge base")
-                        else:
-                            print(f"Failed to delete knowledge base: {delete_response.text}")
-                            # Log the failure but don't raise an exception to allow transcript processing to continue
-                            print(f"Warning: Failed to delete knowledge base {knowledge_base_id}")
-                    except Exception as e:
-                        print(f"Error deleting knowledge base: {str(e)}")
-                        print(f"Error type: {type(e)}")
-                        print(f"Error traceback: {traceback.format_exc()}")
-                else:
-                    print("No knowledge base ID found in response")
+            if retell_data.get('call_status') == RetellCallStatus.ENDED and source_id:
+                print("\nCall has ended - attempting to clean up knowledge base source")
+                print(f"Found knowledge base ID: {knowledge_base_id}")
+                print(f"Found source ID: {source_id}")
+                try:
+                    # Delete the specific source from the knowledge base
+                    delete_response = await client.delete(
+                        f"https://api.retellai.com/delete-knowledge-base-source/{knowledge_base_id}/source/{source_id}",
+                        headers={
+                            "Authorization": f"Bearer {RETELL_API_KEY}",
+                            "Content-Type": "application/json"
+                        }
+                    )
+                    
+                    print(f"Delete response status: {delete_response.status_code}")
+                    if delete_response.status_code in (200, 404):
+                        knowledge_base_cleaned = True
+                        print("Successfully cleaned up knowledge base source")
+                except Exception as e:
+                    print(f"Error deleting knowledge base source: {str(e)}")
+                    print(f"Error type: {type(e)}")
+                    print(f"Error traceback: {traceback.format_exc()}")
             else:
                 print(f"Call status is {retell_data.get('call_status')} - skipping knowledge base cleanup")
             
@@ -1239,14 +1309,10 @@ async def fetch_and_store_retell_transcript(call_data: RetellCallData):
                     "processed_data": processed_data,
                     "enhanced_transcript": enhanced_transcript.dict(),
                     "knowledge_base_cleaned": knowledge_base_cleaned,
-                    "knowledge_base_id": knowledge_base_id
+                    "knowledge_base_id": knowledge_base_id,
+                    "source_id": source_id
                 }
             )
-            
-            # If knowledge base wasn't cleaned up, schedule a retry
-            if knowledge_base_id and not knowledge_base_cleaned:
-                print("Scheduling knowledge base cleanup retry...")
-                asyncio.create_task(retry_knowledge_base_cleanup(knowledge_base_id))
             
             return {
                 "status": "success",
@@ -1260,7 +1326,8 @@ async def fetch_and_store_retell_transcript(call_data: RetellCallData):
                     "sentiment": enhanced_transcript.user_sentiment,
                     "success_status": enhanced_transcript.call_successful,
                     "knowledge_base_cleaned": knowledge_base_cleaned,
-                    "knowledge_base_id": knowledge_base_id
+                    "knowledge_base_id": knowledge_base_id,
+                    "source_id": source_id
                 }
             }
             
@@ -1279,44 +1346,33 @@ async def fetch_and_store_retell_transcript(call_data: RetellCallData):
     finally:
         print("=== Transcript Processing Complete ===\n")
 
-async def retry_knowledge_base_cleanup(knowledge_base_id: str, max_retries: int = 3, delay_seconds: int = 60):
+async def retry_knowledge_base_source_cleanup(knowledge_base_id: str, source_id: str, max_retries: int = 3, delay_seconds: int = 60):
     """
-    Retry deleting a knowledge base with exponential backoff.
+    Retry deleting a knowledge base source with exponential backoff.
     """
     for attempt in range(max_retries):
         try:
             await asyncio.sleep(delay_seconds * (2 ** attempt))  # Exponential backoff
             
             async with httpx.AsyncClient(timeout=30.0) as client:
-                # Try both deletion endpoints
-                endpoints = [
-                    f"{RETELL_API_BASE}/knowledge-bases/{knowledge_base_id}",
-                    f"https://api.retellai.com/delete-knowledge-base-source/{knowledge_base_id}/source/{knowledge_base_id}"
-                ]
+                response = await client.delete(
+                    f"https://api.retellai.com/delete-knowledge-base-source/{knowledge_base_id}/source/{source_id}",
+                    headers={
+                        "Authorization": f"Bearer {RETELL_API_KEY}",
+                        "Content-Type": "application/json"
+                    }
+                )
                 
-                for endpoint in endpoints:
-                    try:
-                        response = await client.delete(
-                            endpoint,
-                            headers={
-                                "Authorization": f"Bearer {RETELL_API_KEY}",
-                                "Content-Type": "application/json"
-                            }
-                        )
-                        
-                        if response.status_code in (200, 404):
-                            print(f"Successfully deleted knowledge base {knowledge_base_id} on retry attempt {attempt + 1}")
-                            return True
-                    except Exception as e:
-                        print(f"Error on endpoint {endpoint}: {str(e)}")
-                        continue
+                if response.status_code in (200, 404):
+                    print(f"Successfully deleted knowledge base source {source_id} on retry attempt {attempt + 1}")
+                    return True
                 
-            print(f"Retry attempt {attempt + 1} failed for knowledge base {knowledge_base_id}")
+            print(f"Retry attempt {attempt + 1} failed for knowledge base source {source_id}")
             
         except Exception as e:
             print(f"Error in retry attempt {attempt + 1}: {str(e)}")
     
-    print(f"Failed to delete knowledge base {knowledge_base_id} after {max_retries} retries")
+    print(f"Failed to delete knowledge base source {source_id} after {max_retries} retries")
     return False
 
 def calculate_call_duration(retell_data: Dict[str, Any]) -> Optional[float]:
@@ -1408,18 +1464,14 @@ async def create_retell_knowledge_base(resume_file: UploadFile, name: str) -> st
         print(f"Error traceback: {traceback.format_exc()}")
         raise HTTPException(status_code=500, detail=f"Failed to create knowledge base: {str(e)}")
 
-async def add_to_knowledge_base(resume_file: UploadFile, knowledge_base_id: str) -> bool:
-    """Add a resume to an existing knowledge base"""
-    if not RETELL_API_KEY:
-        raise HTTPException(status_code=500, detail="Retell AI API key not configured")
-
+async def add_to_knowledge_base(resume: UploadFile, knowledge_base_id: str) -> Tuple[bool, Optional[str]]:
+    """Add a resume to the Retell knowledge base and return success status and source ID."""
     try:
-        # Read the resume file content
-        file_content = await resume_file.read()
-        print(f"\n=== Adding file to knowledge base ===")
-        print(f"File name: {resume_file.filename}")
-        print(f"File size: {len(file_content)} bytes")
-        print(f"Knowledge base ID: {knowledge_base_id}")
+        print(f"\n=== Adding file to knowledge base {knowledge_base_id} ===")
+        print(f"File name: {resume.filename}")
+        
+        # Read the file content
+        file_content = await resume.read()
         
         # Create a temporary file
         with tempfile.NamedTemporaryFile(suffix='.pdf', delete=False) as temp_file:
@@ -1427,37 +1479,51 @@ async def add_to_knowledge_base(resume_file: UploadFile, knowledge_base_id: str)
             temp_file.flush()
             print(f"Created temporary file: {temp_file.name}")
             
-            # Initialize Retell client
-            client = Retell(api_key=RETELL_API_KEY)
-            
-            # Open the file and add it to the knowledge base
-            with open(temp_file.name, "rb") as file:
-                try:
-                    knowledge_base_response = client.knowledge_base.add_sources(
+            try:
+                # Initialize Retell client
+                retell_client = Retell(api_key=RETELL_API_KEY)
+                
+                # Open the file and add it to the knowledge base
+                with open(temp_file.name, "rb") as file:
+                    print("Adding file to knowledge base using Retell client...")
+                    response = retell_client.knowledge_base.add_sources(
                         knowledge_base_id=knowledge_base_id,
                         knowledge_base_files=[file]
                     )
-                    print(f"\nSuccessfully added to knowledge base: {knowledge_base_response.knowledge_base_id}")
-                    return True
-                except Exception as e:
-                    print(f"\nError from Retell client:")
-                    print(f"Error type: {type(e)}")
-                    print(f"Error message: {str(e)}")
-                    return False
-                finally:
-                    # Clean up the temporary file
-                    os.unlink(temp_file.name)
-                    print(f"\nCleaned up temporary file: {temp_file.name}")
+                    
+                    print(f"Response from Retell: {response}")
+                    
+                    # Extract source_id from the first source in knowledge_base_sources
+                    if (hasattr(response, 'knowledge_base_sources') and 
+                        response.knowledge_base_sources and 
+                        hasattr(response.knowledge_base_sources[0], 'source_id')):
+                        source_id = response.knowledge_base_sources[0].source_id
+                        print(f"Successfully added file with source_id: {source_id}")
+                        return True, source_id
+                    else:
+                        print("No source_id found in response structure")
+                        print(f"Response structure: {dir(response)}")
+                        if hasattr(response, 'knowledge_base_sources'):
+                            print(f"Sources: {response.knowledge_base_sources}")
+                        return False, None
+                        
+            except Exception as e:
+                print(f"Error from Retell client: {str(e)}")
+                print(f"Error type: {type(e)}")
+                print(f"Error traceback: {traceback.format_exc()}")
+                return False, None
+            finally:
+                # Clean up the temporary file
+                os.unlink(temp_file.name)
+                print(f"Cleaned up temporary file: {temp_file.name}")
 
     except Exception as e:
-        print(f"\nERROR in add_to_knowledge_base:")
+        print(f"Error adding file to knowledge base: {str(e)}")
         print(f"Error type: {type(e)}")
-        print(f"Error message: {str(e)}")
         print(f"Error traceback: {traceback.format_exc()}")
-        raise HTTPException(
-            status_code=500,
-            detail=f"Failed to add resume to knowledge base: {str(e)}"
-        )
+        return False, None
+    finally:
+        print("=== Add to knowledge base operation complete ===\n")
 
 @app.post("/api/makeCall")
 async def make_call(
@@ -1499,8 +1565,8 @@ async def make_call(
         # Use the fixed knowledge base ID
         knowledge_base_id = "knowledge_base_b1df2fc51182f47b"
 
-        # Add the resume to the knowledge base
-        success = await add_to_knowledge_base(resume, knowledge_base_id)
+        # Add the resume to the knowledge base and get the source ID
+        success, source_id = await add_to_knowledge_base(resume, knowledge_base_id)
         if not success:
             raise HTTPException(
                 status_code=500,
@@ -1517,7 +1583,8 @@ async def make_call(
                 "candidate_id": candidate_id,
                 "name": name,
                 "email": email,
-                "linkedin": linkedin
+                "linkedin": linkedin,
+                "source_id": source_id  # Add source_id to metadata
             },
             "retell_llm_dynamic_variables": {
                 "candidate_name": name,
@@ -1560,17 +1627,19 @@ async def make_call(
                     detail="No call_id in response"
                 )
 
-            # Register call status
+            # Register call status with source_id
             call_statuses[call_id] = {
                 "status": "registered",
                 "candidate_id": candidate_id,
+                "source_id": source_id,  # Store source_id in call status
                 "timestamp": datetime.utcnow().isoformat()
             }
 
             return {
                 "message": "Call initiated successfully",
                 "call_id": call_id,
-                "status": "registered"
+                "status": "registered",
+                "source_id": source_id  # Include source_id in response
             }
 
     except Exception as e:
@@ -1600,5 +1669,285 @@ async def delete_knowledge_base(knowledge_base_id: str):
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=str(e)
         )
+
+@app.post("/webhook/retell")
+async def retell_webhook(payload: RetellWebhookPayload):
+    """Handle webhooks from Retell AI."""
+    try:
+        print(f"\n=== Processing Retell Webhook for Call {payload.call_id} ===")
+        print(f"Call Status: {payload.call_status}")
+        print(f"Webhook Metadata: {payload.metadata}")
+        
+        # Verify this is a call we know about
+        if payload.call_id not in call_statuses:
+            print(f"Warning: Received webhook for unknown call {payload.call_id}")
+            return {"status": "success", "message": "Webhook processed"}
+        
+        # Get our stored call data
+        call_data = call_statuses[payload.call_id]
+        print(f"Stored call data: {call_data}")
+        
+        # Update call status
+        call_data["status"] = payload.call_status
+        
+        # If call has ended, clean up the knowledge base source
+        if payload.call_status == RetellCallStatus.ENDED:
+            # Try to get source_id from webhook metadata first, then fall back to our stored data
+            source_id = payload.metadata.get('source_id') or call_data.get('source_id')
+            
+            if source_id:
+                print(f"Call ended - cleaning up source {source_id}")
+                knowledge_base_id = "knowledge_base_b1df2fc51182f47b"
+                
+                try:
+                    async with httpx.AsyncClient(timeout=30.0) as client:
+                        delete_url = f"https://api.retellai.com/delete-knowledge-base-source/{knowledge_base_id}/source/{source_id}"
+                        print(f"Attempting to delete source using URL: {delete_url}")
+                        
+                        response = await client.delete(
+                            delete_url,
+                            headers={
+                                "Authorization": f"Bearer {RETELL_API_KEY}",
+                                "Content-Type": "application/json"
+                            }
+                        )
+                        
+                        print(f"Delete response status: {response.status_code}")
+                        print(f"Delete response body: {response.text}")
+                        
+                        if response.status_code in (200, 404):
+                            print(f"Successfully deleted source {source_id}")
+                            # Update our call status to reflect successful cleanup
+                            call_data["source_cleaned"] = True
+                        else:
+                            print(f"Failed to delete source {source_id}: {response.text}")
+                            # Schedule retry
+                            print("Scheduling retry for source deletion")
+                            asyncio.create_task(retry_knowledge_base_source_cleanup(knowledge_base_id, source_id))
+                except Exception as e:
+                    print(f"Error deleting source: {str(e)}")
+                    print(f"Error type: {type(e)}")
+                    print(f"Error traceback: {traceback.format_exc()}")
+                    # Schedule retry
+                    print("Scheduling retry after error")
+                    asyncio.create_task(retry_knowledge_base_source_cleanup(knowledge_base_id, source_id))
+            else:
+                print("Warning: No source_id found in webhook metadata or stored call data")
+            
+        return {
+            "status": "success",
+            "message": "Webhook processed successfully",
+            "call_id": payload.call_id,
+            "call_status": payload.call_status,
+            "source_id": source_id if 'source_id' in locals() else None,
+            "cleanup_status": call_data.get("source_cleaned", False)
+        }
+        
+    except Exception as e:
+        print(f"Error processing webhook: {str(e)}")
+        print(f"Error type: {type(e)}")
+        print(f"Error traceback: {traceback.format_exc()}")
+        return {
+            "status": "error",
+            "message": str(e),
+            "call_id": payload.call_id if hasattr(payload, 'call_id') else None
+        }
+    finally:
+        print("=== Webhook Processing Complete ===\n")
+
+async def delete_knowledge_base_source(knowledge_base_id: str, source_id: str) -> Tuple[bool, str]:
+    """Delete a source from the knowledge base and verify the correct source was deleted."""
+    try:
+        # Initialize Retell client
+        retell_client = Retell(api_key=RETELL_API_KEY)
+        
+        # First, get current state of knowledge base
+        print(f"Checking current knowledge base state...")
+        try:
+            knowledge_bases = retell_client.knowledge_base.list()
+            target_kb = next((kb for kb in knowledge_bases if kb.knowledge_base_id == knowledge_base_id), None)
+            
+            if not target_kb:
+                return False, f"Knowledge base {knowledge_base_id} not found"
+                
+            initial_sources = target_kb.knowledge_base_sources
+            print("\nCurrent sources in knowledge base:")
+            for s in initial_sources:
+                print(f"  - {s.source_id}: {s.filename}")
+            
+            source_exists = any(s.source_id == source_id for s in initial_sources)
+            
+            if not source_exists:
+                print(f"Source {source_id} not found in knowledge base.")
+                return True, "Source already deleted"
+            
+            # Attempt to delete the source using raw HTTP request for more control
+            print(f"\nAttempting to delete source {source_id}...")
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                delete_url = f"https://api.retellai.com/v2/delete-knowledge-base-source/{knowledge_base_id}/source/{source_id}"
+                delete_response = await client.delete(
+                    delete_url,
+                    headers={
+                        "Authorization": f"Bearer {RETELL_API_KEY}",
+                        "Content-Type": "application/json"
+                    }
+                )
+                
+                if delete_response.status_code != 200:
+                    print(f"Delete request failed with status {delete_response.status_code}")
+                    return False, f"Delete request failed: {delete_response.text}"
+                
+                # Verify deletion by checking final state
+                knowledge_bases = retell_client.knowledge_base.list()
+                target_kb = next((kb for kb in knowledge_bases if kb.knowledge_base_id == knowledge_base_id), None)
+                
+                if not target_kb:
+                    return False, "Failed to verify deletion - knowledge base not found"
+                    
+                final_sources = target_kb.knowledge_base_sources
+                print("\nRemaining sources after deletion:")
+                for s in final_sources:
+                    print(f"  - {s.source_id}: {s.filename}")
+                
+                source_deleted = not any(s.source_id == source_id for s in final_sources)
+                
+                if source_deleted:
+                    print(f"\nSuccessfully verified deletion of source {source_id}")
+                    return True, "Success"
+                else:
+                    print("\nWarning: Source still exists after deletion attempt")
+                    print("Initial sources:")
+                    for s in initial_sources:
+                        print(f"  - {s.source_id}: {s.filename}")
+                    print("Final sources:")
+                    for s in final_sources:
+                        print(f"  - {s.source_id}: {s.filename}")
+                        
+                    return False, "Source still exists after deletion attempt"
+                    
+        except Exception as api_error:
+            print(f"API Error: {str(api_error)}")
+            return False, f"API Error: {str(api_error)}"
+                
+    except Exception as e:
+        error_msg = f"Error deleting source {source_id}: {str(e)}"
+        print(error_msg)
+        print(f"Error type: {type(e)}")
+        print(f"Error traceback: {traceback.format_exc()}")
+        return False, error_msg
+
+async def check_call_status(call_id: str) -> Tuple[bool, str, Dict[str, Any]]:
+    """Check the status of a call with Retell API."""
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            url = f"{RETELL_API_BASE}/get-call/{call_id}"
+            print(f"Checking call status at: {url}")
+            
+            response = await client.get(
+                url,
+                headers={
+                    "Authorization": f"Bearer {RETELL_API_KEY}",
+                    "Content-Type": "application/json"
+                }
+            )
+            
+            print(f"Status check response code: {response.status_code}")
+            if response.status_code == 200:
+                call_info = response.json()
+                status = call_info.get('call_status', 'unknown')
+                print(f"Retrieved call status: {status}")
+                return True, status, call_info
+            elif response.status_code == 404:
+                print(f"Call {call_id} not found")
+                return False, "not_found", {}
+            else:
+                print(f"Error response: {response.text}")
+                return False, f"error_{response.status_code}", {}
+                
+    except Exception as e:
+        print(f"Error checking call status for {call_id}: {str(e)}")
+        print(f"Error type: {type(e)}")
+        print(f"Error traceback: {traceback.format_exc()}")
+        return False, "error", {}
+
+async def cleanup_completed_calls():
+    """Background task to periodically check call statuses and cleanup completed calls."""
+    print("\n=== Starting background cleanup task for completed calls ===")
+    knowledge_base_id = "knowledge_base_b1df2fc51182f47b"
+    
+    while True:
+        try:
+            print("\n--- Checking for completed calls ---")
+            print("\nCurrent call_statuses:")
+            for call_id, data in call_statuses.items():
+                print(f"Call {call_id}:")
+                print(f"  Status: {data.get('status', 'unknown')}")
+                print(f"  Source ID: {data.get('source_id', 'none')}")
+                print(f"  Cleaned: {data.get('source_cleaned', False)}")
+                print(f"  Timestamp: {data.get('timestamp', 'none')}")
+            
+            # Get all calls that haven't been cleaned up yet
+            active_calls = {
+                call_id: data 
+                for call_id, data in call_statuses.items() 
+                if not data.get('source_cleaned', False)
+            }
+            
+            if not active_calls:
+                print("\nNo active calls to check")
+            else:
+                print(f"\nChecking {len(active_calls)} active calls")
+            
+            for call_id, call_data in active_calls.items():
+                print(f"\nChecking call {call_id}")
+                success, status, call_info = await check_call_status(call_id)
+                
+                if success and status == RetellCallStatus.ENDED:
+                    print(f"Call {call_id} has ended - initiating cleanup")
+                    source_id = call_data.get('source_id')
+                    
+                    if source_id:
+                        print(f"Found source_id {source_id} for cleanup")
+                        success, message = await delete_knowledge_base_source(
+                            knowledge_base_id=knowledge_base_id,
+                            source_id=source_id
+                        )
+                        
+                        if success:
+                            call_data['status'] = RetellCallStatus.ENDED
+                            call_data['source_cleaned'] = True
+                            call_data['cleanup_timestamp'] = datetime.utcnow().isoformat()
+                            print(f"Successfully cleaned up source {source_id} for call {call_id}")
+                        else:
+                            print(f"Failed to clean up source {source_id}: {message}")
+                    else:
+                        print(f"Warning: No source_id found for call {call_id}")
+                
+                elif not success:
+                    print(f"Failed to check status for call {call_id}: {status}")
+                else:
+                    print(f"Call {call_id} status: {status} - no cleanup needed yet")
+            
+            # Wait before next check
+            print("\n--- Completed call status check cycle ---")
+            await asyncio.sleep(300)  # Check every 20 seconds
+            
+        except Exception as e:
+            print(f"Error in cleanup task: {str(e)}")
+            print(f"Error type: {type(e)}")
+            print(f"Error traceback: {traceback.format_exc()}")
+            await asyncio.sleep(60)  # Wait a minute before retrying if there's an error
+
+@app.on_event("startup")
+async def startup_event():
+    """Initialize background tasks on startup."""
+    try:
+        # Start the cleanup task
+        asyncio.create_task(cleanup_completed_calls())
+        print("Started background cleanup task for completed calls")
+    except Exception as e:
+        print(f"Error starting background tasks: {str(e)}")
+        print(f"Error type: {type(e)}")
+        print(f"Error traceback: {traceback.format_exc()}")
 
 app = app
