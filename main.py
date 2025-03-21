@@ -174,19 +174,108 @@ class JobMatchRequest(BaseModel):
     job_id: str
     top_k: Optional[int] = Field(default=5, gt=0, le=100)
 
+class CompanyCulture(BaseModel):
+    work_environment: str = "Not specified"
+    decision_making: str = "Not specified"
+    collaboration_style: str = "Not specified"
+    risk_tolerance: str = "Not specified"
+    values: Union[str, List[str]] = "Not specified"
+
+class CompanyInformation(BaseModel):
+    company_name: str = "Not specified"
+    company_stage: str = "Not specified"
+    most_recent_funding_amount: str = "Not specified"
+    investors: List[str] = Field(default_factory=list)
+    team_size: Union[int, str] = "Not specified"
+    founding_year: Union[int, str] = "Not specified"
+    company_mission: str = "Not specified"
+    target_market: str = "Not specified"
+    industry_vertical: str = "Not specified"
+    company_culture: CompanyCulture
+
+class RoleDetails(BaseModel):
+    job_title: str = "Not specified"
+    job_url: str = "Not specified"
+    positions_available: Union[int, str] = "Not specified"
+    hiring_urgency: str = "Not specified"
+    seniority_level: str = "Not specified"
+    work_arrangement: str = "Not specified"
+    city: List[str] = Field(default_factory=list)
+    state: List[str] = Field(default_factory=list)
+    visa_sponsorship: Union[bool, str] = "Not specified"
+    work_authorization: Union[str, List[str]] = "Not specified"
+    salary_range: str = "Not specified"
+    equity_range: str = "Not specified"
+    reporting_structure: str = "Not specified"
+    team_composition: str = "Not specified"
+    role_status: str = "Not specified"
+
+class TechnicalRequirements(BaseModel):
+    role_category: str = "Not specified"
+    tech_stack_must_haves: List[str] = Field(default_factory=list)
+    tech_stack_nice_to_haves: List[str] = Field(default_factory=list)
+    tech_stack_tags: List[str] = Field(default_factory=list)
+    tech_breadth_requirement: str = "Not specified"
+    minimum_years_of_experience: Union[int, str] = "Not specified"
+    domain_expertise: str = "Not specified"
+    ai_ml_experience: str = "Not specified"
+    infrastructure_experience: str = "Not specified"
+    system_design_level: str = "Not specified"
+    coding_proficiency_required: str = "Not specified"
+
+class QualificationRequirements(BaseModel):
+    leadership_requirement: str = "Not specified"
+    education_requirement: str = "Not specified"
+    advanced_degree_preference: Union[bool, str] = "Not specified"
+    papers_publications_preferred: Union[bool, str] = "Not specified"
+    prior_startup_experience: Union[bool, str] = "Not specified"
+    advancement_history_required: Union[bool, str] = "Not specified"
+    independent_work_capacity: str = "Not specified"
+    skills_must_have: List[str] = Field(default_factory=list)
+    skills_preferred: List[str] = Field(default_factory=list)
+
+class ProductAndRoleContext(BaseModel):
+    product_details: str = "Not specified"
+    product_development_stage: str = "Not specified"
+    technical_challenges: Union[str, List[str]] = "Not specified"
+    key_responsibilities: List[str] = Field(default_factory=list)
+    scope_of_impact: str = "Not specified"
+    expected_deliverables: List[str] = Field(default_factory=list)
+    product_development_methodology: str = "Not specified"
+
+class StartupSpecificFactors(BaseModel):
+    stage_of_codebase: str = "Not specified"
+    growth_trajectory: str = "Not specified"
+    founder_background: str = "Not specified"
+    funding_stability: str = "Not specified"
+    expected_hours: str = "Not specified"
+
+class CandidateTargeting(BaseModel):
+    ideal_companies: List[str] = Field(default_factory=list)
+    disqualifying_traits: List[str] = Field(default_factory=list)
+    deal_breakers: List[str] = Field(default_factory=list)
+    culture_fit_indicators: List[str] = Field(default_factory=list)
+    startup_mindset_requirements: str = "Not specified"
+    autonomy_level_required: str = "Not specified"
+    growth_mindset_indicators: List[str] = Field(default_factory=list)
+    ideal_candidate_profile: str = "Not specified"
+
+class InterviewProcess(BaseModel):
+    interview_process_tags: List[str] = Field(default_factory=list)
+    technical_assessment_type: str = "Not specified"
+    interview_focus_areas: List[str] = Field(default_factory=list)
+    time_to_hire: str = "Not specified"
+    decision_makers: Union[str, List[str]] = "Not specified"
+
 class JobSubmission(BaseModel):
-    id: str
-    title: str
-    company: str
-    description: str
-    role_details: Dict[str, Any] = Field(
-        default_factory=dict,
-        description="Details including city, state, salary_range, work_authorization"
-    )
-    company_information: Dict[str, Any] = Field(
-        default_factory=dict,
-        description="Company details including culture, work environment"
-    )
+    company_information: CompanyInformation
+    role_details: RoleDetails
+    technical_requirements: TechnicalRequirements
+    qualification_requirements: QualificationRequirements
+    product_and_role_context: ProductAndRoleContext
+    startup_specific_factors: StartupSpecificFactors
+    candidate_targeting: CandidateTargeting
+    interview_process: InterviewProcess
 
 class MatchResponse(BaseModel):
     status: str
@@ -743,31 +832,146 @@ async def submit_job(job: JobSubmission):
     ready for matching with candidates.
     """
     try:
-        # Create text representation and store in jobs index
-        vector = vector_store.get_embedding(
-            f"{job.title} {job.description}"
-        )
+        # Initialize VectorStore with OpenAI support
+        vector_store = VectorStore(init_openai=True)
         
+        # Generate a unique job ID
+        job_id = f"job_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}"
+        
+        # Create text representation for embedding
+        job_text = f"""
+        Company: {job.company_information.company_name}
+        Role: {job.role_details.job_title}
+        Location: {', '.join(job.role_details.city)} {', '.join(job.role_details.state)}
+        Tech Stack (Must Have): {', '.join(job.technical_requirements.tech_stack_must_haves)}
+        Tech Stack (Nice to Have): {', '.join(job.technical_requirements.tech_stack_nice_to_haves)}
+        Experience: {job.technical_requirements.minimum_years_of_experience}
+        Skills (Must Have): {', '.join(job.qualification_requirements.skills_must_have)}
+        Skills (Preferred): {', '.join(job.qualification_requirements.skills_preferred)}
+        Product Details: {job.product_and_role_context.product_details}
+        Key Responsibilities: {', '.join(job.product_and_role_context.key_responsibilities)}
+        """
+        
+        # Get embedding for the job text
+        vector = vector_store.get_embedding(job_text)
+        
+        # Flatten metadata for Pinecone
+        metadata = {
+            # Company Information
+            "company_name": job.company_information.company_name,
+            "company_stage": job.company_information.company_stage,
+            "funding_amount": job.company_information.most_recent_funding_amount,
+            "investors": job.company_information.investors,
+            "team_size": job.company_information.team_size,
+            "founding_year": job.company_information.founding_year,
+            "company_mission": job.company_information.company_mission,
+            "target_market": job.company_information.target_market,
+            "industry_vertical": job.company_information.industry_vertical,
+            "work_environment": job.company_information.company_culture.work_environment,
+            "decision_making": job.company_information.company_culture.decision_making,
+            "collaboration_style": job.company_information.company_culture.collaboration_style,
+            "risk_tolerance": job.company_information.company_culture.risk_tolerance,
+            "company_values": job.company_information.company_culture.values,
+            
+            # Role Details
+            "job_title": job.role_details.job_title,
+            "job_url": job.role_details.job_url,
+            "positions_available": job.role_details.positions_available,
+            "hiring_urgency": job.role_details.hiring_urgency,
+            "seniority_level": job.role_details.seniority_level,
+            "work_arrangement": job.role_details.work_arrangement,
+            "cities": job.role_details.city,
+            "states": job.role_details.state,
+            "visa_sponsorship": job.role_details.visa_sponsorship,
+            "work_authorization": job.role_details.work_authorization,
+            "salary_range": job.role_details.salary_range,
+            "equity_range": job.role_details.equity_range,
+            "reporting_structure": job.role_details.reporting_structure,
+            "team_composition": job.role_details.team_composition,
+            "role_status": job.role_details.role_status,
+            
+            # Technical Requirements
+            "role_category": job.technical_requirements.role_category,
+            "tech_stack_must_haves": job.technical_requirements.tech_stack_must_haves,
+            "tech_stack_nice_to_haves": job.technical_requirements.tech_stack_nice_to_haves,
+            "tech_stack_tags": job.technical_requirements.tech_stack_tags,
+            "tech_breadth": job.technical_requirements.tech_breadth_requirement,
+            "min_years_experience": job.technical_requirements.minimum_years_of_experience,
+            "domain_expertise": job.technical_requirements.domain_expertise,
+            "ai_ml_experience": job.technical_requirements.ai_ml_experience,
+            "infrastructure_experience": job.technical_requirements.infrastructure_experience,
+            "system_design_level": job.technical_requirements.system_design_level,
+            "coding_proficiency": job.technical_requirements.coding_proficiency_required,
+            
+            # Qualification Requirements
+            "leadership_requirement": job.qualification_requirements.leadership_requirement,
+            "education_requirement": job.qualification_requirements.education_requirement,
+            "advanced_degree": job.qualification_requirements.advanced_degree_preference,
+            "papers_required": job.qualification_requirements.papers_publications_preferred,
+            "startup_experience": job.qualification_requirements.prior_startup_experience,
+            "advancement_required": job.qualification_requirements.advancement_history_required,
+            "independence_level": job.qualification_requirements.independent_work_capacity,
+            "skills_must_have": job.qualification_requirements.skills_must_have,
+            "skills_preferred": job.qualification_requirements.skills_preferred,
+            
+            # Product and Role Context
+            "product_details": job.product_and_role_context.product_details,
+            "product_stage": job.product_and_role_context.product_development_stage,
+            "technical_challenges": job.product_and_role_context.technical_challenges,
+            "key_responsibilities": job.product_and_role_context.key_responsibilities,
+            "scope_of_impact": job.product_and_role_context.scope_of_impact,
+            "expected_deliverables": job.product_and_role_context.expected_deliverables,
+            "dev_methodology": job.product_and_role_context.product_development_methodology,
+            
+            # Startup Specific Factors
+            "codebase_stage": job.startup_specific_factors.stage_of_codebase,
+            "growth_trajectory": job.startup_specific_factors.growth_trajectory,
+            "founder_background": job.startup_specific_factors.founder_background,
+            "funding_stability": job.startup_specific_factors.funding_stability,
+            "expected_hours": job.startup_specific_factors.expected_hours,
+            
+            # Candidate Targeting
+            "ideal_companies": job.candidate_targeting.ideal_companies,
+            "disqualifying_traits": job.candidate_targeting.disqualifying_traits,
+            "deal_breakers": job.candidate_targeting.deal_breakers,
+            "culture_indicators": job.candidate_targeting.culture_fit_indicators,
+            "startup_mindset": job.candidate_targeting.startup_mindset_requirements,
+            "autonomy_required": job.candidate_targeting.autonomy_level_required,
+            "growth_indicators": job.candidate_targeting.growth_mindset_indicators,
+            "ideal_profile": job.candidate_targeting.ideal_candidate_profile,
+            
+            # Interview Process
+            "interview_tags": job.interview_process.interview_process_tags,
+            "assessment_type": job.interview_process.technical_assessment_type,
+            "interview_focus": job.interview_process.interview_focus_areas,
+            "time_to_hire": job.interview_process.time_to_hire,
+            "decision_makers": job.interview_process.decision_makers,
+            
+            # Additional Metadata
+            "timestamp": datetime.utcnow().isoformat(),
+            "job_id": job_id
+        }
+        
+        # Store in Pinecone with flattened metadata
         vector_store.jobs_index.upsert(vectors=[(
-            job.id,
+            job_id,
             vector,
-            {
-                "title": job.title,
-                "company": job.company,
-                "description": job.description,
-                "role_details": job.role_details,
-                "company_information": job.company_information,
-                "timestamp": datetime.utcnow().isoformat()
-            }
+            metadata
         )])
         
         return {
             "status": "success",
-            "message": f"Job {job.id} stored successfully",
-            "job_id": job.id
+            "job_id": job_id,
+            "message": "Job successfully submitted and indexed"
         }
+        
     except Exception as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        print(f"Error in submit_job: {str(e)}")
+        print(f"Error traceback: {traceback.format_exc()}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to submit job: {str(e)}"
+        )
 
 @app.get("/jobs/open-positions", response_model=List[Dict[str, Any]])
 async def list_open_positions():
