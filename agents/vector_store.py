@@ -6,11 +6,24 @@ import openai
 import time
 import tiktoken
 from tenacity import retry, stop_after_attempt, wait_exponential
+from dotenv import load_dotenv
+from openai import OpenAI
+import json
+from .matching_utils import (
+    check_location_match,
+    check_work_environment_match,
+    check_compensation_match,
+    check_work_authorization_match,
+    generate_match_reason
+)
 
 class VectorStore:
     def __init__(self, init_openai: bool = False):
         """Initialize Pinecone with environment variables."""
         print("Initializing Pinecone...")
+        
+        # Load environment variables
+        load_dotenv()
         
         # Initialize Pinecone
         pinecone_api_key = os.getenv('PINECONE_API_KEY')
@@ -517,4 +530,84 @@ class VectorStore:
             
         except Exception as e:
             print(f"Error processing resume with OpenAI: {str(e)}")
-            raise 
+            raise
+
+    def store_job(self, job_id: str, job_data: Dict[str, Any]) -> Dict[str, str]:
+        """Store job posting in vector database."""
+        try:
+            print(f"\n=== Storing job {job_id} ===")
+            
+            # Validate required fields
+            required_fields = ['job_title', 'company_name', 'paraform_link']
+            missing_fields = [field for field in required_fields if not job_data.get(field)]
+            if missing_fields:
+                print(f"Missing required fields: {', '.join(missing_fields)}")
+                raise ValueError(f"Missing required fields: {', '.join(missing_fields)}")
+
+            # Create text representation for embedding
+            job_text = f"""
+            Title: {job_data.get('job_title', '')}
+            Company: {job_data.get('company_name', '')}
+            Location: {job_data.get('location_city', '')}, {job_data.get('location_state', '')}
+            Description: {job_data.get('description', '')}
+            Requirements: {job_data.get('requirements', '')}
+            Benefits: {job_data.get('benefits', '')}
+            """
+            
+            # Create embedding for the job
+            vector = self.get_embedding(job_text)
+            
+            # Prepare metadata
+            metadata = {
+                "job_id": job_id,
+                "job_title": job_data.get("job_title"),
+                "company_name": job_data.get("company_name"),
+                "location_city": job_data.get("location_city"),
+                "location_state": job_data.get("location_state"),
+                "description": job_data.get("description"),
+                "requirements": job_data.get("requirements"),
+                "benefits": job_data.get("benefits"),
+                "paraform_link": job_data.get("paraform_link"),
+                "role_details": job_data.get("role_details", {}),
+                "company_information": job_data.get("company_information", {}),
+                "timestamp": datetime.utcnow().isoformat()
+            }
+            
+            # Store in Pinecone
+            print("Storing job in Pinecone...")
+            self.jobs_index.upsert(vectors=[(
+                job_id,
+                vector,
+                metadata
+            )])
+            
+            # Verify storage
+            print("\nVerifying storage...")
+            verification = self.jobs_index.query(
+                vector=[0] * 1536,
+                filter={"job_id": job_id},
+                top_k=1,
+                include_metadata=True
+            )
+            
+            if verification.matches:
+                print(f"Successfully verified storage. Found job with ID: {verification.matches[0].id}")
+            else:
+                print("Warning: Could not verify storage immediately. This might be due to indexing delay.")
+            
+            return {
+                "status": "success",
+                "message": f"Job {job_id} stored successfully"
+            }
+            
+        except Exception as e:
+            print(f"Error storing job: {str(e)}")
+            print(f"Error type: {type(e)}")
+            import traceback
+            print(f"Traceback: {traceback.format_exc()}")
+            return {
+                "status": "error",
+                "message": str(e)
+            }
+        finally:
+            print("=== Store job operation complete ===\n") 
