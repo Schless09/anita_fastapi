@@ -175,6 +175,9 @@ app = FastAPI(
     root_path_in_servers=False,  # Important for Vercel deployment
 )
 
+# Initialize in-memory storage for job statuses
+job_statuses: Dict[str, Dict[str, Any]] = {}
+
 # Configure CORS
 app.add_middleware(
     CORSMiddleware,
@@ -1185,13 +1188,17 @@ async def submit_job(
         )
 
 async def get_job_status(job_id: str) -> Optional[dict]:
+    """Get the status of a job from in-memory storage."""
     return job_statuses.get(job_id)
 
 async def set_job_status(job_id: str, status_data: dict):
+    """Set the status of a job in in-memory storage."""
     job_statuses[job_id] = status_data
 
 async def process_job_submission(job_id: str, job_data: dict):
+    """Process a job submission and update its status."""
     try:
+        # Initialize job status
         initial_status = {
             "status": "processing",
             "message": "Job submission received and processing started",
@@ -1199,18 +1206,27 @@ async def process_job_submission(job_id: str, job_data: dict):
             "job_id": job_id
         }
         await set_job_status(job_id, initial_status)
-        
-        # Process the job...
-        
-        final_status = {
-            "status": "completed",
-            "message": "Job processing completed successfully",
-            "timestamp": datetime.utcnow().isoformat(),
-            "job_id": job_id
+
+        # Process the job data
+        processed_data = {
+            "job_id": job_id,
+            "processed_at": datetime.utcnow().isoformat(),
+            "data": job_data
         }
-        await set_job_status(job_id, final_status)
-        return final_status
+
+        # Update job status with success
+        success_status = {
+            "status": "completed",
+            "message": "Job submission processed successfully",
+            "timestamp": datetime.utcnow().isoformat(),
+            "job_id": job_id,
+            "data": processed_data
+        }
+        await set_job_status(job_id, success_status)
+
+        return success_status
     except Exception as e:
+        # Update job status with error
         error_status = {
             "status": "error",
             "message": f"Error processing job: {str(e)}",
@@ -1218,7 +1234,7 @@ async def process_job_submission(job_id: str, job_data: dict):
             "job_id": job_id
         }
         await set_job_status(job_id, error_status)
-        return error_status
+        raise
 
 @app.get("/jobs/{job_id}/status")
 async def check_job_status(job_id: str):
