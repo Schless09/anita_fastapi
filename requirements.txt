@@ -14,7 +14,3 @@ tiktoken==0.6.0
 tenacity==8.2.3
 phonenumbers==8.13.31
 retell-sdk>=4.20.0
-
-# Redis
-redis>=5.0.1
-upstash-redis>=1.3.0
