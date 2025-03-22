@@ -5,8 +5,7 @@
       "src": "main.py",
       "use": "@vercel/python",
       "config": {
-        "maxLambdaSize": "15mb",
-        "runtime": "python3.9"
+        "maxDuration": 100
       }
     }
   ],
@@ -16,13 +15,5 @@
       "dest": "main.py"
     }
   ],
-  "buildCommand": "pip install --upgrade pip && pip install --no-cache-dir -r requirements.txt",
-  "functions": {
-    "api/*.py": {
-      "maxDuration": 100
-    },
-    "main.py": {
-      "maxDuration": 100
-    }
-  }
+  "buildCommand": "pip install --upgrade pip && pip install --no-cache-dir -r requirements.txt"
 }
