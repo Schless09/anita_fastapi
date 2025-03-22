@@ -16,5 +16,13 @@
       "dest": "main.py"
     }
   ],
-  "buildCommand": "pip install --upgrade pip && pip install --no-cache-dir -r requirements.txt"
+  "buildCommand": "pip install --upgrade pip && pip install --no-cache-dir -r requirements.txt",
+  "functions": {
+    "api/*.py": {
+      "maxDuration": 100
+    },
+    "main.py": {
+      "maxDuration": 100
+    }
+  }
 }
