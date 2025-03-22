@@ -1115,13 +1115,13 @@ async def merge_job_data(scraped_data: Dict[str, Any], transcript_data: Dict[str
     return merged_data
 
 @app.post("/jobs/submit")
-async def submit_job(file: UploadFile = File(...)):
+async def submit_job(file: UploadFile = File(...)) -> Dict[str, Any]:
     """Submit a job posting from a raw text file."""
     try:
         print("\n=== Starting Job Submission Process ===")
         print(f"Timestamp: {datetime.utcnow().isoformat()}")
         
-        # Generate a unique job ID
+        # Generate job ID
         job_id = str(int(time.time() * 1000))
         print(f"\nGenerated Job ID: {job_id}")
         
@@ -1166,126 +1166,93 @@ async def submit_job(file: UploadFile = File(...)):
         
         # Create a prompt for OpenAI to extract structured information
         print("Preparing OpenAI prompt...")
-        prompt = f"""
-        Please analyze the following job posting text and extract detailed information into a structured format.
-        The text may include a transcript of a conversation about the role and/or a formal job description.
-        
-        Return the information as a JSON object with the following fields:
-        {{
-            "company_name": string,
-            "company_website": string,
-            "paraform_url": string,
-            "company_stage": string,
-            "funding_details": {{
-                "most_recent_round": string,
-                "total_funding": string,
-                "key_investors": [string]
-            }},
-            "team_size": string,
-            "founding_year": string,
-            "company_mission": string,
-            "target_market": [string],
-            "industry_vertical": string,
-            "company_vision": string,
-            "company_growth_story": string,
-            "company_culture": {{
-                "work_environment": string,
-                "decision_making": string,
-                "collaboration_style": string,
-                "risk_tolerance": string,
-                "values": string
-            }},
-            "job_title": string,
-            "positions_available": string,
-            "hiring_urgency": string,
-            "seniority_level": string,
-            "work_arrangement": string,
-            "location": {{
-                "city": string,
-                "state": string,
-                "office_details": string
-            }},
-            "visa_sponsorship": string,
-            "compensation": {{
-                "base_salary_range": string,
-                "equity_details": string,
-                "total_comp_range": string
-            }},
-            "reporting_structure": string,
-            "team_composition": string,
-            "role_category": string,
-            "tech_stack": {{
-                "must_haves": [string],
-                "nice_to_haves": [string],
-                "tools_and_frameworks": [string]
-            }},
-            "experience_requirements": {{
-                "minimum_years": string,
-                "level": string,
-                "domain_expertise": [string],
-                "specific_skills": string
-            }},
-            "education_requirements": {{
-                "minimum": string,
-                "preferred": string,
-                "notes": string
-            }},
-            "key_responsibilities": [string],
-            "ideal_candidate_profile": string,
-            "interview_process": {{
-                "stages": [string],
-                "work_trial_details": string,
-                "timeline": string
-            }},
-            "deal_breakers": [string],
-            "growth_opportunities": string
-        }}
-
-        For any fields where information is not explicitly mentioned in the text, use "Not specified" for string fields and [] for array fields.
-        
-        Be particularly careful to:
-        1. Extract the company website URL if mentioned
-        2. Extract the Paraform job posting URL if present
-        3. Capture compensation details including base salary, equity, and total comp ranges
-        4. Extract technical requirements and must-have skills
-        5. Identify work arrangement and location details
-        6. Note interview process specifics
-        7. Include company stage and funding information
-
-        Text to analyze:
-        {raw_text}
-        """
-
-        response = await asyncio.to_thread(
-            client.chat.completions.create,
-            model="gpt-4-turbo-preview",
-            messages=[
-                {"role": "system", "content": "You are a job data extraction specialist. Extract relevant information from the transcript and format it according to the specified JSON structure. Only include information that is explicitly mentioned in the transcript."},
-                {"role": "user", "content": prompt}
-            ],
-            temperature=0.3,
-            max_tokens=2000
-        )
-
-        extracted_data = json.loads(response.choices[0].message.content)
-        return extracted_data
-
+        try:
+            response = await asyncio.to_thread(
+                client.chat.completions.create,
+                model="gpt-4-turbo-preview",
+                messages=[
+                    {"role": "system", "content": "You are a job data extraction specialist. Extract relevant information from the transcript and format it according to the specified JSON structure. Only include information that is explicitly mentioned in the transcript."},
+                    {"role": "user", "content": JOB_ANALYSIS_PROMPT.format(raw_text=raw_text)}
+                ],
+                temperature=0.3,
+                max_tokens=2000,
+                response_format={ "type": "json_object" }
+            )
+            
+            # Extract and validate the JSON response
+            if not response.choices or not response.choices[0].message.content:
+                raise ValueError("Empty response from OpenAI")
+                
+            try:
+                job_data = json.loads(response.choices[0].message.content)
+            except json.JSONDecodeError as json_err:
+                print(f"JSON parsing error: {str(json_err)}")
+                print(f"Raw response content: {response.choices[0].message.content}")
+                raise ValueError(f"Failed to parse OpenAI response as JSON: {str(json_err)}")
+            
+            # Generate embeddings for the job posting
+            print("\nGenerating embeddings...")
+            embedding_response = await client.embeddings.create(
+                model="text-embedding-3-small",
+                input=raw_text
+            )
+            embedding = embedding_response.data[0].embedding
+            
+            # Prepare metadata
+            job_metadata = {
+                "job_id": job_id,
+                "timestamp": datetime.utcnow().isoformat(),
+                "source": "internal",
+                "original_filename": file.filename,
+                "paraform_url": paraform_url or "Not specified"
+            }
+            
+            # Flatten and clean the job data
+            flattened_data = flatten_and_convert(job_data)
+            job_metadata.update(flattened_data)
+            
+            # Clean metadata for Pinecone
+            cleaned_metadata = clean_metadata_for_pinecone(job_metadata)
+            
+            # Store in Pinecone
+            print("\nStoring job in Pinecone...")
+            job_index.upsert(
+                vectors=[{
+                    "id": job_id,
+                    "values": embedding,
+                    "metadata": cleaned_metadata
+                }]
+            )
+            
+            print("\nJob submission completed successfully")
+            return {
+                "status": "success",
+                "job_id": job_id,
+                "message": "Job processed and stored successfully",
+                "data": job_data
+            }
+            
+        except Exception as api_error:
+            print(f"OpenAI API error: {str(api_error)}")
+            print(f"Error type: {type(api_error)}")
+            print(f"Error traceback: {traceback.format_exc()}")
+            raise HTTPException(
+                status_code=500,
+                detail=f"Error processing job with OpenAI: {str(api_error)}"
+            )
+            
+    except HTTPException:
+        raise
     except Exception as e:
-        print(f"Error processing transcript: {str(e)}")
-        return {}
-
-async def merge_job_data(scraped_data: Dict[str, Any], transcript_data: Dict[str, Any]) -> Dict[str, Any]:
-    """
-    Merge scraped job data with transcript data, preferring transcript data when available.
-    """
-    merged_data = scraped_data.copy()
-    
-    # Update with transcript data, only if the field exists in transcript_data
-    for key, value in transcript_data.items():
-        if value is not None:
-            merged_data[key] = value
-    
-    return merged_data
+        print(f"Error in submit_job: {str(e)}")
+        print(f"Error type: {type(e)}")
+        print(f"Error traceback: {traceback.format_exc()}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error submitting job: {str(e)}"
+        )
+    finally:
+        print("=== Job Submission Process Complete ===\n")
 
 class JobStatus(str, Enum):
     PENDING = "pending"
