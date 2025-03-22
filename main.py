@@ -30,7 +30,6 @@ import time
 import re
 from urllib.parse import urlparse
 from fastapi.background import BackgroundTasks
-from redis_client import redis_client
 
 # Load environment variables
 load_dotenv()
@@ -1141,7 +1140,7 @@ async def submit_job(
             "created_at": datetime.utcnow().isoformat(),
             "filename": file.filename
         }
-        await redis_client.set_job_status(job_id, initial_status)
+        await set_job_status(job_id, initial_status)
         
         # Add job to background tasks
         background_tasks.add_task(
@@ -1167,16 +1166,48 @@ async def submit_job(
             detail=f"Error submitting job: {str(e)}"
         )
 
+async def get_job_status(job_id: str) -> Optional[dict]:
+    return job_statuses.get(job_id)
+
+async def set_job_status(job_id: str, status_data: dict):
+    job_statuses[job_id] = status_data
+
+async def process_job_submission(job_id: str, job_data: dict):
+    try:
+        initial_status = {
+            "status": "processing",
+            "message": "Job submission received and processing started",
+            "timestamp": datetime.utcnow().isoformat(),
+            "job_id": job_id
+        }
+        await set_job_status(job_id, initial_status)
+        
+        # Process the job...
+        
+        final_status = {
+            "status": "completed",
+            "message": "Job processing completed successfully",
+            "timestamp": datetime.utcnow().isoformat(),
+            "job_id": job_id
+        }
+        await set_job_status(job_id, final_status)
+        return final_status
+    except Exception as e:
+        error_status = {
+            "status": "error",
+            "message": f"Error processing job: {str(e)}",
+            "timestamp": datetime.utcnow().isoformat(),
+            "job_id": job_id
+        }
+        await set_job_status(job_id, error_status)
+        return error_status
+
 @app.get("/jobs/{job_id}/status")
-async def get_job_status(job_id: str) -> Dict[str, Any]:
-    """Get the status of a submitted job."""
-    status_data = await redis_client.get_job_status(job_id)
-    if not status_data:
-        raise HTTPException(
-            status_code=404,
-            detail=f"No job found with ID: {job_id}"
-        )
-    return status_data
+async def check_job_status(job_id: str):
+    status = await get_job_status(job_id)
+    if not status:
+        raise HTTPException(status_code=404, detail="Job not found")
+    return status
 
 def clean_metadata_for_pinecone(metadata: Dict[str, Any]) -> Dict[str, Any]:
     """Clean metadata to ensure it meets Pinecone's requirements."""
@@ -1201,7 +1232,7 @@ async def process_job_in_background(job_id: str, file_content: bytes, filename: 
     """Process the job in the background."""
     try:
         # Update status to processing
-        await redis_client.set_job_status(job_id, {
+        await set_job_status(job_id, {
             "status": JobStatus.PROCESSING,
             "processing_started_at": datetime.utcnow().isoformat()
         })
@@ -1273,7 +1304,7 @@ async def process_job_in_background(job_id: str, file_content: bytes, filename: 
         )
         
         # Update job status in Redis
-        await redis_client.set_job_status(job_id, {
+        await set_job_status(job_id, {
             "status": JobStatus.COMPLETED,
             "data": job_data,
             "completed_at": datetime.utcnow().isoformat()
@@ -1285,7 +1316,7 @@ async def process_job_in_background(job_id: str, file_content: bytes, filename: 
             "type": type(e).__name__,
             "traceback": traceback.format_exc()
         }
-        await redis_client.set_job_status(job_id, {
+        await set_job_status(job_id, {
             "status": JobStatus.FAILED,
             "error": error_detail,
             "failed_at": datetime.utcnow().isoformat()
@@ -2407,51 +2438,5 @@ async def get_job(job_id: str):
             status_code=500,
             detail=f"Failed to get job: {str(e)}"
         )
-
-@app.get("/test/redis")
-async def test_redis_connection():
-    """Test Redis connection and basic operations."""
-    try:
-        # Test setting a value
-        test_key = "test:connection"
-        test_value = {
-            "status": "testing",
-            "timestamp": datetime.utcnow().isoformat()
-        }
-        success = await redis_client.set_job_status(test_key, test_value)
-        
-        if not success:
-            return {
-                "status": "error",
-                "message": "Failed to set test value in Redis"
-            }
-        
-        # Test getting the value
-        retrieved_value = await redis_client.get_job_status(test_key)
-        
-        if not retrieved_value:
-            return {
-                "status": "error",
-                "message": "Failed to retrieve test value from Redis"
-            }
-        
-        # Test deleting the value
-        delete_success = await redis_client.delete_job_status(test_key)
-        
-        return {
-            "status": "success",
-            "message": "Redis connection test successful",
-            "test_value": retrieved_value,
-            "delete_success": delete_success
-        }
-        
-    except Exception as e:
-        print(f"Redis connection test error: {str(e)}")
-        print(f"Error type: {type(e)}")
-        print(f"Error traceback: {traceback.format_exc()}")
-        return {
-            "status": "error",
-            "message": f"Redis connection test failed: {str(e)}"
-        }
 
 app = app
