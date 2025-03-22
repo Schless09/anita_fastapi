@@ -41,8 +41,123 @@ if not OPENAI_API_KEY:
 # Initialize OpenAI client
 openai_client = openai.OpenAI(api_key=OPENAI_API_KEY)
 
-# Initialize call status tracking
-call_statuses = {}
+# Initialize in-memory storage for job statuses
+job_statuses: Dict[str, Dict[str, Any]] = {}
+
+# Job analysis prompt template
+JOB_ANALYSIS_PROMPT = """
+Please analyze the following job posting and extract key information in a structured format.
+Format the response as a JSON object with the following structure:
+
+{
+    "company_information": {
+        "company_name": string,
+        "company_url": string,
+        "company_stage": string,
+        "most_recent_funding_round_amount": string,
+        "total_funding_amount": string,
+        "investors": array of strings,
+        "team_size": string,
+        "founding_year": string,
+        "company_mission": string,
+        "target_market": array of strings,
+        "industry_vertical": string,
+        "company_vision": string,
+        "company_growth_story": string,
+        "company_culture": {
+            "work_environment": string,
+            "decision_making": string,
+            "collaboration_style": string,
+            "risk_tolerance": string,
+            "values": string
+        }
+    },
+    "role_details": {
+        "job_title": string,
+        "job_url": string,
+        "positions_available": string,
+        "hiring_urgency": string,
+        "seniority_level": string,
+        "work_arrangement": string,
+        "city": array of strings,
+        "state": array of strings,
+        "visa_sponsorship": string,
+        "work_authorization": array of strings,
+        "salary_range": string,
+        "equity_range": string,
+        "reporting_structure": string,
+        "team_composition": string,
+        "role_status": string,
+        "role_category": string
+    },
+    "technical_requirements": {
+        "tech_stack_must_haves": array of strings,
+        "tech_stack_nice_to_haves": array of strings,
+        "tech_stack_tags": array of strings,
+        "tech_breadth_requirement": string,
+        "minimum_years_of_experience": string,
+        "domain_expertise": array of strings,
+        "ai_ml_experience": string,
+        "infrastructure_experience": array of strings,
+        "system_design_level": string,
+        "coding_proficiency_required": string,
+        "coding_languages_versions": array of strings,
+        "version_control_experience": array of strings,
+        "ci_cd_tools": array of strings,
+        "collaborative_tools": array of strings
+    },
+    "qualifications": {
+        "leadership_requirement": string,
+        "education_requirement": string,
+        "advanced_degree_preference": string,
+        "papers_publications_preferred": string,
+        "prior_startup_experience": string,
+        "advancement_history_required": boolean,
+        "independent_work_capacity": string,
+        "skills_must_have": array of strings,
+        "skills_preferred": array of strings
+    },
+    "project_information": {
+        "product_details": string,
+        "product_development_stage": string,
+        "technical_challenges": array of strings,
+        "key_responsibilities": array of strings,
+        "scope_of_impact": array of strings,
+        "expected_deliverables": array of strings,
+        "product_development_methodology": array of strings,
+        "stage_of_codebase": string
+    },
+    "company_stability": {
+        "growth_trajectory": string,
+        "founder_background": string,
+        "funding_stability": string,
+        "expected_hours": string
+    },
+    "candidate_fit": {
+        "ideal_companies": array of strings,
+        "disqualifying_traits": array of strings,
+        "deal_breakers": array of strings,
+        "culture_fit_indicators": array of strings,
+        "startup_mindset_requirements": array of strings,
+        "autonomy_level_required": string,
+        "growth_mindset_indicators": array of strings,
+        "ideal_candidate_profile": string
+    },
+    "interview_process": {
+        "interview_process_tags": array of strings,
+        "technical_assessment_type": array of strings,
+        "interview_focus_areas": array of strings,
+        "time_to_hire": string,
+        "decision_makers": array of strings,
+        "recruiter_pitch_points": array of strings
+    }
+}
+
+For fields where information is not explicitly provided in the job posting, use "Not specified" for string fields, [] for arrays, and false for booleans.
+
+Job Posting:
+{raw_text}
+"""
 
 # Initialize Pinecone
 pc = Pinecone(api_key=os.getenv("PINECONE_API_KEY"))
@@ -1140,114 +1255,237 @@ async def submit_job(file: UploadFile = File(...)):
         Text to analyze:
         {raw_text}
         """
+
+        response = await asyncio.to_thread(
+            client.chat.completions.create,
+            model="gpt-4-turbo-preview",
+            messages=[
+                {"role": "system", "content": "You are a job data extraction specialist. Extract relevant information from the transcript and format it according to the specified JSON structure. Only include information that is explicitly mentioned in the transcript."},
+                {"role": "user", "content": prompt}
+            ],
+            temperature=0.3,
+            max_tokens=2000
+        )
+
+        extracted_data = json.loads(response.choices[0].message.content)
+        return extracted_data
+
+    except Exception as e:
+        print(f"Error processing transcript: {str(e)}")
+        return {}
+
+async def merge_job_data(scraped_data: Dict[str, Any], transcript_data: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Merge scraped job data with transcript data, preferring transcript data when available.
+    """
+    merged_data = scraped_data.copy()
+    
+    # Update with transcript data, only if the field exists in transcript_data
+    for key, value in transcript_data.items():
+        if value is not None:
+            merged_data[key] = value
+    
+    return merged_data
+
+class JobStatus(str, Enum):
+    PENDING = "pending"
+    PROCESSING = "processing"
+    COMPLETED = "completed"
+    FAILED = "failed"
+
+@app.post("/jobs/submit")
+async def submit_job(
+    background_tasks: BackgroundTasks,
+    file: UploadFile = File(...)
+) -> Dict[str, Any]:
+    """Submit a job posting from a raw text file."""
+    try:
+        # Generate job ID
+        job_id = str(int(time.time() * 1000))
         
-        print("Sending request to OpenAI for processing...")
-        response = client.chat.completions.create(
+        # Store file content
+        file_content = await file.read()
+        
+        # Initialize job status in Redis
+        initial_status = {
+            "status": JobStatus.PENDING,
+            "created_at": datetime.utcnow().isoformat(),
+            "filename": file.filename
+        }
+        await redis_client.set_job_status(job_id, initial_status)
+        
+        # Add job to background tasks
+        background_tasks.add_task(
+            process_job_in_background,
+            job_id,
+            file_content,
+            file.filename
+        )
+        
+        return {
+            "status": "accepted",
+            "job_id": job_id,
+            "message": "Job submitted successfully and is being processed",
+            "status_endpoint": f"/jobs/{job_id}/status"
+        }
+        
+    except Exception as e:
+        print(f"Error submitting job: {str(e)}")
+        print(f"Error type: {type(e)}")
+        print(f"Error traceback: {traceback.format_exc()}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error submitting job: {str(e)}"
+        )
+
+@app.get("/jobs/{job_id}/status")
+async def get_job_status(job_id: str) -> Dict[str, Any]:
+    """Get the status of a submitted job."""
+    status_data = await redis_client.get_job_status(job_id)
+    if not status_data:
+        raise HTTPException(
+            status_code=404,
+            detail=f"No job found with ID: {job_id}"
+        )
+    return status_data
+
+def clean_metadata_for_pinecone(metadata: Dict[str, Any]) -> Dict[str, Any]:
+    """Clean metadata to ensure it meets Pinecone's requirements."""
+    cleaned = {}
+    for key, value in metadata.items():
+        if value is None:
+            cleaned[key] = ""  # Convert None to empty string
+        elif isinstance(value, (str, int, float, bool)):
+            cleaned[key] = value
+        elif isinstance(value, list):
+            # Ensure all list elements are strings
+            cleaned[key] = [str(item) if item is not None else "" for item in value]
+        elif isinstance(value, dict):
+            # Convert nested dict to string representation
+            cleaned[key] = json.dumps(value)
+        else:
+            # Convert any other type to string
+            cleaned[key] = str(value)
+    return cleaned
+
+async def process_job_in_background(job_id: str, file_content: bytes, filename: str):
+    """Process the job in the background."""
+    try:
+        # Update status to processing
+        await redis_client.set_job_status(job_id, {
+            "status": JobStatus.PROCESSING,
+            "processing_started_at": datetime.utcnow().isoformat()
+        })
+        
+        # Decode the file content
+        try:
+            raw_text = file_content.decode('utf-8')
+        except UnicodeDecodeError:
+            raw_text = file_content.decode('latin-1')
+        
+        # Clean the text
+        raw_text = raw_text.replace('\x00', '')
+        raw_text = '\n'.join(line.strip('\r') for line in raw_text.splitlines())
+        raw_text = raw_text.strip()
+        
+        # Extract Paraform URL if present
+        paraform_url = None
+        paraform_url_match = re.search(r'https?://(?:www\.)?paraform\.com/[^\s]+', raw_text)
+        if paraform_url_match:
+            paraform_url = paraform_url_match.group(0)
+        
+        # Process with OpenAI
+        client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+        response = await client.chat.completions.create(
             model="gpt-4-turbo-preview",
             messages=[
                 {"role": "system", "content": "You are a job posting analyzer. Extract structured information from job details and transcripts."},
-                {"role": "user", "content": prompt}
+                {"role": "user", "content": JOB_ANALYSIS_PROMPT.format(raw_text=raw_text)}
             ],
             response_format={ "type": "json_object" }
         )
-        print("Received response from OpenAI")
         
-        # Parse the OpenAI response
-        print("\nParsing OpenAI response...")
         job_data = json.loads(response.choices[0].message.content)
         
-        # Add the Paraform URL if found but not extracted by OpenAI
+        # Add Paraform URL if found
         if paraform_url and (not job_data.get('paraform_url') or job_data['paraform_url'] == "Not specified"):
             job_data['paraform_url'] = paraform_url
-            print("Added Paraform URL from regex match")
         
-        print("\n=== Extracted Job Data ===")
-        print(json.dumps(job_data, indent=2))
-        print(f"Successfully extracted {len(job_data)} fields")
-        
-        # Create embeddings for the job content
-        print("\nGenerating embeddings for job content...")
-        embedding_response = client.embeddings.create(
+        # Generate embeddings
+        embedding_response = await client.embeddings.create(
             model="text-embedding-3-small",
             input=raw_text
         )
         embedding = embedding_response.data[0].embedding
-        print("Embeddings generated successfully")
         
-        # Prepare metadata for Pinecone
-        print("\nPreparing metadata for Pinecone...")
+        # Prepare metadata
         job_metadata = {
             "job_id": job_id,
             "timestamp": datetime.utcnow().isoformat(),
             "source": "internal",
-            "original_filename": file.filename,
+            "original_filename": filename,
             "paraform_url": paraform_url or "Not specified"
         }
         
-        # Flatten nested structures and ensure all metadata values are strings or arrays of strings
-        def flatten_and_convert(data, prefix=""):
-            result = {}
-            for key, value in data.items():
-                if isinstance(value, dict):
-                    result.update(flatten_and_convert(value, f"{prefix}{key}_"))
-                elif isinstance(value, list):
-                    result[f"{prefix}{key}"] = [str(item) for item in value] if value else ["Not specified"]
-                elif value is None or value == "":
-                    result[f"{prefix}{key}"] = "Not specified"
-                else:
-                    result[f"{prefix}{key}"] = str(value)
-            return result
-        
-        # Flatten and convert the job data
+        # Flatten and clean the job data
         flattened_data = flatten_and_convert(job_data)
         job_metadata.update(flattened_data)
         
-        print("\n=== Final Metadata for Pinecone ===")
-        print(json.dumps(job_metadata, indent=2))
-        print(f"Metadata prepared with {len(job_metadata)} fields")
+        # Clean metadata for Pinecone
+        cleaned_metadata = clean_metadata_for_pinecone(job_metadata)
         
-        # Upsert to Pinecone
-        print("\nStoring job data in Pinecone...")
-        try:
-            job_index.upsert(
-                vectors=[{
-                    "id": job_id,
-                    "values": embedding,
-                    "metadata": job_metadata
-                }]
-            )
-            print("Successfully stored job data in Pinecone")
-        except Exception as e:
-            print(f"\nERROR storing in Pinecone:")
-            print(f"Error type: {type(e)}")
-            print(f"Error message: {str(e)}")
-            print(f"Error traceback: {traceback.format_exc()}")
-            raise
+        # Store in Pinecone
+        job_index.upsert(
+            vectors=[{
+                "id": job_id,
+                "values": embedding,
+                "metadata": cleaned_metadata
+            }]
+        )
         
-        print("\n=== Job Submission Process Complete ===")
-        print(f"Job ID: {job_id}")
-        print(f"Company: {job_metadata.get('company_name', 'Not specified')}")
-        print(f"Position: {job_metadata.get('job_title', 'Not specified')}")
-        print(f"Paraform URL: {job_metadata.get('paraform_url', 'Not specified')}")
-        print(f"Company Website: {job_metadata.get('company_website', 'Not specified')}")
-        print("=====================================\n")
-        
-        return {
-            "status": "success",
-            "job_id": job_id,
-            "message": "Job posting successfully submitted and processed",
-            "data": job_data
-        }
+        # Update job status in Redis
+        await redis_client.set_job_status(job_id, {
+            "status": JobStatus.COMPLETED,
+            "data": job_data,
+            "completed_at": datetime.utcnow().isoformat()
+        })
         
     except Exception as e:
-        print(f"\nERROR in submit_job:")
-        print(f"Error type: {type(e)}")
-        print(f"Error message: {str(e)}")
-        print(f"Error traceback: {traceback.format_exc()}")
-        raise HTTPException(
-            status_code=500,
-            detail=f"Error processing job data: {str(e)}"
-        )
+        error_detail = {
+            "error": str(e),
+            "type": type(e).__name__,
+            "traceback": traceback.format_exc()
+        }
+        await redis_client.set_job_status(job_id, {
+            "status": JobStatus.FAILED,
+            "error": error_detail,
+            "failed_at": datetime.utcnow().isoformat()
+        })
+        print(f"Error processing job {job_id}:")
+        print(json.dumps(error_detail, indent=2))
+
+def flatten_and_convert(data: Dict[str, Any]) -> Dict[str, Any]:
+    """Flatten nested dictionaries and convert values to Pinecone-compatible types."""
+    flattened = {}
+    for key, value in data.items():
+        if isinstance(value, dict):
+            # Flatten nested dictionary
+            nested = flatten_and_convert(value)
+            for nested_key, nested_value in nested.items():
+                flattened[f"{key}_{nested_key}"] = nested_value
+        elif isinstance(value, list):
+            # Convert list to string representation if not all elements are strings
+            if not all(isinstance(item, str) for item in value):
+                flattened[key] = json.dumps(value)
+            else:
+                flattened[key] = value
+        elif value is None:
+            # Convert None to empty string
+            flattened[key] = ""
+        else:
+            # Convert other values to string
+            flattened[key] = str(value)
+    return flattened
 
 @app.get("/jobs/open-positions", response_model=List[Dict[str, Any]])
 async def list_open_positions():
@@ -1548,8 +1786,8 @@ async def retry_knowledge_base_source_cleanup(knowledge_base_id: str, source_id:
                 if response.status_code in (200, 404):
                     print(f"Successfully deleted knowledge base source {source_id} on retry attempt {attempt + 1}")
                     return True
-                
-                print(f"Retry attempt {attempt + 1} failed for knowledge base source {source_id}")
+            
+            print(f"Retry attempt {attempt + 1} failed for knowledge base source {source_id}")
             
         except Exception as e:
             print(f"Error in retry attempt {attempt + 1}: {str(e)}")
@@ -1688,7 +1926,7 @@ async def add_to_knowledge_base(resume: UploadFile, knowledge_base_id: str) -> T
                         if hasattr(response, 'knowledge_base_sources'):
                             print(f"Sources: {response.knowledge_base_sources}")
                         return False, None
-                    
+            
             except Exception as e:
                 print(f"Error adding file to knowledge base: {str(e)}")
                 print(f"Error type: {type(e)}")
@@ -1702,7 +1940,6 @@ async def add_to_knowledge_base(resume: UploadFile, knowledge_base_id: str) -> T
                     print(f"Cleaned up temporary file: {temp_file.name}")
                 except Exception as e:
                     print(f"Error cleaning up temporary file: {str(e)}")
-                    
     except Exception as e:
         print(f"Error in add_to_knowledge_base: {str(e)}")
         print(f"Error type: {type(e)}")
@@ -1917,7 +2154,7 @@ async def retell_webhook(payload: RetellWebhookPayload):
                     asyncio.create_task(retry_knowledge_base_source_cleanup(knowledge_base_id, source_id))
             else:
                 print("Warning: No source_id found in webhook metadata or stored call data")
-            
+        
         return {
             "status": "success",
             "message": "Webhook processed successfully",
@@ -2343,5 +2580,51 @@ async def get_job(job_id: str):
             status_code=500,
             detail=f"Failed to get job: {str(e)}"
         )
+
+@app.get("/test/redis")
+async def test_redis_connection():
+    """Test Redis connection and basic operations."""
+    try:
+        # Test setting a value
+        test_key = "test:connection"
+        test_value = {
+            "status": "testing",
+            "timestamp": datetime.utcnow().isoformat()
+        }
+        success = await redis_client.set_job_status(test_key, test_value)
+        
+        if not success:
+            return {
+                "status": "error",
+                "message": "Failed to set test value in Redis"
+            }
+        
+        # Test getting the value
+        retrieved_value = await redis_client.get_job_status(test_key)
+        
+        if not retrieved_value:
+            return {
+                "status": "error",
+                "message": "Failed to retrieve test value from Redis"
+            }
+        
+        # Test deleting the value
+        delete_success = await redis_client.delete_job_status(test_key)
+        
+        return {
+            "status": "success",
+            "message": "Redis connection test successful",
+            "test_value": retrieved_value,
+            "delete_success": delete_success
+        }
+        
+    except Exception as e:
+        print(f"Redis connection test error: {str(e)}")
+        print(f"Error type: {type(e)}")
+        print(f"Error traceback: {traceback.format_exc()}")
+        return {
+            "status": "error",
+            "message": f"Redis connection test failed: {str(e)}"
+        }
 
 app = app
