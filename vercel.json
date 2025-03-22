@@ -5,7 +5,10 @@
       "src": "main.py",
       "use": "@vercel/python",
       "config": {
-        "maxDuration": 100
+        "maxDuration": 100,
+        "maxLambdaSize": "15mb",
+        "runtime": "python3.12",
+        "fluidCompute": true
       }
     }
   ],

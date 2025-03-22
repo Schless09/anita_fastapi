@@ -164,15 +164,42 @@ call_statuses = {}
 pc = Pinecone(api_key=os.getenv("PINECONE_API_KEY"))
 job_index = pc.Index("job-details")
 
+# Initialize FastAPI app with Vercel Fluid Compute optimizations
 app = FastAPI(
-    title="Anita AI Recruitment API",
-    description="API for AI-driven recruitment with enhanced candidate-job matching",
-    version="2.0.0"
+    title="Anita API",
+    description="API for Anita's AI-powered recruiting platform",
+    version="1.0.0",
+    docs_url="/docs",
+    redoc_url="/redoc",
+    openapi_url="/openapi.json",
+    root_path_in_servers=False,  # Important for Vercel deployment
 )
 
+# Configure CORS
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # Update this with your frontend URL in production
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# Add Vercel-specific middleware for better performance
+@app.middleware("http")
+async def add_vercel_headers(request: Request, call_next):
+    response = await call_next(request)
+    response.headers["x-vercel-cache"] = "MISS"  # Allow Vercel to cache responses
+    response.headers["Cache-Control"] = "s-maxage=1, stale-while-revalidate=59"  # Edge caching strategy
+    return response
+
+# Health check endpoint optimized for Vercel
 @app.get("/health")
-def health_check():
-    return {"status": "healthy"}
+async def health_check():
+    return {
+        "status": "healthy",
+        "timestamp": datetime.utcnow().isoformat(),
+        "environment": "vercel"
+    }
 
 interaction_agent = InteractionAgent()
 brain_agent = BrainAgent()
@@ -492,15 +519,6 @@ class RetellWebhookPayload(BaseModel):
     call_status: RetellCallStatus
     metadata: Dict[str, Any]
     transcript: Optional[str] = None
-
-# Add CORS middleware
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],  # Allows all origins
-    allow_credentials=True,
-    allow_methods=["*"],  # Allows all methods
-    allow_headers=["*"],  # Allows all headers
-)
 
 async def process_pdf_to_text(file: UploadFile) -> Dict[str, Any]:
     """Process a PDF file and extract its text content."""
