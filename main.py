@@ -9,7 +9,7 @@ from datetime import datetime, timedelta
 import os
 from dotenv import load_dotenv
 import httpx
-from enum import Enum, str
+from enum import Enum
 import openai
 from pydantic import ValidationError
 import json
