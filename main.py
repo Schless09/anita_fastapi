@@ -5,7 +5,7 @@ from agents.interaction_agent import InteractionAgent
 from agents.vector_store import VectorStore
 from pydantic import BaseModel, Field, validator
 from typing import List, Optional, Dict, Any, Literal, Union, Tuple
-from datetime import datetime
+from datetime import datetime, timedelta
 import os
 from dotenv import load_dotenv
 import httpx
@@ -29,6 +29,7 @@ from retell import Retell
 import time
 import re
 from urllib.parse import urlparse
+import uuid
 
 # Load environment variables
 load_dotenv()
@@ -46,120 +47,97 @@ job_statuses: Dict[str, Dict[str, Any]] = {}
 
 # Job analysis prompt template
 JOB_ANALYSIS_PROMPT = """
-Please analyze the following job posting and extract key information in a structured format.
-Format the response as a JSON object with the following structure:
+Please analyze the following job posting text and extract detailed information into a structured format.
+The text may include a transcript of a conversation about the role and/or a formal job description.
 
-{
-    "company_information": {
-        "company_name": string,
-        "company_url": string,
-        "company_stage": string,
-        "most_recent_funding_round_amount": string,
-        "total_funding_amount": string,
-        "investors": array of strings,
-        "team_size": string,
-        "founding_year": string,
-        "company_mission": string,
-        "target_market": array of strings,
-        "industry_vertical": string,
-        "company_vision": string,
-        "company_growth_story": string,
-        "company_culture": {
-            "work_environment": string,
-            "decision_making": string,
-            "collaboration_style": string,
-            "risk_tolerance": string,
-            "values": string
-        }
-    },
-    "role_details": {
-        "job_title": string,
-        "job_url": string,
-        "positions_available": string,
-        "hiring_urgency": string,
-        "seniority_level": string,
-        "work_arrangement": string,
-        "city": array of strings,
-        "state": array of strings,
-        "visa_sponsorship": string,
-        "work_authorization": array of strings,
-        "salary_range": string,
-        "equity_range": string,
-        "reporting_structure": string,
-        "team_composition": string,
-        "role_status": string,
-        "role_category": string
-    },
-    "technical_requirements": {
-        "tech_stack_must_haves": array of strings,
-        "tech_stack_nice_to_haves": array of strings,
-        "tech_stack_tags": array of strings,
-        "tech_breadth_requirement": string,
-        "minimum_years_of_experience": string,
-        "domain_expertise": array of strings,
-        "ai_ml_experience": string,
-        "infrastructure_experience": array of strings,
-        "system_design_level": string,
-        "coding_proficiency_required": string,
-        "coding_languages_versions": array of strings,
-        "version_control_experience": array of strings,
-        "ci_cd_tools": array of strings,
-        "collaborative_tools": array of strings
-    },
-    "qualifications": {
-        "leadership_requirement": string,
-        "education_requirement": string,
-        "advanced_degree_preference": string,
-        "papers_publications_preferred": string,
-        "prior_startup_experience": string,
-        "advancement_history_required": boolean,
-        "independent_work_capacity": string,
-        "skills_must_have": array of strings,
-        "skills_preferred": array of strings
-    },
-    "project_information": {
-        "product_details": string,
-        "product_development_stage": string,
-        "technical_challenges": array of strings,
-        "key_responsibilities": array of strings,
-        "scope_of_impact": array of strings,
-        "expected_deliverables": array of strings,
-        "product_development_methodology": array of strings,
-        "stage_of_codebase": string
-    },
-    "company_stability": {
-        "growth_trajectory": string,
-        "founder_background": string,
-        "funding_stability": string,
-        "expected_hours": string
-    },
-    "candidate_fit": {
-        "ideal_companies": array of strings,
-        "disqualifying_traits": array of strings,
-        "deal_breakers": array of strings,
-        "culture_fit_indicators": array of strings,
-        "startup_mindset_requirements": array of strings,
-        "autonomy_level_required": string,
-        "growth_mindset_indicators": array of strings,
-        "ideal_candidate_profile": string
-    },
-    "interview_process": {
-        "interview_process_tags": array of strings,
-        "technical_assessment_type": array of strings,
-        "interview_focus_areas": array of strings,
-        "time_to_hire": string,
-        "decision_makers": array of strings,
-        "recruiter_pitch_points": array of strings
-    }
-}
+Return the information as a JSON object with the following fields:
+{{
+    "company_name": string,
+    "company_website": string,
+    "paraform_url": string,
+    "company_stage": string,
+    "funding_details": {{
+        "most_recent_round": string,
+        "total_funding": string,
+        "key_investors": [string]
+    }},
+    "team_size": string,
+    "founding_year": string,
+    "company_mission": string,
+    "target_market": [string],
+    "industry_vertical": string,
+    "company_vision": string,
+    "company_growth_story": string,
+    "company_culture": {{
+        "work_environment": string,
+        "decision_making": string,
+        "collaboration_style": string,
+        "risk_tolerance": string,
+        "values": string
+    }},
+    "job_title": string,
+    "positions_available": string,
+    "hiring_urgency": string,
+    "seniority_level": string,
+    "work_arrangement": string,
+    "location": {{
+        "city": string,
+        "state": string,
+        "office_details": string
+    }},
+    "visa_sponsorship": string,
+    "compensation": {{
+        "base_salary_range": string,
+        "equity_details": string,
+        "total_comp_range": string
+    }},
+    "reporting_structure": string,
+    "team_composition": string,
+    "role_category": string,
+    "tech_stack": {{
+        "must_haves": [string],
+        "nice_to_haves": [string],
+        "tools_and_frameworks": [string]
+    }},
+    "experience_requirements": {{
+        "minimum_years": string,
+        "level": string,
+        "domain_expertise": [string],
+        "specific_skills": string
+    }},
+    "education_requirements": {{
+        "minimum": string,
+        "preferred": string,
+        "notes": string
+    }},
+    "key_responsibilities": [string],
+    "ideal_candidate_profile": string,
+    "interview_process": {{
+        "stages": [string],
+        "work_trial_details": string,
+        "timeline": string
+    }},
+    "deal_breakers": [string],
+    "growth_opportunities": string
+}}
 
-For fields where information is not explicitly provided in the job posting, use "Not specified" for string fields, [] for arrays, and false for booleans.
+For any fields where information is not explicitly mentioned in the text, use "Not specified" for string fields and [] for array fields.
 
-Job Posting:
+Be particularly careful to:
+1. Extract the company website URL if mentioned
+2. Extract the Paraform job posting URL if present
+3. Capture compensation details including base salary, equity, and total comp ranges
+4. Extract technical requirements and must-have skills
+5. Identify work arrangement and location details
+6. Note interview process specifics
+7. Include company stage and funding information
+
+Text to analyze:
 {raw_text}
 """
 
 # Initialize Pinecone
+print("Initializing Pinecone...")
 pc = Pinecone(api_key=os.getenv("PINECONE_API_KEY"))
 job_index = pc.Index("job-details")
 
