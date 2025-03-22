@@ -1170,9 +1170,11 @@ async def submit_job(file: UploadFile = File(...)) -> Dict[str, Any]:
             
             # Generate embeddings for the job posting
             print("\nGenerating embeddings...")
-            embedding_response = await client.embeddings.create(
-                model="text-embedding-3-small",
-                input=raw_text
+            embedding_response = await asyncio.to_thread(
+                lambda: client.embeddings.create(
+                    model="text-embedding-3-small",
+                    input=raw_text
+                )
             )
             embedding = embedding_response.data[0].embedding
             
