@@ -1391,7 +1391,6 @@ async def make_call(
     name: str = Form(...),
     email: str = Form(...),
     phone_number: str = Form(...),
-    linkedin: str = Form(None),
     resume: UploadFile = File(...)
 ):
     """Create a new Retell AI call for a candidate"""
@@ -1443,13 +1442,11 @@ async def make_call(
                 "candidate_id": candidate_id,
                 "name": name,
                 "email": email,
-                "linkedin": linkedin,
                 "source_id": source_id  # Add source_id to metadata
             },
             "retell_llm_dynamic_variables": {
                 "candidate_name": name,
-                "candidate_email": email,
-                "candidate_linkedin": linkedin
+                "candidate_email": email
             }
         }
 
