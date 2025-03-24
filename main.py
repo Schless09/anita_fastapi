@@ -35,10 +35,10 @@ import logging.handlers
 
 # Set up logging
 logging.basicConfig(
-    level=logging.DEBUG,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    level=logging.WARNING,  # Changed to WARNING to show only important messages
+    format='%(levelname)s: %(message)s',
     handlers=[
-        logging.StreamHandler(),  # Log to console
+        logging.StreamHandler(),
         logging.handlers.RotatingFileHandler(
             'app.log',
             maxBytes=10485760,  # 10MB
@@ -985,10 +985,17 @@ async def delete_retell_knowledge_base(knowledge_base_id: str) -> bool:
     finally:
         print("=== Knowledge Base Deletion Complete ===\n")
 
-async def fetch_and_store_retell_transcript(call_data: dict):
+async def fetch_and_store_retell_transcript(call_data: Union[dict, RetellCallData]):
     """Fetch and store transcript from Retell AI."""
     try:
-        call_id = call_data.get('call_id')
+        # Handle both dictionary and Pydantic model inputs
+        if isinstance(call_data, RetellCallData):
+            call_id = call_data.call_id
+            candidate_id = call_data.candidate_id
+        else:
+            call_id = call_data.get('call_id')
+            candidate_id = call_data.get('candidate_id')
+
         if not call_id:
             raise HTTPException(
                 status_code=400,
@@ -1037,7 +1044,6 @@ async def fetch_and_store_retell_transcript(call_data: dict):
         
         # Store processed data
         brain_agent = BrainAgent()
-        candidate_id = call_data.get('candidate_id')
         if candidate_id:
             brain_agent.candidate_profiles[candidate_id] = {
                 'transcript': transcript,
@@ -1406,9 +1412,36 @@ async def update_call_email(call_id: str, email: str):
 
 @app.on_event("startup")
 async def startup_event():
-    """Initialize services on startup"""
-    await sync_call_statuses()
-    print("Call statuses synced from Pinecone")
+    """Initialize services and background tasks on startup"""
+    try:
+        await sync_call_statuses()
+        num_removed = clean_test_calls()
+        if num_removed > 0:
+            logger.info(f"Removed {num_removed} test calls")
+        
+        # Start the cleanup task
+        cleanup_task = asyncio.create_task(cleanup_completed_calls())
+        app.state.cleanup_task = cleanup_task
+        logger.info("Started cleanup_completed_calls background task")
+        
+        logger.info("Application startup complete")
+    except Exception as e:
+        logger.error(f"Startup error: {str(e)}")
+        raise
+
+@app.on_event("shutdown")
+async def shutdown_event():
+    """Clean up background tasks on shutdown"""
+    try:
+        if hasattr(app.state, 'cleanup_task'):
+            app.state.cleanup_task.cancel()
+            try:
+                await app.state.cleanup_task
+            except asyncio.CancelledError:
+                pass
+        logger.info("Application shutdown complete")
+    except Exception as e:
+        logger.error(f"Shutdown error: {str(e)}")
 
 @app.post("/api/makeCall")
 async def make_call(
@@ -1638,9 +1671,52 @@ async def retell_webhook(data: Dict[str, Any]):
             )
         
         try:
+            # Update call status first
             await update_call_status(call_id, data)
             print(f"Successfully processed webhook for call {call_id}")
+
+            # If the call has ended, process transcript and send email
+            if data.get('call_status') == RetellCallStatus.ENDED:
+                print(f"Call {call_id} has ended, processing transcript...")
+                
+                # Get the call data from our status storage
+                status_data = call_statuses.get(call_id, {})
+                
+                # Create call data object for processing
+                call_data = RetellCallData(
+                    call_id=call_id,
+                    candidate_id=status_data.get('candidate_id'),
+                    email=status_data.get('candidate_email')
+                )
+                
+                # Process the transcript and send email
+                try:
+                    processed_data = await fetch_and_store_retell_transcript(call_data)
+                    print(f"Successfully processed transcript for call {call_id}")
+                    
+                    # Send email if we have the candidate's email
+                    if status_data.get('candidate_email'):
+                        interaction_agent = InteractionAgent()
+                        email_result = interaction_agent.send_transcript_summary(
+                            status_data['candidate_email'],
+                            processed_data
+                        )
+                        
+                        if email_result['status'] == 'success':
+                            print(f"Successfully sent transcript summary email to {status_data['candidate_email']}")
+                            status_data['email_sent'] = True
+                            status_data['email_sent_at'] = datetime.utcnow().isoformat()
+                            await update_call_status(call_id, status_data)
+                        else:
+                            print(f"Failed to send transcript summary email: {email_result.get('error')}")
+                    
+                except Exception as process_error:
+                    print(f"Error processing transcript: {str(process_error)}")
+                    print(f"Error type: {type(process_error)}")
+                    print(f"Error traceback: {traceback.format_exc()}")
+            
             return {"status": "success"}
+            
         except Exception as update_error:
             print(f"Error updating call status: {str(update_error)}")
             print(f"Error type: {type(update_error)}")
@@ -1664,229 +1740,145 @@ def clean_test_calls():
         del call_statuses[call_id]
     return len(test_calls)
 
+def is_test_call(call_data: dict) -> bool:
+    """Check if a call is a test call based on certain criteria."""
+    if not call_data:
+        return False
+        
+    # Check for test indicators in various fields
+    test_indicators = [
+        call_data.get('candidate_email', '').lower().startswith('test@'),
+        'test' in call_data.get('candidate_name', '').lower(),
+        'test' in call_data.get('candidate_id', '').lower(),
+        call_data.get('source_id', '').startswith('test_'),
+        call_data.get('call_id', '').startswith('test_'),
+        'test' in call_data.get('email', '').lower(),
+        call_data.get('call_id') == 'call_4d59ecbb9689005c0a3560c9d9e'  # Explicitly mark this call as test
+    ]
+    
+    # Also check if any field contains the word "test" case-insensitively
+    for value in call_data.values():
+        if isinstance(value, str) and 'test' in value.lower():
+            test_indicators.append(True)
+            break
+    
+    return any(test_indicators)
+
 async def cleanup_completed_calls():
-    """Background task to process completed calls and maintain call history"""
-    while True:
-        try:
-            print("=== Starting background cleanup task for completed calls ===")
-            print("--- Checking for completed calls ---")
-            
-            # Clean up test calls first
-            removed_count = clean_test_calls()
-            if removed_count > 0:
-                print(f"Removed {removed_count} test calls from call_statuses")
-            
-            print(f"Current call_statuses: {call_statuses}")
-            
-            # Process any calls that have ended or failed
-            for call_id, status_data in call_statuses.items():
-                # Skip test calls
-                if call_id.startswith('test_') or call_id.startswith('call_test_'):
-                    print(f"Skipping test call: {call_id}")
+    """Background task to clean up completed calls and process their transcripts."""
+    try:
+        print("\n=== Starting Cleanup Task ===")
+        print(f"Timestamp: {datetime.utcnow().isoformat()}")
+        logger.info("Starting background cleanup task")
+        
+        # Non-existent call that should be skipped
+        SKIP_CALL_ID = "call_4d59ecbb9689005c0a3560c9d9e"
+        
+        while True:
+            try:
+                print("\n=== Running Cleanup Cycle ===")
+                print(f"Time: {datetime.utcnow().isoformat()}")
+                
+                if not call_statuses:
+                    print("No calls to process, sleeping for 30 seconds...")
+                    await asyncio.sleep(30)
                     continue
-                    
-                # Check if call needs processing (either ended or registered but not processed)
-                if (status_data.get('status') == RetellCallStatus.ENDED or 
-                    (status_data.get('status') == 'registered' and not status_data.get('processed'))) and not status_data.get('processed'):
+                
+                # Find new ended calls that haven't been processed
+                new_calls = [
+                    (call_id, data) for call_id, data in call_statuses.items()
+                    if call_id != SKIP_CALL_ID and  # Skip the non-existent call
+                    not data.get('processed_by_system') and  # Not processed by our system yet
+                    not data.get('transcript_processed') and    # Transcript not processed
+                    not data.get('email_sent')                 # Email not sent
+                ]
+                
+                if not new_calls:
+                    print("No new calls to process")
+                    await asyncio.sleep(30)
+                    continue
+                
+                print(f"Found {len(new_calls)} new calls to process")
+                
+                # Process new calls
+                for call_id, status_data in new_calls:
                     try:
-                        print(f"Processing call: {call_id}")
+                        print(f"\nProcessing call {call_id}...")
+                        # Check actual status with Retell AI
+                        success, retell_status, retell_data = await check_call_status(call_id)
+                        if not success:
+                            print(f"Failed to check status for call {call_id}")
+                            logger.error(f"Failed to check status for call {call_id}")
+                            continue
+                            
+                        # Update our status if it differs from Retell
+                        if retell_status != status_data.get('status'):
+                            print(f"Updating call {call_id} status from {status_data.get('status')} to {retell_status}")
+                            status_data['status'] = retell_status
+                            await update_call_status(call_id, status_data)
+                            logger.info(f"Updated call {call_id} status to {retell_status}")
                         
-                        # Skip if email was already sent
-                        if status_data.get('email_sent'):
-                            print(f"Email already sent for call {call_id}, skipping processing")
+                        # Only process if call has ended
+                        if retell_status != RetellCallStatus.ENDED:
+                            print(f"Call {call_id} not ended yet (status: {retell_status})")
                             continue
                         
-                        # Get candidate_id from the call status data
-                        candidate_id = status_data.get('candidate_id')
-                        if not candidate_id:
-                            print(f"No candidate_id found for call {call_id}")
-                            continue
-                        
-                        # Create RetellCallData object
-                        call_data = RetellCallData(
+                        # Create call data object with all required fields
+                        call_data_obj = RetellCallData(
                             call_id=call_id,
-                            candidate_id=candidate_id,
+                            candidate_id=status_data.get('candidate_id'),
+                            transcript=retell_data.get('transcript'),  # Use transcript from Retell
                             email=status_data.get('candidate_email')
                         )
                         
-                        # Fetch and process the transcript
-                        await fetch_and_store_retell_transcript(call_data)
+                        # Process the transcript
+                        processed_data = await fetch_and_store_retell_transcript(call_data_obj)
                         
-                        # Update the call status to indicate it's been processed
-                        status_data['processed'] = True
+                        # Send email summary if we have the candidate's email
+                        if status_data.get('candidate_email'):
+                            print(f"Sending email to {status_data['candidate_email']}...")
+                            interaction_agent = InteractionAgent()
+                            email_result = interaction_agent.send_transcript_summary(
+                                status_data['candidate_email'],
+                                processed_data
+                            )
+                            
+                            if email_result['status'] == 'success':
+                                print(f"Successfully sent email to {status_data['candidate_email']}")
+                                logger.info(f"Successfully sent transcript summary email to {status_data['candidate_email']}")
+                                status_data['email_sent'] = True
+                                status_data['email_sent_at'] = datetime.utcnow().isoformat()
+                                status_data['email_status'] = email_result
+                            else:
+                                print(f"Failed to send email: {email_result.get('error')}")
+                                logger.error(f"Failed to send transcript summary email: {email_result.get('error')}")
+                        
+                        # Mark as processed by our system
+                        status_data['processed_by_system'] = True
+                        status_data['processed_at'] = datetime.utcnow().isoformat()
+                        status_data['transcript_processed'] = True
                         await update_call_status(call_id, status_data)
+                        print(f"Successfully processed call {call_id}")
+                        logger.info(f"Marked call {call_id} as processed")
                         
                     except Exception as e:
                         print(f"Error processing call {call_id}: {str(e)}")
-                        print(f"Error type: {type(e)}")
-                        print(f"Error traceback: {traceback.format_exc()}")
-                        continue
-            
-            print("--- Completed call status check cycle ---")
-            await asyncio.sleep(60)  # Wait 60 seconds before next check
-            
-        except Exception as e:
-            print(f"Error in cleanup_completed_calls: {str(e)}")
-            print(f"Error type: {type(e)}")
-            print(f"Error traceback: {traceback.format_exc()}")
-            await asyncio.sleep(60)  # Wait 60 seconds before retrying
-
-@app.on_event("startup")
-async def startup_event():
-    """Initialize services and background tasks on startup"""
-    try:
-        # Sync call statuses from Pinecone
-        await sync_call_statuses()
-        print("Call statuses synced from Pinecone")
-        
-        # Start the cleanup task
-        background_task = asyncio.create_task(cleanup_completed_calls())
-        print("Started background cleanup task for completed calls")
-        
-        # Store the task to prevent it from being garbage collected
-        app.state.background_task = background_task
-    except Exception as e:
-        print(f"Error in startup_event: {str(e)}")
-        print(f"Error type: {type(e)}")
-        print(f"Error traceback: {traceback.format_exc()}")
+                        logger.error(f"Error processing call {call_id}: {str(e)}")
+                        logger.error(f"Error traceback: {traceback.format_exc()}")
+                
+                print("\nSleeping for 30 seconds before next cleanup cycle...")
+                await asyncio.sleep(30)
+                
+            except Exception as e:
+                print(f"Error in cleanup task: {str(e)}")
+                logger.error(f"Error in cleanup task: {str(e)}")
+                logger.error(f"Error traceback: {traceback.format_exc()}")
+                await asyncio.sleep(30)
+                
+    except asyncio.CancelledError:
+        print("Cleanup task cancelled")
+        logger.info("Cleanup task cancelled")
         raise
-
-class JobURL(BaseModel):
-    url: str
-
-async def scrape_job(url_data: JobURL) -> Dict[str, Any]:
-    """
-    Scrape job posting data from a provided URL using regular expressions.
-    """
-    try:
-        # Validate URL
-        parsed_url = urlparse(url_data.url)
-        if not parsed_url.scheme or not parsed_url.netloc:
-            raise HTTPException(status_code=400, detail="Invalid URL provided")
-
-        # Fetch the webpage
-        headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
-        }
-        response = requests.get(url_data.url, headers=headers)
-        response.raise_for_status()
-        text = response.text
-
-        # Initialize job data dictionary
-        job_data = {
-            "company_name": None,
-            "company_url": None,
-            "job_title": None,
-            "job_url": url_data.url,
-            "salary_range": None,
-            "work_arrangement": None,
-            "city": [],
-            "state": [],
-            "tech_stack_must_haves": [],
-            "tech_stack_nice_to_haves": [],
-            "tech_stack_tags": [],
-            "minimum_years_of_experience": None,
-            "domain_expertise": [],
-            "infrastructure_experience": [],
-            "key_responsibilities": [],
-            "company_culture": {
-                "work_environment": "Not specified",
-                "decision_making": "Not specified",
-                "collaboration_style": "Not specified",
-                "risk_tolerance": "Not specified",
-                "values": "Not specified"
-            }
-        }
-
-        # Extract company name from meta tags or title
-        company_name_match = re.search(r'<meta[^>]*property="og:site_name"[^>]*content="([^"]*)"', text)
-        if company_name_match:
-            job_data['company_name'] = company_name_match.group(1)
-        else:
-            title_match = re.search(r'<title[^>]*>([^<]+)</title>', text)
-            if title_match:
-                job_data['company_name'] = title_match.group(1).split(' - ')[0].strip()
-
-        # Extract job title from h1 tag
-        title_match = re.search(r'<h1[^>]*>([^<]+)</h1>', text)
-        if title_match:
-            job_data['job_title'] = title_match.group(1).strip()
-
-        # Salary range (look for common patterns)
-        salary_patterns = [
-            r'\$[\d,]+(?:\.\d{2})?\s*-\s*\$[\d,]+(?:\.\d{2})?',
-            r'\$[\d,]+(?:\.\d{2})?\s*to\s*\$[\d,]+(?:\.\d{2})?',
-            r'\$[\d,]+(?:\.\d{2})?\s*per\s*year'
-        ]
-        for pattern in salary_patterns:
-            salary_match = re.search(pattern, text)
-            if salary_match:
-                job_data['salary_range'] = salary_match.group(0)
-                break
-
-        # Location
-        location_match = re.search(r'location[:\s]+([^<]+)', text, re.I)
-        if location_match:
-            location_text = location_match.group(1).strip()
-            # Split location into city and state
-            parts = location_text.split(',')
-            if len(parts) >= 2:
-                job_data['city'] = [parts[0].strip()]
-                job_data['state'] = [parts[1].strip()]
-
-        # Work arrangement
-        work_arrangement_keywords = {
-            'remote': 'Remote',
-            'hybrid': 'Hybrid',
-            'on-site': 'On-site',
-            'onsite': 'On-site'
-        }
-        for keyword, arrangement in work_arrangement_keywords.items():
-            if re.search(keyword, text, re.I):
-                job_data['work_arrangement'] = arrangement
-                break
-
-        # Technical requirements
-        tech_keywords = {
-            'must_have': ['python', 'javascript', 'java', 'react', 'node.js', 'aws', 'docker', 'kubernetes'],
-            'nice_to_have': ['typescript', 'graphql', 'elasticsearch', 'terraform']
-        }
-        
-        # Look for technical requirements section
-        requirements_section = re.search(r'(?:requirements|qualifications|skills|tech stack)[:\s]+([^<]+)', text, re.I)
-        if requirements_section:
-            tech_text = requirements_section.group(1).lower()
-            for category, keywords in tech_keywords.items():
-                for keyword in keywords:
-                    if keyword in tech_text:
-                        if category == 'must_have':
-                            job_data['tech_stack_must_haves'].append(keyword)
-                        else:
-                            job_data['tech_stack_nice_to_haves'].append(keyword)
-
-        # Years of experience
-        exp_match = re.search(r'(\d+)\+?\s*years?\s*of\s*experience', text, re.I)
-        if exp_match:
-            job_data['minimum_years_of_experience'] = exp_match.group(1)
-
-        # Key responsibilities
-        responsibilities_section = re.search(r'(?:responsibilities|duties|role)[:\s]+([^<]+)', text, re.I)
-        if responsibilities_section:
-            responsibilities_text = responsibilities_section.group(1)
-            # Split into bullet points if they exist
-            bullet_points = re.findall(r'[•\-\*]\s*([^\n]+)', responsibilities_text)
-            if bullet_points:
-                job_data['key_responsibilities'] = [point.strip() for point in bullet_points]
-            else:
-                # If no bullet points, split by newlines
-                job_data['key_responsibilities'] = [line.strip() for line in responsibilities_text.split('\n') if line.strip()]
-
-        return job_data
-
-    except requests.RequestException as e:
-        raise HTTPException(status_code=400, detail=f"Failed to fetch URL: {str(e)}")
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error processing job data: {str(e)}")
 
 @app.get("/jobs/most-recent")
 async def get_most_recent_job():
@@ -2005,34 +1997,21 @@ async def process_job_in_background(job_id: str, file_content: bytes, filename: 
         }
         raise
 
-async def fetch_retell_transcript(call_id: str) -> dict:
-    """Fetch transcript from Retell AI."""
-    print(f"Fetching transcript for call {call_id}...")
-    
+async def fetch_retell_transcript(call_id: str) -> Optional[Dict]:
+    """Fetch transcript from Retell API"""
     try:
+        headers = {
+            "Authorization": f"Bearer {RETELL_API_KEY}",
+            "Content-Type": "application/json"
+        }
+        
+        url = f"{RETELL_API_BASE}/get-call/{call_id}"
         async with httpx.AsyncClient() as client:
-            url = f"https://api.retellai.com/v2/get-call/{call_id}"
-            print(f"Making request to: {url}")
-            
             try:
-                response = await client.get(
-                    url,
-                    headers={
-                        "Authorization": f"Bearer {RETELL_API_KEY}",
-                    }
-                )
+                response = await client.get(url, headers=headers)
                 
-                print(f"Response status code: {response.status_code}")
-                print(f"Response headers: {dict(response.headers)}")
-                
-                if response.status_code == 200:
-                    call_info = response.json()
-                    status = call_info.get('call_status', 'unknown')
-                    print(f"Retrieved call status: {status}")
-                    print(f"Call info: {json.dumps(call_info, indent=2)}")
-                    return call_info
-                elif response.status_code == 404:
-                    print(f"Call {call_id} not found")
+                if response.status_code == 404:
+                    logger.error(f"Call {call_id} not found")
                     raise HTTPException(
                         status_code=404,
                         detail={
@@ -2042,7 +2021,7 @@ async def fetch_retell_transcript(call_id: str) -> dict:
                         }
                     )
                 elif response.status_code == 401:
-                    print("Authentication failed - invalid API key")
+                    logger.error("Authentication failed - invalid API key")
                     raise HTTPException(
                         status_code=401,
                         detail={
@@ -2051,44 +2030,39 @@ async def fetch_retell_transcript(call_id: str) -> dict:
                             'action_required': 'Please check your Retell API key'
                         }
                     )
-                else:
-                    print(f"Error response: {response.text}")
+                
+                response.raise_for_status()
+                data = response.json()
+                
+                # Log only essential information
+                logger.info(f"Successfully fetched transcript for call {call_id}")
+                logger.debug(f"Call data: {data.get('metadata', {})}")
+                
+                return data
+                
+            except httpx.HTTPStatusError as e:
+                logger.error(f"HTTP error fetching transcript for call {call_id}: {str(e)}")
+                if not isinstance(e, HTTPException):
                     raise HTTPException(
-                        status_code=response.status_code,
+                        status_code=e.response.status_code,
                         detail={
                             'error': 'Retell API error',
-                            'message': response.text,
+                            'message': str(e),
                             'action_required': 'Please try again or contact support'
                         }
                     )
-            except httpx.TimeoutException:
-                print(f"Timeout while checking call {call_id}")
-                raise HTTPException(
-                    status_code=504,
-                    detail={
-                        'error': 'Request timeout',
-                        'message': f'Timeout while fetching call {call_id}',
-                        'action_required': 'Please try again'
-                    }
-                )
-            except httpx.RequestError as req_error:
-                print(f"Request error: {str(req_error)}")
-                raise HTTPException(
-                    status_code=500,
-                    detail={
-                        'error': 'Request failed',
-                        'message': str(req_error),
-                        'action_required': 'Please try again or contact support'
-                    }
-                )
+                raise
+                
+    except HTTPException:
+        raise
     except Exception as e:
-        print(f"Unexpected error: {str(e)}")
+        logger.error(f"Error fetching transcript for call {call_id}: {str(e)}")
         raise HTTPException(
             status_code=500,
             detail={
                 'error': 'Internal server error',
                 'message': str(e),
-                'action_required': 'Please contact support if the issue persists'
+                'action_required': 'Please try again or contact support'
             }
         )
 

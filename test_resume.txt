@@ -1,0 +1,19 @@
+Harrison Franke
+Software Engineer
+harrison.franke@gmail.com
++19299446066
+
+Experience:
+- Software Engineer at Tech Corp (2020-2023)
+- Software Engineer at StartUp Inc (2018-2020)
+
+Skills:
+- Python
+- JavaScript
+- React
+- Node.js
+- AWS
+- Docker
+
+Education:
+- BS Computer Science, University of Technology (2018) 
