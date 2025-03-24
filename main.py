@@ -1490,11 +1490,9 @@ async def make_call(
             )
         print(f"Resume file: {resume.filename}")
 
-        # Process the resume to extract text and current company
+        # Process resume with OpenAI to get structured data including current company
         pdf_result = await process_pdf_to_text(resume)
         resume_text = pdf_result["text"]
-        
-        # Process resume with OpenAI to get structured data including current company
         resume_data = {
             "text": resume_text,
             "candidate_id": candidate_id
@@ -1521,33 +1519,16 @@ async def make_call(
         Summary: {structured_data.get('summary', 'Not specified')}
         """.strip()
 
-        # Use the fixed knowledge base ID
-        knowledge_base_id = "knowledge_base_b1df2fc51182f47b"
-        print(f"Using knowledge base: {knowledge_base_id}")
-
-        # Add the resume to the knowledge base and get the source ID
-        print("Adding resume to knowledge base...")
-        success, source_id = await add_to_knowledge_base(resume, knowledge_base_id)
-        if not success:
-            print("ERROR: Failed to add resume to knowledge base")
-            raise HTTPException(
-                status_code=500,
-                detail="Failed to add resume to knowledge base"
-            )
-        print(f"Successfully added resume to knowledge base. Source ID: {source_id}")
-
         # Prepare the request object
         retell_payload = {
             "from_number": RETELL_FROM_NUMBER,
             "to_number": formatted_number,
             "agent_id": RETELL_AGENT_ID,
-            "knowledge_base_id": knowledge_base_id,
             "metadata": {
                 "candidate_id": candidate_id,
                 "name": name,
                 "email": email,
                 "linkedin": linkedin,
-                "source_id": source_id,
                 "current_company": current_company
             },
             "retell_llm_dynamic_variables": {
@@ -1597,11 +1578,10 @@ async def make_call(
 
             print(f"\nSuccessfully created call with ID: {call_id}")
 
-            # Register call status with source_id in both memory and Pinecone
+            # Register call status in both memory and Pinecone
             status_data = {
                 "status": "registered",
                 "candidate_id": candidate_id,
-                "source_id": source_id,
                 "timestamp": datetime.utcnow().isoformat(),
                 "candidate_name": name,
                 "candidate_email": email,
@@ -1614,7 +1594,6 @@ async def make_call(
                 "message": "Call initiated successfully",
                 "call_id": call_id,
                 "status": "registered",
-                "source_id": source_id,
                 "current_company": current_company
             }
 
