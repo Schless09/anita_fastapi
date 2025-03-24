@@ -1835,119 +1835,83 @@ def is_test_call(call_data: dict) -> bool:
 
 async def cleanup_completed_calls():
     """Background task to clean up completed calls and process their transcripts."""
-    try:
-        print("\n=== Starting Cleanup Task ===")
-        print(f"Timestamp: {datetime.utcnow().isoformat()}")
-        logger.info("Starting background cleanup task")
-        
-        # Non-existent call that should be skipped
-        SKIP_CALL_ID = "call_4d59ecbb9689005c0a3560c9d9e"
-        
-        while True:
-            try:
-                print("\n=== Running Cleanup Cycle ===")
-                print(f"Time: {datetime.utcnow().isoformat()}")
+    print("\n=== Starting Call Cleanup Task ===")
+    while True:
+        try:
+            # Get all unprocessed calls
+            unprocessed_calls = {
+                call_id: status_data
+                for call_id, status_data in call_statuses.items()
+                if not status_data.get('processed_by_system')
+            }
+            
+            if not unprocessed_calls:
+                print("No new calls to process")
+            else:
+                print(f"Found {len(unprocessed_calls)} unprocessed calls")
                 
-                if not call_statuses:
-                    print("No calls to process, sleeping for 30 seconds...")
-                    await asyncio.sleep(30)
-                    continue
-                
-                # Find new ended calls that haven't been processed
-                new_calls = [
-                    (call_id, data) for call_id, data in call_statuses.items()
-                    if call_id != SKIP_CALL_ID and  # Skip the non-existent call
-                    not data.get('processed_by_system') and  # Not processed by our system yet
-                    not data.get('transcript_processed') and    # Transcript not processed
-                    not data.get('email_sent')                 # Email not sent
-                ]
-                
-                if not new_calls:
-                    print("No new calls to process")
-                    await asyncio.sleep(30)
-                    continue
-                
-                print(f"Found {len(new_calls)} new calls to process")
-                
-                # Process new calls
-                for call_id, status_data in new_calls:
+                for call_id, status_data in unprocessed_calls.items():
                     try:
                         print(f"\nProcessing call {call_id}...")
-                        # Check actual status with Retell AI
-                        success, retell_status, retell_data = await check_call_status(call_id)
-                        if not success:
-                            print(f"Failed to check status for call {call_id}")
-                            logger.error(f"Failed to check status for call {call_id}")
-                            continue
-                            
-                        # Update our status if it differs from Retell
-                        if retell_status != status_data.get('status'):
-                            print(f"Updating call {call_id} status from {status_data.get('status')} to {retell_status}")
-                            status_data['status'] = retell_status
-                            await update_call_status(call_id, status_data)
-                            logger.info(f"Updated call {call_id} status to {retell_status}")
                         
-                        # Only process if call has ended
-                        if retell_status != RetellCallStatus.ENDED:
-                            print(f"Call {call_id} not ended yet (status: {retell_status})")
-                            continue
-                        
-                        # Create call data object with all required fields
+                        # Create call data object for processing
                         call_data_obj = RetellCallData(
                             call_id=call_id,
                             candidate_id=status_data.get('candidate_id'),
-                            transcript=retell_data.get('transcript'),  # Use transcript from Retell
                             email=status_data.get('candidate_email')
                         )
                         
-                        # Process the transcript
-                        processed_data = await fetch_and_store_retell_transcript(call_data_obj)
-                        
-                        # Send email summary if we have the candidate's email
-                        if status_data.get('candidate_email'):
-                            print(f"Sending email to {status_data['candidate_email']}...")
-                            interaction_agent = InteractionAgent()
-                            email_result = interaction_agent.send_transcript_summary(
-                                status_data['candidate_email'],
-                                processed_data
-                            )
+                        try:
+                            # Try to fetch and process transcript
+                            processed_data = await fetch_and_store_retell_transcript(call_data_obj)
+                            print(f"Successfully processed transcript for call {call_id}")
                             
-                            if email_result['status'] == 'success':
-                                print(f"Successfully sent email to {status_data['candidate_email']}")
-                                logger.info(f"Successfully sent transcript summary email to {status_data['candidate_email']}")
-                                status_data['email_sent'] = True
-                                status_data['email_sent_at'] = datetime.utcnow().isoformat()
-                                status_data['email_status'] = email_result
+                            # Send email if we have the candidate's email
+                            if status_data.get('candidate_email'):
+                                print(f"Sending email to {status_data['candidate_email']}...")
+                                interaction_agent = InteractionAgent()
+                                email_result = interaction_agent.send_transcript_summary(
+                                    status_data['candidate_email'],
+                                    processed_data
+                                )
+                                
+                                if email_result['status'] == 'success':
+                                    print(f"Successfully sent email to {status_data['candidate_email']}")
+                                    status_data['email_sent'] = True
+                                    status_data['email_sent_at'] = datetime.utcnow().isoformat()
+                                    status_data['email_status'] = email_result
+                                else:
+                                    print(f"Failed to send email: {email_result.get('error')}")
+                                    
+                        except HTTPException as he:
+                            if he.status_code == 404 and "No transcript found" in str(he.detail):
+                                print(f"No transcript available for call {call_id} - call may have ended prematurely")
+                                status_data['transcript_status'] = "No transcript available - call may have ended prematurely"
                             else:
-                                print(f"Failed to send email: {email_result.get('error')}")
-                                logger.error(f"Failed to send transcript summary email: {email_result.get('error')}")
+                                print(f"Error processing call {call_id}: {str(he)}")
+                                status_data['error'] = str(he)
+                        except Exception as e:
+                            print(f"Error processing call {call_id}: {str(e)}")
+                            print(f"Error type: {type(e)}")
+                            print(f"Error traceback: {traceback.format_exc()}")
+                            status_data['error'] = str(e)
                         
-                        # Mark as processed by our system
+                        # Mark as processed regardless of outcome
                         status_data['processed_by_system'] = True
                         status_data['processed_at'] = datetime.utcnow().isoformat()
-                        status_data['transcript_processed'] = True
                         await update_call_status(call_id, status_data)
-                        print(f"Successfully processed call {call_id}")
-                        logger.info(f"Marked call {call_id} as processed")
                         
                     except Exception as e:
-                        print(f"Error processing call {call_id}: {str(e)}")
-                        logger.error(f"Error processing call {call_id}: {str(e)}")
-                        logger.error(f"Error traceback: {traceback.format_exc()}")
-                
-                print("\nSleeping for 30 seconds before next cleanup cycle...")
-                await asyncio.sleep(30)
-                
-            except Exception as e:
-                print(f"Error in cleanup task: {str(e)}")
-                logger.error(f"Error in cleanup task: {str(e)}")
-                logger.error(f"Error traceback: {traceback.format_exc()}")
-                await asyncio.sleep(30)
-                
-    except asyncio.CancelledError:
-        print("Cleanup task cancelled")
-        logger.info("Cleanup task cancelled")
-        raise
+                        print(f"ERROR: Error processing call {call_id}: {str(e)}")
+                        print(f"ERROR: Error traceback: {traceback.format_exc()}")
+            
+            # Sleep for 30 seconds before next check
+            await asyncio.sleep(30)
+            
+        except Exception as e:
+            print(f"ERROR in cleanup task: {str(e)}")
+            print(f"ERROR traceback: {traceback.format_exc()}")
+            await asyncio.sleep(30)  # Sleep even on error to prevent rapid retries
 
 @app.get("/jobs/most-recent")
 async def get_most_recent_job():
