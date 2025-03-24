@@ -10,3 +10,5 @@ __pycache__/
 !.elasticbeanstalk/*.global.yml
 .env
 app.log
+__pycache__/
+app.log
