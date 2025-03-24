@@ -38,12 +38,7 @@ logging.basicConfig(
     level=logging.WARNING,  # Changed to WARNING to show only important messages
     format='%(levelname)s: %(message)s',
     handlers=[
-        logging.StreamHandler(),
-        logging.handlers.RotatingFileHandler(
-            'app.log',
-            maxBytes=10485760,  # 10MB
-            backupCount=5
-        )
+        logging.StreamHandler()  # Only use console logging for Vercel compatibility
     ]
 )
 logger = logging.getLogger(__name__)
@@ -636,8 +631,11 @@ async def process_resume_text(resume_data: Dict[str, Any]) -> Dict[str, Any]:
         - education: List of educational qualifications
         - achievements: List of key achievements
         - summary: A brief professional summary
+        - current_company: The candidate's current company (most recent position). If not currently employed, return null
+        - current_role: The candidate's current role/title. If not currently employed, return null
 
-        Format the response as a valid JSON object with these exact keys."""
+        Format the response as a valid JSON object with these exact keys. For current_company and current_role, 
+        look for indicators like "present", "current", or most recent dates to determine the current position."""
 
         try:
             response = client.chat.completions.create(
@@ -689,7 +687,9 @@ async def process_resume_text(resume_data: Dict[str, Any]) -> Dict[str, Any]:
                         "experience": [],
                         "education": [],
                         "achievements": [],
-                        "summary": "Failed to parse structured data from resume"
+                        "summary": "Failed to parse structured data from resume",
+                        "current_company": None,
+                        "current_role": None
                     },
                     "error": f"Failed to parse OpenAI response: {str(e)}",
                     "processed_at": datetime.utcnow().isoformat()
@@ -1490,6 +1490,30 @@ async def make_call(
             )
         print(f"Resume file: {resume.filename}")
 
+        # Process the resume to extract text and current company
+        pdf_result = await process_pdf_to_text(resume)
+        resume_text = pdf_result["text"]
+        
+        # Process resume with OpenAI to get structured data including current company
+        resume_data = {
+            "text": resume_text,
+            "candidate_id": candidate_id
+        }
+        processed_resume = await process_resume_text(resume_data)
+        current_company = processed_resume.get("structured_data", {}).get("current_company", "")
+        print(f"Extracted current company: {current_company}")
+
+        # Create a summary of key information from the resume
+        structured_data = processed_resume.get("structured_data", {})
+        resume_summary = f"""
+        Current Role: {structured_data.get('current_role', 'Not specified')}
+        Current Company: {structured_data.get('current_company', 'Not specified')}
+        Years of Experience: {len(structured_data.get('experience', []))} years
+        Key Skills: {', '.join(structured_data.get('skills', [])[:5])}
+        Education: {structured_data.get('education', ['Not specified'])[0] if structured_data.get('education') else 'Not specified'}
+        Summary: {structured_data.get('summary', 'Not specified')}
+        """.strip()
+
         # Use the fixed knowledge base ID
         knowledge_base_id = "knowledge_base_b1df2fc51182f47b"
         print(f"Using knowledge base: {knowledge_base_id}")
@@ -1516,12 +1540,16 @@ async def make_call(
                 "name": name,
                 "email": email,
                 "linkedin": linkedin,
-                "source_id": source_id
+                "source_id": source_id,
+                "current_company": current_company
             },
             "retell_llm_dynamic_variables": {
-                "candidate_name": name,
-                "candidate_email": email,
-                "candidate_linkedin": linkedin
+                "first_name": name.split()[0],  # Get first name
+                "last_name": name.split()[-1] if len(name.split()) > 1 else "",  # Get last name if exists
+                "current_company": current_company or "",  # Use extracted current company or empty string
+                "email": email,
+                "phone_number": formatted_number,
+                "resume_summary": resume_summary  # Add the summarized resume information
             }
         }
 
@@ -1569,7 +1597,8 @@ async def make_call(
                 "source_id": source_id,
                 "timestamp": datetime.utcnow().isoformat(),
                 "candidate_name": name,
-                "candidate_email": email
+                "candidate_email": email,
+                "current_company": current_company
             }
             await update_call_status(call_id, status_data)
             print(f"Registered call status: {json.dumps(status_data, indent=2)}")
@@ -1578,7 +1607,8 @@ async def make_call(
                 "message": "Call initiated successfully",
                 "call_id": call_id,
                 "status": "registered",
-                "source_id": source_id
+                "source_id": source_id,
+                "current_company": current_company
             }
 
     except Exception as e:
@@ -1657,36 +1687,68 @@ async def check_call_status(call_id: str) -> Tuple[bool, str, Dict[str, Any]]:
         return False, "error", {"error": str(e)}
 
 @app.post("/webhook/retell")
-async def retell_webhook(data: Dict[str, Any]):
+async def retell_webhook(request: Request):
     """Handle webhook notifications from Retell AI."""
     try:
-        print("Received webhook from Retell AI")
-        print(f"Webhook data: {json.dumps(data, indent=2)}")
+        print("\n=== Received Retell Webhook ===")
+        # Get raw data first
+        raw_data = await request.json()
+        print(f"Raw webhook data: {json.dumps(raw_data, indent=2)}")
         
-        call_id = data.get('call_id')
+        # Extract required fields with fallbacks
+        call_id = raw_data.get('call_id')
         if not call_id:
-            raise HTTPException(
-                status_code=400,
-                detail="Missing call_id in webhook data"
-            )
+            print("Missing call_id in webhook data")
+            return {"status": "error", "message": "Missing call_id"}
+        
+        # Convert webhook status to our enum if possible
+        webhook_status = raw_data.get('call_status', 'unknown')
+        try:
+            call_status = RetellCallStatus(webhook_status)
+        except ValueError:
+            print(f"Invalid call status: {webhook_status}")
+            call_status = RetellCallStatus.ERROR_UNKNOWN
+        
+        # Get metadata with fallback
+        metadata = raw_data.get('metadata', {})
+        if not isinstance(metadata, dict):
+            metadata = {}
+            
+        # Prepare status data
+        status_data = {
+            "status": call_status,
+            "webhook_received_at": datetime.utcnow().isoformat(),
+            "raw_status": webhook_status,
+            "metadata": metadata
+        }
+        
+        # Add transcript if present
+        if 'transcript' in raw_data:
+            status_data['transcript'] = raw_data['transcript']
+            status_data['has_transcript'] = True
+        
+        # Add any additional fields from the webhook
+        for key, value in raw_data.items():
+            if key not in ['call_id', 'call_status', 'metadata', 'transcript']:
+                status_data[key] = value
         
         try:
-            # Update call status first
-            await update_call_status(call_id, data)
+            # Update call status
+            await update_call_status(call_id, status_data)
             print(f"Successfully processed webhook for call {call_id}")
 
             # If the call has ended, process transcript and send email
-            if data.get('call_status') == RetellCallStatus.ENDED:
+            if call_status == RetellCallStatus.ENDED:
                 print(f"Call {call_id} has ended, processing transcript...")
                 
                 # Get the call data from our status storage
-                status_data = call_statuses.get(call_id, {})
+                stored_status = call_statuses.get(call_id, {})
                 
                 # Create call data object for processing
                 call_data = RetellCallData(
                     call_id=call_id,
-                    candidate_id=status_data.get('candidate_id'),
-                    email=status_data.get('candidate_email')
+                    candidate_id=stored_status.get('candidate_id') or metadata.get('candidate_id'),
+                    email=stored_status.get('candidate_email') or metadata.get('email')
                 )
                 
                 # Process the transcript and send email
@@ -1695,27 +1757,30 @@ async def retell_webhook(data: Dict[str, Any]):
                     print(f"Successfully processed transcript for call {call_id}")
                     
                     # Send email if we have the candidate's email
-                    if status_data.get('candidate_email'):
+                    candidate_email = stored_status.get('candidate_email') or metadata.get('email')
+                    if candidate_email:
+                        print(f"Sending email to {candidate_email}...")
                         interaction_agent = InteractionAgent()
                         email_result = interaction_agent.send_transcript_summary(
-                            status_data['candidate_email'],
+                            candidate_email,
                             processed_data
                         )
                         
                         if email_result['status'] == 'success':
-                            print(f"Successfully sent transcript summary email to {status_data['candidate_email']}")
+                            print(f"Successfully sent email to {candidate_email}")
                             status_data['email_sent'] = True
                             status_data['email_sent_at'] = datetime.utcnow().isoformat()
+                            status_data['email_status'] = email_result
                             await update_call_status(call_id, status_data)
                         else:
-                            print(f"Failed to send transcript summary email: {email_result.get('error')}")
+                            print(f"Failed to send email: {email_result.get('error')}")
                     
                 except Exception as process_error:
                     print(f"Error processing transcript: {str(process_error)}")
                     print(f"Error type: {type(process_error)}")
                     print(f"Error traceback: {traceback.format_exc()}")
             
-            return {"status": "success"}
+            return {"status": "success", "call_id": call_id, "processed_status": call_status}
             
         except Exception as update_error:
             print(f"Error updating call status: {str(update_error)}")
@@ -1727,10 +1792,7 @@ async def retell_webhook(data: Dict[str, Any]):
         print(f"Error processing webhook: {str(e)}")
         print(f"Error type: {type(e)}")
         print(f"Error traceback: {traceback.format_exc()}")
-        raise HTTPException(
-            status_code=500,
-            detail=f"Failed to process webhook: {str(e)}"
-        )
+        return {"status": "error", "message": str(e)}
 
 def clean_test_calls():
     """Remove test calls from call_statuses dictionary."""
