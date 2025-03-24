@@ -1506,13 +1506,17 @@ async def make_call(
         # Create a summary of key information from the resume
         structured_data = processed_resume.get("structured_data", {})
         skills = structured_data.get('skills', [])
-        top_skills = ', '.join(skills[:5]) if skills else 'Not specified'
+        # Handle skills array properly
+        top_skills = []
+        if isinstance(skills, list):
+            top_skills = skills[:5] if len(skills) > 0 else []
+        skills_text = ', '.join(top_skills) if top_skills else 'Not specified'
         
         resume_summary = f"""
         Current Role: {structured_data.get('current_role', 'Not specified')}
         Current Company: {structured_data.get('current_company', 'Not specified')}
         Years of Experience: {len(structured_data.get('experience', []))} years
-        Key Skills: {top_skills}
+        Key Skills: {skills_text}
         Education: {structured_data.get('education', ['Not specified'])[0] if structured_data.get('education') else 'Not specified'}
         Summary: {structured_data.get('summary', 'Not specified')}
         """.strip()
