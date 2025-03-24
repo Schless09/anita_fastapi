@@ -2122,4 +2122,91 @@ async def process_job_in_background(job_id: str, file_content: bytes, filename: 
         }
         raise
 
+@app.get("/api/cron/cleanup-calls")
+async def cron_cleanup_calls():
+    """Endpoint for Vercel cron job to cleanup completed calls."""
+    try:
+        logger.info("Starting cron cleanup of completed calls")
+        
+        # Get all calls that have ended but haven't been processed
+        ended_calls = {
+            call_id: data for call_id, data in call_statuses.items()
+            if data["status"] == RetellCallStatus.ENDED and not data.get("processed", False)
+        }
+        
+        if not ended_calls:
+            logger.info("No completed calls to process")
+            return {"status": "success", "message": "No calls to process"}
+            
+        logger.info(f"Found {len(ended_calls)} completed calls to process")
+        processed_calls = []
+        
+        for call_id, call_data in ended_calls.items():
+            logger.info(f"Processing call {call_id}")
+            
+            try:
+                # Fetch transcript
+                async with httpx.AsyncClient(timeout=30.0) as client:
+                    response = await client.get(
+                        f"{RETELL_API_BASE}/get-call/{call_id}",
+                        headers={
+                            "Authorization": f"Bearer {RETELL_API_KEY}",
+                            "Content-Type": "application/json"
+                        }
+                    )
+                    
+                    if response.status_code == 404:
+                        logger.warning("No transcript available - call may have ended prematurely")
+                        call_data["transcript_status"] = "No transcript available - call may have ended prematurely"
+                    elif response.status_code == 200:
+                        retell_data = response.json()
+                        if "transcript" in retell_data:
+                            # Process transcript
+                            processed_data = await process_transcript_with_openai(retell_data["transcript"])
+                            
+                            # Send email if we have a candidate email and haven't sent one yet
+                            if call_data.get("candidate_email") and not call_data.get("email_sent", False):
+                                email_result = interaction_agent.send_transcript_summary(
+                                    call_data["candidate_email"],
+                                    processed_data
+                                )
+                                # Update email status
+                                call_data["email_sent"] = True
+                                call_data["email_sent_at"] = datetime.utcnow().isoformat()
+                                call_data["email_status"] = email_result
+                            
+                            call_data["transcript_processed"] = True
+                            processed_calls.append(call_id)
+                        else:
+                            logger.warning("No transcript in response")
+                            call_data["transcript_status"] = "No transcript available in response"
+                    else:
+                        logger.error(f"Error fetching transcript: {response.status_code}")
+                        call_data["transcript_status"] = f"Error fetching transcript: {response.status_code}"
+                
+                # Mark call as processed
+                call_data["processed"] = True
+                call_data["processed_at"] = datetime.utcnow().isoformat()
+                
+                # Update call status in memory and Pinecone
+                await update_call_status(call_id, call_data)
+                
+            except Exception as e:
+                logger.error(f"Error processing call {call_id}: {str(e)}")
+                logger.error(traceback.format_exc())
+        
+        return {
+            "status": "success",
+            "message": f"Processed {len(processed_calls)} calls",
+            "processed_calls": processed_calls
+        }
+        
+    except Exception as e:
+        logger.error(f"Error in cron cleanup: {str(e)}")
+        logger.error(traceback.format_exc())
+        return {
+            "status": "error",
+            "message": str(e)
+        }
+
 app = app
