@@ -948,310 +948,6 @@ async def validate_retell_response(response_data: Dict[str, Any]) -> Dict[str, A
 
     return response_data
 
-async def delete_retell_knowledge_base(knowledge_base_id: str) -> bool:
-    """Delete a knowledge base from Retell AI."""
-    if not RETELL_API_KEY:
-        raise HTTPException(status_code=500, detail="Retell AI API key not configured")
-
-    try:
-        print(f"\n=== Deleting Knowledge Base {knowledge_base_id} ===")
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            response = await client.delete(
-                f"{RETELL_API_BASE}/knowledge-bases/{knowledge_base_id}",
-                headers={
-                    "Authorization": f"Bearer {RETELL_API_KEY}",
-                    "Content-Type": "application/json"
-                }
-            )
-
-            print(f"Delete response status: {response.status_code}")
-            print(f"Delete response body: {response.text}")
-
-            if response.status_code == 404:
-                print(f"Knowledge base {knowledge_base_id} not found - considering it already deleted")
-                return True
-            elif response.status_code == 200:
-                print(f"Successfully deleted knowledge base {knowledge_base_id}")
-                return True
-            else:
-                print(f"Failed to delete knowledge base: {response.text}")
-                return False
-
-    except Exception as e:
-        print(f"Error deleting knowledge base: {str(e)}")
-        print(f"Error type: {type(e)}")
-        print(f"Error traceback: {traceback.format_exc()}")
-        return False
-    finally:
-        print("=== Knowledge Base Deletion Complete ===\n")
-
-async def fetch_and_store_retell_transcript(call_data: Union[dict, RetellCallData]):
-    """Fetch and store transcript from Retell AI."""
-    try:
-        # Handle both dictionary and Pydantic model inputs
-        if isinstance(call_data, RetellCallData):
-            call_id = call_data.call_id
-            candidate_id = call_data.candidate_id
-        else:
-            call_id = call_data.get('call_id')
-            candidate_id = call_data.get('candidate_id')
-
-        if not call_id:
-            raise HTTPException(
-                status_code=400,
-                detail={
-                    'error': 'Missing call ID',
-                    'message': 'Call ID is required',
-                    'action_required': 'Please provide a valid call ID'
-                }
-            )
-
-        print(f"=== Processing Transcript for Call {call_id} ===")
-        print("Fetching transcript from Retell AI...")
-        
-        retell_data = await fetch_retell_transcript(call_id)
-        
-        if not retell_data:
-            raise HTTPException(
-                status_code=404,
-                detail={
-                    'error': 'No data found',
-                    'message': f'No data found for call {call_id}',
-                    'action_required': 'Please verify the call ID'
-                }
-            )
-        
-        # Check if transcript exists in the response
-        transcript = retell_data.get('transcript')
-        if not transcript:
-            # Try to get transcript from messages if available
-            messages = retell_data.get('messages', [])
-            if messages:
-                transcript = '\n'.join([msg.get('text', '') for msg in messages if msg.get('text')])
-            
-            if not transcript:
-                raise HTTPException(
-                    status_code=404,
-                    detail={
-                        'error': 'No transcript found',
-                        'message': f'No transcript available for call {call_id}',
-                        'action_required': 'Please ensure the call has completed and try again'
-                    }
-                )
-        
-        print("Processing transcript with OpenAI...")
-        processed_data = await process_transcript_with_openai(transcript)
-        
-        # Store processed data
-        brain_agent = BrainAgent()
-        if candidate_id:
-            brain_agent.candidate_profiles[candidate_id] = {
-                'transcript': transcript,
-                'processed_transcript': processed_data,
-                'screening_result': processed_data.get('screening_result'),
-                'match_result': processed_data.get('match_result'),
-                'dealbreakers': processed_data.get('dealbreakers'),
-                'match_reason': processed_data.get('match_reason')
-            }
-            print(f"Stored processed data for candidate {candidate_id}")
-        
-        return processed_data
-        
-    except Exception as e:
-        print(f"Error in fetch_and_store_retell_transcript: {str(e)}")
-        print(f"Error type: {type(e)}")
-        print(f"Error traceback: {traceback.format_exc()}")
-        if isinstance(e, HTTPException):
-            raise e
-        raise HTTPException(
-            status_code=500,
-            detail={
-                'error': 'Internal server error',
-                'message': str(e),
-                'action_required': 'Please contact support if the issue persists'
-            }
-        )
-
-async def retry_knowledge_base_source_cleanup(knowledge_base_id: str, source_id: str, max_retries: int = 3, delay_seconds: int = 60):
-    """
-    Retry deleting a knowledge base source with exponential backoff.
-    """
-    for attempt in range(max_retries):
-        try:
-            await asyncio.sleep(delay_seconds * (2 ** attempt))  # Exponential backoff
-            
-            async with httpx.AsyncClient(timeout=30.0) as client:
-                response = await client.delete(
-                    f"{RETELL_API_BASE}/knowledge-bases/{knowledge_base_id}/sources/{source_id}",
-                    headers={
-                        "Authorization": f"Bearer {RETELL_API_KEY}",
-                        "Content-Type": "application/json"
-                    }
-                )
-                
-                if response.status_code in (200, 404):
-                    print(f"Successfully deleted knowledge base source {source_id} on retry attempt {attempt + 1}")
-                    return True
-            
-            print(f"Retry attempt {attempt + 1} failed for knowledge base source {source_id}")
-            
-        except Exception as e:
-            print(f"Error in retry attempt {attempt + 1}: {str(e)}")
-    
-    print(f"Failed to delete knowledge base source {source_id} after {max_retries} retries")
-    return False
-
-def calculate_call_duration(retell_data: Dict[str, Any]) -> Optional[float]:
-    """Calculate call duration from timestamps."""
-    start_time = retell_data.get('start_timestamp')
-    end_time = retell_data.get('end_timestamp')
-    if start_time and end_time:
-        return (end_time - start_time) / 1000  # Convert to seconds
-    return None
-
-async def create_retell_knowledge_base(resume_file: UploadFile, name: str) -> str:
-    """Create a knowledge base in Retell AI with the resume file."""
-    if not RETELL_API_KEY:
-        raise HTTPException(status_code=500, detail="Retell AI API key not configured")
-
-    try:
-        print("\n=== Starting Knowledge Base Creation ===")
-        print(f"Processing file: {resume_file.filename}")
-        
-        # Read the file content
-        file_content = await resume_file.read()
-        
-        # Create a temporary file to send to Retell AI
-        with tempfile.NamedTemporaryFile(suffix='.pdf', delete=False) as temp_file:
-            print(f"Created temporary file: {temp_file.name}")
-            temp_file.write(file_content)
-            temp_file.flush()
-            
-            kb_name = f"KB_{name}_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}"
-            print(f"Knowledge base name: {kb_name}")
-
-            # Make the request to create knowledge base
-            async with httpx.AsyncClient() as client:
-                print("\nSending request to Retell AI...")
-                
-                # Create form data
-                files = {
-                    'knowledge_base_files': (
-                        resume_file.filename,
-                        open(temp_file.name, 'rb'),
-                        'application/pdf'
-                    )
-                }
-                
-                response = await client.post(
-                    f"{RETELL_API_BASE}/create-knowledge-base",
-                    headers={
-                        "Authorization": f"Bearer {RETELL_API_KEY}"
-                    },
-                    data={
-                        'knowledge_base_name': kb_name
-                    },
-                    files=files
-                )
-
-                print(f"\nResponse status code: {response.status_code}")
-                print(f"Response headers: {dict(response.headers)}")
-                print(f"Response body: {response.text}")
-
-            # Clean up the temporary file
-            os.unlink(temp_file.name)
-            print(f"\nCleaned up temporary file: {temp_file.name}")
-
-            if response.status_code not in (200, 201):
-                print(f"Error creating knowledge base: {response.text}")
-                raise HTTPException(
-                    status_code=response.status_code,
-                    detail=f"Failed to create Retell AI knowledge base: {response.text}"
-                )
-
-            try:
-                kb_data = response.json()
-                kb_id = kb_data.get('knowledge_base_id')
-                if not kb_id:
-                    raise ValueError("No knowledge_base_id in response")
-                print(f"\nSuccessfully created knowledge base with ID: {kb_id}")
-                print("=== Knowledge Base Creation Complete ===\n")
-                return kb_id
-            except Exception as e:
-                print(f"Error parsing response: {str(e)}")
-                raise HTTPException(
-                    status_code=500,
-                    detail=f"Failed to parse Retell AI response: {str(e)}"
-                )
-
-    except Exception as e:
-        print(f"\nERROR in create_retell_knowledge_base: {str(e)}")
-        print(f"Error type: {type(e)}")
-        print(f"Error traceback: {traceback.format_exc()}")
-        raise HTTPException(status_code=500, detail=f"Failed to create knowledge base: {str(e)}")
-
-async def add_to_knowledge_base(resume: UploadFile, knowledge_base_id: str) -> Tuple[bool, Optional[str]]:
-    """Add a resume to the Retell knowledge base and return success status and source ID."""
-    try:
-        print(f"\n=== Adding file to knowledge base {knowledge_base_id} ===")
-        print(f"File name: {resume.filename}")
-        
-        # Read the file content
-        file_content = await resume.read()
-        
-        # Create a temporary file
-        with tempfile.NamedTemporaryFile(suffix='.pdf', delete=False) as temp_file:
-            temp_file.write(file_content)
-            temp_file.flush()
-            print(f"Created temporary file: {temp_file.name}")
-            
-            try:
-                # Initialize Retell client
-                retell_client = Retell(api_key=RETELL_API_KEY)
-                
-                # Open the file and add it to the knowledge base
-                with open(temp_file.name, "rb") as file:
-                    print("Adding file to knowledge base using Retell client...")
-                    response = retell_client.knowledge_base.add_sources(
-                        knowledge_base_id=knowledge_base_id,
-                        knowledge_base_files=[file]
-                    )
-                    
-                    print(f"Response from Retell: {response}")
-                    
-                    # Extract source_id from the first source in knowledge_base_sources
-                    if (hasattr(response, 'knowledge_base_sources') and 
-                        response.knowledge_base_sources and 
-                        hasattr(response.knowledge_base_sources[0], 'source_id')):
-                        source_id = response.knowledge_base_sources[0].source_id
-                        print(f"Successfully added file with source_id: {source_id}")
-                        return True, source_id
-                    else:
-                        print("No source_id found in response structure")
-                        print(f"Response structure: {dir(response)}")
-                        if hasattr(response, 'knowledge_base_sources'):
-                            print(f"Sources: {response.knowledge_base_sources}")
-                        return False, None
-            
-            except Exception as e:
-                print(f"Error adding file to knowledge base: {str(e)}")
-                print(f"Error type: {type(e)}")
-                print(f"Error traceback: {traceback.format_exc()}")
-                return False, None
-            
-            finally:
-                # Clean up the temporary file
-                try:
-                    os.unlink(temp_file.name)
-                    print(f"Cleaned up temporary file: {temp_file.name}")
-                except Exception as e:
-                    print(f"Error cleaning up temporary file: {str(e)}")
-    except Exception as e:
-        print(f"Error in add_to_knowledge_base: {str(e)}")
-        print(f"Error type: {type(e)}")
-        print(f"Error traceback: {traceback.format_exc()}")
-        return False, None
-
 async def sync_call_statuses():
     """Sync call statuses from Pinecone to memory on startup"""
     try:
@@ -1490,11 +1186,9 @@ async def make_call(
             )
         print(f"Resume file: {resume.filename}")
 
-        # Process the resume to extract text and current company
+        # Process resume with OpenAI to get structured data including current company
         pdf_result = await process_pdf_to_text(resume)
         resume_text = pdf_result["text"]
-        
-        # Process resume with OpenAI to get structured data including current company
         resume_data = {
             "text": resume_text,
             "candidate_id": candidate_id
@@ -1521,33 +1215,16 @@ async def make_call(
         Summary: {structured_data.get('summary', 'Not specified')}
         """.strip()
 
-        # Use the fixed knowledge base ID
-        knowledge_base_id = "knowledge_base_b1df2fc51182f47b"
-        print(f"Using knowledge base: {knowledge_base_id}")
-
-        # Add the resume to the knowledge base and get the source ID
-        print("Adding resume to knowledge base...")
-        success, source_id = await add_to_knowledge_base(resume, knowledge_base_id)
-        if not success:
-            print("ERROR: Failed to add resume to knowledge base")
-            raise HTTPException(
-                status_code=500,
-                detail="Failed to add resume to knowledge base"
-            )
-        print(f"Successfully added resume to knowledge base. Source ID: {source_id}")
-
         # Prepare the request object
         retell_payload = {
             "from_number": RETELL_FROM_NUMBER,
             "to_number": formatted_number,
             "agent_id": RETELL_AGENT_ID,
-            "knowledge_base_id": knowledge_base_id,
             "metadata": {
                 "candidate_id": candidate_id,
                 "name": name,
                 "email": email,
                 "linkedin": linkedin,
-                "source_id": source_id,
                 "current_company": current_company
             },
             "retell_llm_dynamic_variables": {
@@ -1597,11 +1274,10 @@ async def make_call(
 
             print(f"\nSuccessfully created call with ID: {call_id}")
 
-            # Register call status with source_id in both memory and Pinecone
+            # Register call status in both memory and Pinecone
             status_data = {
                 "status": "registered",
                 "candidate_id": candidate_id,
-                "source_id": source_id,
                 "timestamp": datetime.utcnow().isoformat(),
                 "candidate_name": name,
                 "candidate_email": email,
@@ -1614,7 +1290,6 @@ async def make_call(
                 "message": "Call initiated successfully",
                 "call_id": call_id,
                 "status": "registered",
-                "source_id": source_id,
                 "current_company": current_company
             }
 

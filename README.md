@@ -82,6 +82,14 @@ uvicorn main:app --reload --log-level debug
 - `POST /email/webhook`: Handles incoming emails from SendGrid
 - `POST /test-email`: Sends a test email to verify setup
 
+### Call Management
+
+- `/makeCall` - Trigger a new call with Retell AI
+- `/webhook` - Handle Retell AI webhook events
+- `/cleanup` - Clean up completed calls and process transcripts
+- `/transcript/{call_id}` - Get transcript for a specific call
+- `/status/{call_id}` - Get status for a specific call
+
 ### Candidate Management
 
 - `POST /candidates`: Submit new candidate information with asynchronous resume processing
@@ -89,6 +97,9 @@ uvicorn main:app --reload --log-level debug
 - `POST /candidates/match-jobs`: Find matching jobs for a candidate
 - `POST /candidate/retell-transcript`: Process and store call transcripts
 - `POST /api/makeCall`: Initiate AI-powered candidate calls
+- `/candidates` - Get all candidate profiles
+- `/candidates/{candidate_id}` - Get a specific candidate profile
+- `/candidates/{candidate_id}/transcript` - Get transcript for a specific candidate
 
 ### Job Management
 
