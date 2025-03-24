@@ -918,27 +918,6 @@ async def match_candidates_to_job(request: JobMatchRequest):
         "total_matches": len(result['matches'])
     }
 
-@app.get("/candidates/{candidate_id}/profile")
-async def get_candidate_profile(candidate_id: str):
-    """Get a candidate's complete profile including processed resume data."""
-    try:
-        vector_store = VectorStore(init_openai=True)
-        profile = vector_store.get_candidate_profile(candidate_id)
-        
-        if profile["status"] == "error":
-            raise HTTPException(
-                status_code=404,
-                detail=profile["message"]
-            )
-            
-        return profile
-        
-    except Exception as e:
-        raise HTTPException(
-            status_code=500,
-            detail=str(e)
-        )
-
 @app.post("/test-email")
 async def test_email():
     # Test data for Andrew
@@ -2296,6 +2275,24 @@ async def process_call_transcript(call_id: str):
         raise HTTPException(
             status_code=500,
             detail=str(e)
+        )
+
+@app.get("/jobs/match-candidates", response_model=MatchResponse)
+async def match_candidates_to_job(request: JobMatchRequest):
+    """Match candidates to a job based on job ID."""
+    try:
+        vector_store = VectorStore(init_openai=True)
+        result = vector_store.match_candidates_to_job(request.job_id, request.top_k)
+        
+        return {
+            "status": "success",
+            "matches": result['matches'],
+            "total_matches": len(result['matches'])
+        }
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error matching candidates to job: {str(e)}"
         )
 
 app = app
