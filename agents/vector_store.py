@@ -20,45 +20,57 @@ from .matching_utils import (
 class VectorStore:
     def __init__(self, init_openai: bool = False):
         """Initialize Pinecone with environment variables."""
-        print("Initializing Pinecone...")
-        
-        # Load environment variables
-        load_dotenv()
-        
-        # Initialize Pinecone
-        pinecone_api_key = os.getenv('PINECONE_API_KEY')
-        if not pinecone_api_key:
-            raise ValueError("PINECONE_API_KEY environment variable not set")
+        try:
+            print("Initializing Pinecone...")
             
-        self.pc = Pinecone(api_key=pinecone_api_key)
-        
-        print("Pinecone initialized successfully")
-        print("Attempting to connect to indexes: anita-candidates, job-details")
-        
-        # Get list of existing indexes
-        existing_indexes = [index.name for index in self.pc.list_indexes()]
-        print("Existing indexes:", existing_indexes)
-        
-        # Connect to indexes
-        self.candidates_index = self.pc.Index("anita-candidates")
-        self.jobs_index = self.pc.Index("job-details")
-        
-        if init_openai:
-            # Check for OpenAI API key
-            openai_api_key = os.getenv('OPENAI_API_KEY')
-            if not openai_api_key:
-                raise ValueError("OPENAI_API_KEY environment variable not set. Required for storing candidates.")
+            # Load environment variables
+            load_dotenv()
             
-            # Initialize OpenAI client with new API format
-            self.openai_client = openai.OpenAI(api_key=openai_api_key)
+            # Initialize Pinecone
+            pinecone_api_key = os.getenv('PINECONE_API_KEY')
+            if not pinecone_api_key:
+                raise ValueError("PINECONE_API_KEY environment variable not set")
             
-            # Initialize tokenizer for text-embedding-3-small
-            self.tokenizer = tiktoken.get_encoding("cl100k_base")
+            self.pc = Pinecone(api_key=pinecone_api_key)
             
-            # Set chunk size (in tokens)
-            self.chunk_size = 500  # Conservative chunk size to stay well under limits
+            print("Pinecone initialized successfully")
             
-            print("OpenAI client initialized successfully")
+            # Get index names from environment variables
+            candidates_index_name = os.getenv('PINECONE_INDEX_NAME')
+            jobs_index_name = os.getenv('PINECONE_INDEX_NAME_JOBS')
+            
+            print(f"Attempting to connect to indexes: {candidates_index_name}, {jobs_index_name}")
+            
+            # List existing indexes
+            existing_indexes = [index.name for index in self.pc.list_indexes()]
+            print(f"Existing indexes: {existing_indexes}")
+            
+            # Connect to indexes
+            self.candidates_index = self.pc.Index(candidates_index_name)
+            self.jobs_index = self.pc.Index(jobs_index_name)
+            
+            if init_openai:
+                # Check for OpenAI API key
+                openai_api_key = os.getenv('OPENAI_API_KEY')
+                if not openai_api_key:
+                    raise ValueError("OPENAI_API_KEY environment variable not set. Required for storing candidates.")
+                
+                # Initialize OpenAI client with new API format
+                self.openai_client = openai.OpenAI(api_key=openai_api_key)
+                
+                # Initialize tokenizer for text-embedding-3-small
+                self.tokenizer = tiktoken.get_encoding("cl100k_base")
+                
+                # Set chunk size (in tokens)
+                self.chunk_size = 500  # Conservative chunk size to stay well under limits
+                
+                print("OpenAI client initialized successfully")
+
+        except Exception as e:
+            print(f"Error initializing vector store: {str(e)}")
+            print(f"Error type: {type(e)}")
+            import traceback
+            print(f"Traceback: {traceback.format_exc()}")
 
     def chunk_text(self, text: str) -> List[str]:
         """Split text into chunks based on token count."""

@@ -1304,27 +1304,6 @@ async def make_call(
     finally:
         print("=== Call Creation Complete ===\n")
 
-@app.post("/delete-knowledge-base/{knowledge_base_id}")
-async def delete_knowledge_base(knowledge_base_id: str):
-    """Delete a knowledge base from Retell AI."""
-    try:
-        success = await delete_retell_knowledge_base(knowledge_base_id)
-        if success:
-            return {
-                "status": "success",
-                "message": f"Successfully deleted knowledge base {knowledge_base_id}"
-            }
-        else:
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail=f"Failed to delete knowledge base {knowledge_base_id}"
-            )
-    except Exception as e:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=str(e)
-        )
-
 async def check_call_status(call_id: str) -> Tuple[bool, str, Dict[str, Any]]:
     """Check the status of a call with Retell AI."""
     try:
@@ -1508,26 +1487,110 @@ def is_test_call(call_data: dict) -> bool:
     
     return any(test_indicators)
 
+async def fetch_and_store_retell_transcript(call_data: Union[dict, RetellCallData]) -> Dict[str, Any]:
+    """Fetch and store transcript from Retell AI."""
+    try:
+        # Handle both dictionary and Pydantic model inputs
+        if isinstance(call_data, RetellCallData):
+            call_id = call_data.call_id
+            candidate_id = call_data.candidate_id
+        else:
+            call_id = call_data.get('call_id')
+            candidate_id = call_data.get('candidate_id')
+
+        if not call_id:
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    'error': 'Missing call ID',
+                    'message': 'Call ID is required',
+                    'action_required': 'Please provide a valid call ID'
+                }
+            )
+
+        logger.info(f"=== Processing Transcript for Call {call_id} ===")
+        logger.info("Fetching transcript from Retell AI...")
+        
+        retell_data = await fetch_retell_transcript(call_id)
+        
+        if not retell_data:
+            raise HTTPException(
+                status_code=404,
+                detail={
+                    'error': 'No data found',
+                    'message': f'No data found for call {call_id}',
+                    'action_required': 'Please verify the call ID'
+                }
+            )
+        
+        # Check if transcript exists in the response
+        transcript = retell_data.get('transcript')
+        if not transcript:
+            # Try to get transcript from messages if available
+            messages = retell_data.get('messages', [])
+            if messages:
+                transcript = '\n'.join([msg.get('text', '') for msg in messages if msg.get('text')])
+            
+            if not transcript:
+                raise HTTPException(
+                    status_code=404,
+                    detail={
+                        'error': 'No transcript found',
+                        'message': f'No transcript available for call {call_id}',
+                        'action_required': 'Please ensure the call has completed and try again'
+                    }
+                )
+        
+        logger.info("Processing transcript with OpenAI...")
+        processed_data = await process_transcript_with_openai(transcript)
+        
+        # Store processed data
+        brain_agent = BrainAgent()
+        if candidate_id:
+            brain_agent.candidate_profiles[candidate_id] = {
+                'transcript': transcript,
+                'processed_transcript': processed_data,
+                'screening_result': processed_data.get('screening_result'),
+                'match_result': processed_data.get('match_result'),
+                'dealbreakers': processed_data.get('dealbreakers'),
+                'match_reason': processed_data.get('match_reason')
+            }
+            logger.info(f"Stored processed data for candidate {candidate_id}")
+        
+        return processed_data
+        
+    except Exception as e:
+        logger.error(f"Error in fetch_and_store_retell_transcript: {str(e)}")
+        logger.error(f"Error type: {type(e)}")
+        logger.error(f"Error traceback: {traceback.format_exc()}")
+        if isinstance(e, HTTPException):
+            raise e
+        raise HTTPException(
+            status_code=500,
+            detail={
+                'error': 'Internal server error',
+                'message': str(e),
+                'action_required': 'Please contact support if the issue persists'
+            }
+        )
+
 async def cleanup_completed_calls():
-    """Background task to clean up completed calls and process their transcripts."""
-    print("\n=== Starting Call Cleanup Task ===")
+    """Background task to clean up completed calls."""
     while True:
         try:
-            # Get all unprocessed calls
-            unprocessed_calls = {
-                call_id: status_data
-                for call_id, status_data in call_statuses.items()
-                if not status_data.get('processed_by_system')
-            }
+            logger.info("\n=== Starting cleanup of completed calls ===")
+            logger.info(f"Timestamp: {datetime.utcnow().isoformat()}")
             
-            if not unprocessed_calls:
-                print("No new calls to process")
-            else:
-                print(f"Found {len(unprocessed_calls)} unprocessed calls")
-                
-                for call_id, status_data in unprocessed_calls.items():
-                    try:
-                        print(f"\nProcessing call {call_id}...")
+            # Get all call statuses
+            for call_id, status_data in list(call_statuses.items()):
+                try:
+                    # Skip if already processed
+                    if status_data.get('processed'):
+                        continue
+                        
+                    # Check if call is completed
+                    if status_data.get('status') == RetellCallStatus.ENDED:
+                        logger.info(f"Processing completed call {call_id}")
                         
                         # Create call data object for processing
                         call_data_obj = RetellCallData(
@@ -1539,11 +1602,11 @@ async def cleanup_completed_calls():
                         try:
                             # Try to fetch and process transcript
                             processed_data = await fetch_and_store_retell_transcript(call_data_obj)
-                            print(f"Successfully processed transcript for call {call_id}")
+                            logger.info(f"Successfully processed transcript for call {call_id}")
                             
                             # Send email if we have the candidate's email
                             if status_data.get('candidate_email'):
-                                print(f"Sending email to {status_data['candidate_email']}...")
+                                logger.info(f"Sending email to {status_data['candidate_email']}...")
                                 interaction_agent = InteractionAgent()
                                 email_result = interaction_agent.send_transcript_summary(
                                     status_data['candidate_email'],
@@ -1551,42 +1614,43 @@ async def cleanup_completed_calls():
                                 )
                                 
                                 if email_result['status'] == 'success':
-                                    print(f"Successfully sent email to {status_data['candidate_email']}")
+                                    logger.info(f"Successfully sent email to {status_data['candidate_email']}")
                                     status_data['email_sent'] = True
                                     status_data['email_sent_at'] = datetime.utcnow().isoformat()
                                     status_data['email_status'] = email_result
                                 else:
-                                    print(f"Failed to send email: {email_result.get('error')}")
+                                    logger.error(f"Failed to send email: {email_result.get('error')}")
                                     
                         except HTTPException as he:
                             if he.status_code == 404 and "No transcript found" in str(he.detail):
-                                print(f"No transcript available for call {call_id} - call may have ended prematurely")
-                                status_data['transcript_status'] = "No transcript available - call may have ended prematurely"
+                                logger.info(f"No transcript to process for call {call_id}")
                             else:
-                                print(f"Error processing call {call_id}: {str(he)}")
-                                status_data['error'] = str(he)
-                        except Exception as e:
-                            print(f"Error processing call {call_id}: {str(e)}")
-                            print(f"Error type: {type(e)}")
-                            print(f"Error traceback: {traceback.format_exc()}")
-                            status_data['error'] = str(e)
+                                logger.error(f"Error processing call {call_id}: {str(he)}")
+                                continue
                         
-                        # Mark as processed regardless of outcome
-                        status_data['processed_by_system'] = True
+                        # Mark call as processed regardless of outcome
+                        status_data['processed'] = True
                         status_data['processed_at'] = datetime.utcnow().isoformat()
                         await update_call_status(call_id, status_data)
+                        logger.info(f"Marked call {call_id} as processed")
                         
-                    except Exception as e:
-                        print(f"ERROR: Error processing call {call_id}: {str(e)}")
-                        print(f"ERROR: Error traceback: {traceback.format_exc()}")
+                except Exception as call_error:
+                    logger.error(f"Error processing call {call_id}: {str(call_error)}")
+                    logger.error(f"Error type: {type(call_error)}")
+                    logger.error(f"Error traceback: {traceback.format_exc()}")
+                    continue
             
-            # Sleep for 30 seconds before next check
-            await asyncio.sleep(30)
+            logger.info("=== Completed cleanup of calls ===\n")
+            
+            # Sleep for 5 minutes before next cleanup
+            await asyncio.sleep(300)
             
         except Exception as e:
-            print(f"ERROR in cleanup task: {str(e)}")
-            print(f"ERROR traceback: {traceback.format_exc()}")
-            await asyncio.sleep(30)  # Sleep even on error to prevent rapid retries
+            logger.error(f"Error in cleanup_completed_calls: {str(e)}")
+            logger.error(f"Error type: {type(e)}")
+            logger.error(f"Error traceback: {traceback.format_exc()}")
+            # Sleep for 1 minute before retrying after error
+            await asyncio.sleep(60)
 
 @app.get("/jobs/most-recent")
 async def get_most_recent_job():
