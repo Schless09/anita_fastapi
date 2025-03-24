@@ -767,7 +767,6 @@ async def submit_candidate(
                 name=name,
                 email=email,
                 phone_number=phone_number,
-                linkedin=linkedin or "",
                 resume=resume_copy
             )
             
