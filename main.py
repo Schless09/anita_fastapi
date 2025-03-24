@@ -169,13 +169,16 @@ app = FastAPI(
     version="2.0.0"
 )
 
-# Mount public directory for static files
-app.mount("/public", StaticFiles(directory="public"), name="public")
+# Ensure static directory exists
+os.makedirs("static/images", exist_ok=True)
+
+# Mount static directory for static files
+app.mount("/static", StaticFiles(directory="static"), name="static")
 
 @app.get('/favicon.ico')
 async def get_favicon():
     """Serve the favicon."""
-    return FileResponse('public/images/anita2rounded.png')
+    return FileResponse('static/images/anita2rounded.png')
 
 @app.get("/health")
 def health_check():
