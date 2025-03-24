@@ -1,5 +1,7 @@
 from fastapi import FastAPI, HTTPException, status, UploadFile, File, Form, Depends, Request, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse
 from agents.brain_agent import BrainAgent
 from agents.interaction_agent import InteractionAgent
 from agents.vector_store import VectorStore
@@ -166,6 +168,14 @@ app = FastAPI(
     description="API for AI-driven recruitment with enhanced candidate-job matching",
     version="2.0.0"
 )
+
+# Mount static files directory
+app.mount("/static", StaticFiles(directory="static"), name="static")
+
+@app.get('/favicon.ico')
+async def get_favicon():
+    """Serve the favicon."""
+    return FileResponse('static/favicon.ico')
 
 @app.get("/health")
 def health_check():
