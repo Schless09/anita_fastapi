@@ -186,7 +186,7 @@ def health_check():
 
 interaction_agent = InteractionAgent()
 brain_agent = BrainAgent()
-vector_store = VectorStore()
+vector_store = VectorStore(init_openai=True)  # Initialize with OpenAI support
 
 # Add Retell AI configuration
 RETELL_API_KEY = os.getenv('RETELL_API_KEY')
