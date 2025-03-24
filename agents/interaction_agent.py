@@ -1,7 +1,8 @@
 import os
 import logging
+import ssl
 from sendgrid import SendGridAPIClient
-from sendgrid.helpers.mail import Mail
+from sendgrid.helpers.mail import Mail, Email, To
 from dotenv import load_dotenv
 from typing import Dict, Any, Optional
 from datetime import datetime
@@ -15,6 +16,10 @@ class InteractionAgent:
         load_dotenv()
         self.sendgrid_api_key = SENDGRID_CONFIG['api_key']
         self.sender_email = SENDGRID_CONFIG['sender_email']
+        
+        # Handle SSL verification
+        if not os.environ.get('PYTHONHTTPSVERIFY', '') and getattr(ssl, '_create_unverified_context', None):
+            ssl._create_default_https_context = ssl._create_unverified_context
         
         # Log initialization details
         logger.info("Initializing InteractionAgent...")
@@ -47,7 +52,7 @@ class InteractionAgent:
             message = Mail(
                 from_email=self.sender_email,
                 to_emails=recipient_email,
-                subject=f"Exciting Opportunity: {job_title} at {company}",
+                subject=f"Job Opportunity: {job_title} at {company}",
                 html_content=f"""
                 <p>Hi there,</p>
                 <p>I hope you're doing well! I came across an exciting opportunity that aligns with your profile and wanted to share it with you.</p>
@@ -228,7 +233,7 @@ class InteractionAgent:
                 
                 <p>Best regards,<br>
                 <strong>Anita</strong><br>
-                <em>Your AI Recruiter</em></p>
+                <em>Your AI Career Co-Pilot</em></p>
                 """
             
             # Create and send the email
@@ -253,4 +258,67 @@ class InteractionAgent:
             return {
                 'status': 'error',
                 'message': str(e)
+            }
+
+    def send_transcript_summary(self, email: str, processed_data: dict) -> Dict[str, Any]:
+        """Sends a summary email to the candidate after their call with Retell AI."""
+        try:
+            logger.info(f"Preparing transcript summary email for {email}")
+
+            # Create the email message
+            message = Mail(
+                from_email=Email(self.sender_email),
+                to_emails=To(email),
+                subject="Thanks for speaking with me!",
+                html_content=f"""
+                <p>Hi there,</p>
+                
+                <p>Thank you for taking the time to speak with me today! I wanted to summarize the key points from our conversation:</p>
+
+                <h3>Key Points from Our Conversation:</h3>
+                <ul>
+                    {"".join(f"<li>{point}</li>" for point in processed_data.get('key_points', []))}
+                </ul>
+
+                <h3>Your Experience Highlights:</h3>
+                <ul>
+                    {"".join(f"<li>{exp}</li>" for exp in processed_data.get('experience_highlights', []))}
+                </ul>
+
+                <h3>Next Steps:</h3>
+                <p>{processed_data.get('next_steps', 'I will be reviewing your profile and matching you with relevant opportunities. You will receive an email from me when I find a great match for your skills and preferences.')}</p>
+
+                <p>If you have any questions or would like to add anything to our conversation, feel free to reply to this email.</p>
+
+                <p>Best regards,<br>
+                <strong>Anita</strong><br>
+                <em>Your AI Career Co-Pilot</em></p>
+                """
+            )
+
+            logger.info("Creating SendGrid client...")
+            sg = SendGridAPIClient(self.sendgrid_api_key)
+            
+            logger.info("Sending transcript summary email...")
+            response = sg.send(message)
+            
+            logger.info(f"SendGrid response status code: {response.status_code}")
+            logger.info(f"SendGrid response headers: {response.headers}")
+            
+            # Return a serializable response
+            return {
+                'status': 'success',
+                'recipient': email,
+                'subject': str(message.subject),  # Convert Subject to string
+                'response_code': response.status_code
+            }
+        except Exception as e:
+            logger.error(f"Error sending transcript summary email: {str(e)}")
+            logger.error(f"Error type: {type(e)}")
+            import traceback
+            logger.error(f"Traceback: {traceback.format_exc()}")
+            return {
+                'status': 'error',
+                'error': str(e),
+                'recipient': email
             }
