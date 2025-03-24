@@ -1375,12 +1375,22 @@ async def retell_webhook(request: Request):
         if not isinstance(metadata, dict):
             metadata = {}
             
+        # Get existing status data if available
+        stored_status = call_statuses.get(call_id, {})
+            
         # Prepare status data
         status_data = {
             "status": call_status,
             "webhook_received_at": datetime.utcnow().isoformat(),
             "raw_status": webhook_status,
-            "metadata": metadata
+            "metadata": metadata,
+            # Preserve existing email sent status
+            "email_sent": stored_status.get('email_sent', False),
+            "email_sent_at": stored_status.get('email_sent_at'),
+            "email_status": stored_status.get('email_status'),
+            # Preserve processed status
+            "processed": stored_status.get('processed', False),
+            "processed_at": stored_status.get('processed_at')
         }
         
         # Add transcript if present
@@ -1398,12 +1408,9 @@ async def retell_webhook(request: Request):
             await update_call_status(call_id, status_data)
             print(f"Successfully processed webhook for call {call_id}")
 
-            # If the call has ended, process transcript and send email
-            if call_status == RetellCallStatus.ENDED:
-                print(f"Call {call_id} has ended, processing transcript...")
-                
-                # Get the call data from our status storage
-                stored_status = call_statuses.get(call_id, {})
+            # If the call has ended and email hasn't been sent yet, process transcript and send email
+            if call_status == RetellCallStatus.ENDED and not status_data.get('email_sent'):
+                print(f"Call {call_id} has ended and no email sent yet, processing transcript...")
                 
                 # Create call data object for processing
                 call_data = RetellCallData(
@@ -1584,8 +1591,8 @@ async def cleanup_completed_calls():
             # Get all call statuses
             for call_id, status_data in list(call_statuses.items()):
                 try:
-                    # Skip if already processed
-                    if status_data.get('processed'):
+                    # Skip if already processed or email already sent
+                    if status_data.get('processed') or status_data.get('email_sent'):
                         continue
                         
                     # Check if call is completed
@@ -1604,8 +1611,8 @@ async def cleanup_completed_calls():
                             processed_data = await fetch_and_store_retell_transcript(call_data_obj)
                             logger.info(f"Successfully processed transcript for call {call_id}")
                             
-                            # Send email if we have the candidate's email
-                            if status_data.get('candidate_email'):
+                            # Send email if we have the candidate's email and it hasn't been sent yet
+                            if status_data.get('candidate_email') and not status_data.get('email_sent'):
                                 logger.info(f"Sending email to {status_data['candidate_email']}...")
                                 interaction_agent = InteractionAgent()
                                 email_result = interaction_agent.send_transcript_summary(
