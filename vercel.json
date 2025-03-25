@@ -14,5 +14,11 @@
   ],
   "env": {
     "PYTHONUNBUFFERED": "1"
-  }
+  },
+  "crons": [
+    {
+      "path": "/api/cron/cleanup-calls",
+      "schedule": "* * * * *"
+    }
+  ]
 }
