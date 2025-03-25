@@ -1370,84 +1370,58 @@ def log_webhook(call_id: str, data: dict):
 
 @app.post("/webhook/retell")
 async def retell_webhook(request: Request):
-    """Handle Retell webhook events"""
+    """Handle Retell webhook events."""
     try:
-        logger.info("\n" + "="*50)
-        logger.info("📞 Received Retell webhook")
-        logger.info("="*50)
+        # Log the raw request for debugging
+        logger.info("📥 Received Retell webhook")
+        body = await request.json()
+        logger.info(f"📦 Webhook payload: {json.dumps(body, indent=2)}")
 
-        data = await request.json()
-        event_type = data.get("event")
-        call_data = data.get("call", {})
-        call_id = call_data.get("call_id")
+        # Extract event data
+        event = body.get("event")
+        call_id = body.get("call_id")
+        call_status = body.get("call_status")
+        metadata = body.get("metadata", {})
 
-        if not call_id:
-            logger.error("❌ Missing call_id in webhook data")
-            return {"status": "error", "message": "Missing call_id"}, 400
+        if not event or not call_id:
+            logger.error("❌ Missing required fields in webhook payload")
+            raise HTTPException(
+                status_code=400,
+                detail="Missing required fields: event or call_id"
+            )
 
-        logger.info(f"📞 Processing {event_type} event for call: {call_id}")
-        logger.info(f"⏰ Timestamp: {datetime.now().isoformat()}")
-        logger.info(f"📋 Call Status: {call_data.get('call_status', 'unknown')}")
+        logger.info(f"📞 Processing {event} event for call {call_id}")
 
-        # Log the full webhook data to Pinecone
-        log_webhook(call_id, data)
-        logger.info("📝 Logged webhook data to Pinecone")
+        # Store call status
+        call_statuses[call_id] = {
+            "status": call_status,
+            "event": event,
+            "metadata": metadata,
+            "timestamp": datetime.now().isoformat(),
+            "processed_by_system": False
+        }
 
-        # Handle different event types
-        if event_type == "call_started":
-            logger.info(f"🟢 Call started: {call_id}")
-            # Update call status to in_progress
-            await update_call_status(call_id, {
-                "status": "in_progress",
-                "start_timestamp": datetime.now().isoformat(),
-                "metadata": call_data.get("metadata", {})
-            })
+        # If call has ended, process the transcript
+        if event == "call_ended":
+            logger.info(f"🔄 Call {call_id} ended, scheduling transcript processing")
+            # Process in background to avoid blocking webhook response
+            asyncio.create_task(fetch_and_store_retell_transcript(call_id))
 
-        elif event_type == "call_ended":
-            logger.info(f"🔄 Processing ended call: {call_id}")
-            # Update call status and trigger transcript processing
-            await update_call_status(call_id, {
-                "status": "ended",
-                "end_timestamp": datetime.now().isoformat(),
-                "disconnection_reason": call_data.get("disconnection_reason"),
-                "metadata": call_data.get("metadata", {})
-            })
+        return {"status": "success", "message": "Webhook received"}
 
-            try:
-                # Process the call asynchronously
-                logger.info(f"📥 Fetching transcript for call: {call_id}")
-                await fetch_and_store_retell_transcript(call_id)
-                logger.info(f"✅ Successfully processed call: {call_id}")
-            except Exception as e:
-                logger.error(f"❌ Error processing call {call_id}: {str(e)}")
-                logger.error(f"Error traceback: {traceback.format_exc()}")
-                await update_call_status(call_id, {
-                    "status": "error",
-                    "error": str(e),
-                    "timestamp": datetime.now().isoformat()
-                })
-
-        elif event_type == "call_analyzed":
-            logger.info(f"📊 Call analysis complete: {call_id}")
-            # Update call status with analysis results
-            await update_call_status(call_id, {
-                "status": "analyzed",
-                "analysis_timestamp": datetime.now().isoformat(),
-                "analysis_data": call_data.get("call_analysis", {}),
-                "metadata": call_data.get("metadata", {})
-            })
-
-        else:
-            logger.warning(f"⚠️ Unknown event type: {event_type}")
-            return {"status": "error", "message": f"Unknown event type: {event_type}"}, 400
-
-        logger.info("="*50)
-        return {"status": "success", "message": f"Successfully processed {event_type} event"}
-
+    except json.JSONDecodeError:
+        logger.error("❌ Invalid JSON in webhook payload")
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid JSON payload"
+        )
     except Exception as e:
-        logger.error(f"❌ Error in webhook handler: {str(e)}")
-        logger.error(f"Error traceback: {traceback.format_exc()}")
-        return {"status": "error", "message": str(e)}, 500
+        logger.error(f"❌ Error processing webhook: {str(e)}")
+        logger.error(f"Traceback: {traceback.format_exc()}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error processing webhook: {str(e)}"
+        )
 
 def clean_test_calls() -> int:
     """Remove test calls from call_statuses dictionary."""
