@@ -8,12 +8,30 @@
         "maxLambdaSize": "15mb",
         "runtime": "python3.9"
       }
+    },
+    {
+      "src": "public/**",
+      "use": "@vercel/static"
     }
   ],
   "routes": [
     {
+      "src": "/favicon.ico",
+      "dest": "/public/images/anita2rounded.png"
+    },
+    {
+      "src": "/static/(.*)",
+      "dest": "/public/$1"
+    },
+    {
       "src": "/(.*)",
       "dest": "main.py"
+    }
+  ],
+  "crons": [
+    {
+      "path": "/cron/cleanup-calls",
+      "schedule": "* * * * *"
     }
   ],
   "buildCommand": "pip install --upgrade pip && pip install --no-cache-dir -r requirements.txt"

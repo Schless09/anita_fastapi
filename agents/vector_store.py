@@ -33,15 +33,20 @@ class VectorStore:
         self.pc = Pinecone(api_key=pinecone_api_key)
         
         print("Pinecone initialized successfully")
-        print("Attempting to connect to indexes: anita-candidates, job-details")
+        
+        # Get index names from environment variables
+        candidates_index_name = os.getenv('PINECONE_INDEX_NAME')
+        jobs_index_name = os.getenv('PINECONE_INDEX_NAME_JOBS')
+        
+        print(f"Attempting to connect to indexes: {candidates_index_name}, {jobs_index_name}")
         
         # Get list of existing indexes
         existing_indexes = [index.name for index in self.pc.list_indexes()]
         print("Existing indexes:", existing_indexes)
         
         # Connect to indexes
-        self.candidates_index = self.pc.Index("anita-candidates")
-        self.jobs_index = self.pc.Index("job-details")
+        self.candidates_index = self.pc.Index(candidates_index_name)
+        self.jobs_index = self.pc.Index(jobs_index_name)
         
         if init_openai:
             # Check for OpenAI API key
