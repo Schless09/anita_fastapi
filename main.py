@@ -957,16 +957,35 @@ async def match_candidates_to_job(request: JobMatchRequest):
 
 @app.post("/test-email")
 async def test_email():
-    # Test data for Andrew
-    job_match = {
-        'email': 'arschuessler90@gmail.com',
-        'phone_number': '+18476094515',
-        'title': 'Senior Backend Engineer',
-        'company': 'Hedra'
-    }
-    
-    result = interaction_agent.contact_candidate(job_match)
-    return result
+    """Test endpoint to send a summary email."""
+    try:
+        # Test data with actual conversation summary
+        processed_data = {
+            'key_points': [
+                "You spoke with Anita about your career goals, expressing a desire for higher compensation and interest in larger projects, particularly in the voice AI space. You mentioned having experience in building voice AI solutions for recruitment."
+            ],
+            'experience_highlights': [
+                "Based on our conversation, I've noted your key qualifications and experience",
+                "Your responses showed strong alignment with our requirements",
+                "We discussed potential opportunities that match your background"
+            ],
+            'next_steps': "I will be reviewing your profile and matching you with relevant opportunities. You will receive an email from me when I find a great match for your skills and preferences."
+        }
+        
+        # Send the summary email
+        interaction_agent = InteractionAgent()
+        email_result = interaction_agent.send_transcript_summary('harrison.franke@gmail.com', processed_data)
+        
+        return {
+            "status": "success" if email_result.get('status') == 'success' else "error",
+            "message": email_result.get('message', 'Unknown error')
+        }
+        
+    except Exception as e:
+        return {
+            "status": "error",
+            "message": str(e)
+        }
 
 async def validate_retell_response(response_data: Dict[str, Any]) -> Dict[str, Any]:
     """Validate and process the Retell AI response"""
@@ -1472,18 +1491,21 @@ async def retell_webhook(request: Request):
         elif event == "call_analyzed":
             logging.info(f"Call analyzed: {call.get('call_id')}")
             try:
-                # Get the transcript from the call data
-                transcript = call.get('transcript')
-                if not transcript:
-                    logging.error("No transcript found in call_analyzed event")
+                # Get the call analysis from the call data
+                call_analysis = call.get('call_analysis', {})
+                
+                if not call_analysis:
+                    logging.error("No call analysis found in call_analyzed event")
                     return JSONResponse(
                         status_code=400,
-                        content={"error": "No transcript found"}
+                        content={"error": "Missing call analysis"}
                     )
                 
-                # Get candidate email from metadata
+                # Get candidate email and name from metadata
                 metadata = call.get('metadata', {})
                 email = metadata.get('email')
+                first_name = metadata.get('name', '').split()[0]  # Get first name
+                
                 if not email:
                     logging.error("No email found in call metadata")
                     return JSONResponse(
@@ -1491,17 +1513,21 @@ async def retell_webhook(request: Request):
                         content={"error": "No email found in metadata"}
                     )
                 
-                # Process the transcript
+                # Get the call summary and personalize it
+                summary = call_analysis.get('call_summary', '')
+                summary = summary.replace(f"{first_name} ", "You ")  # Replace "Name " with "You "
+                summary = summary.replace(f"{first_name}", "you")   # Replace remaining "Name" with "you"
+                
+                # Process the transcript using call analysis data
                 processed_data = {
+                    'first_name': first_name,  # Add first name to the processed data
                     'key_points': [
-                        "We discussed your background and experience",
-                        "You shared your career goals and preferences",
-                        "We talked about potential opportunities"
+                        summary  # Use the personalized call summary from Retell
                     ],
                     'experience_highlights': [
-                        "Your experience with AI and machine learning",
-                        "Your work on scalable systems",
-                        "Your interest in building innovative solutions"
+                        "Based on our conversation, I've noted your key qualifications and experience",
+                        "Your responses showed strong alignment with our requirements",
+                        "We discussed potential opportunities that match your background"
                     ],
                     'next_steps': "I will be reviewing your profile and matching you with relevant opportunities. You will receive an email from me when I find a great match for your skills and preferences."
                 }
@@ -1510,7 +1536,7 @@ async def retell_webhook(request: Request):
                 interaction_agent = InteractionAgent()
                 email_result = interaction_agent.send_transcript_summary(email, processed_data)
                 
-                if email_result.get('status') == 'success':
+                if email_result.get("status") == "success":
                     logging.info(f"Successfully sent summary email to {email}")
                 else:
                     logging.error(f"Failed to send summary email: {email_result.get('error')}")

@@ -271,7 +271,7 @@ class InteractionAgent:
                 to_emails=To(email),
                 subject="Thanks for speaking with me!",
                 html_content=f"""
-                <p>Hi there,</p>
+                <p>Hi {processed_data.get('first_name', '')},</p>
                 
                 <p>Thank you for taking the time to speak with me today! I wanted to summarize the key points from our conversation:</p>
 
