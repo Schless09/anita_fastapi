@@ -1377,11 +1377,12 @@ async def retell_webhook(request: Request):
         body = await request.json()
         logger.info(f"📦 Webhook payload: {json.dumps(body, indent=2)}")
 
-        # Extract event data
+        # Extract event data from the correct structure
         event = body.get("event")
-        call_id = body.get("call_id")
-        call_status = body.get("call_status")
-        metadata = body.get("metadata", {})
+        call_data = body.get("call", {})
+        call_id = call_data.get("call_id")
+        call_status = call_data.get("call_status")
+        metadata = call_data.get("metadata", {})
 
         if not event or not call_id:
             logger.error("❌ Missing required fields in webhook payload")
@@ -1392,11 +1393,20 @@ async def retell_webhook(request: Request):
 
         logger.info(f"📞 Processing {event} event for call {call_id}")
 
-        # Store call status
+        # Store call status with all relevant data
         call_statuses[call_id] = {
             "status": call_status,
             "event": event,
             "metadata": metadata,
+            "start_timestamp": call_data.get("start_timestamp"),
+            "end_timestamp": call_data.get("end_timestamp"),
+            "disconnection_reason": call_data.get("disconnection_reason"),
+            "transcript": call_data.get("transcript"),
+            "transcript_object": call_data.get("transcript_object"),
+            "from_number": call_data.get("from_number"),
+            "to_number": call_data.get("to_number"),
+            "direction": call_data.get("direction"),
+            "agent_id": call_data.get("agent_id"),
             "timestamp": datetime.now().isoformat(),
             "processed_by_system": False
         }
