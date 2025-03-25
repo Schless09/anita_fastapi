@@ -13,7 +13,7 @@
   "routes": [
     {
       "src": "/webhook/retell",
-      "dest": "/api/webhook",
+      "dest": "/api/webhook.py",
       "methods": ["POST", "OPTIONS"],
       "headers": {
         "Access-Control-Allow-Origin": "*",

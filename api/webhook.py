@@ -7,54 +7,55 @@ from datetime import datetime
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-class handler(BaseHTTPRequestHandler):
-    def do_POST(self):
-        try:
-            # Get request body
-            content_length = int(self.headers['Content-Length'])
-            body = self.rfile.read(content_length)
-            payload = json.loads(body)
+def handler(request):
+    """Handle Retell webhook events."""
+    try:
+        # Log webhook data
+        logger.info("📥 Received Retell webhook")
+        logger.info(f"Headers: {dict(request.headers)}")
+        
+        # Get request body
+        body = request.get_json()
+        logger.info(f"📦 Webhook payload: {json.dumps(body, indent=2)}")
 
-            # Log webhook data
-            logger.info("📥 Received Retell webhook")
-            logger.info(f"Headers: {dict(self.headers)}")
-            logger.info(f"📦 Webhook payload: {json.dumps(payload, indent=2)}")
+        # Extract event data
+        event = body.get("event")
+        call_data = body.get("call", {})
+        call_id = call_data.get("call_id")
+        call_status = call_data.get("call_status")
+        metadata = call_data.get("metadata", {})
 
-            # Extract event data
-            event = payload.get("event")
-            call_data = payload.get("call", {})
-            call_id = call_data.get("call_id")
-            call_status = call_data.get("call_status")
-            metadata = call_data.get("metadata", {})
+        if not event or not call_id:
+            logger.error("❌ Missing required fields in webhook payload")
+            return {
+                "statusCode": 400,
+                "body": json.dumps({
+                    "error": "Missing required fields: event or call_id"
+                })
+            }
 
-            if not event or not call_id:
-                self.send_error(400, "Missing required fields: event or call_id")
-                return
+        logger.info(f"📞 Processing {event} event for call {call_id}")
 
-            logger.info(f"📞 Processing {event} event for call {call_id}")
-
-            # Send success response
-            self.send_response(200)
-            self.send_header('Content-type', 'application/json')
-            self.send_header('Access-Control-Allow-Origin', '*')
-            self.send_header('Access-Control-Allow-Methods', 'POST, OPTIONS')
-            self.send_header('Access-Control-Allow-Headers', '*')
-            self.end_headers()
-
-            response = {
+        return {
+            "statusCode": 200,
+            "headers": {
+                "Content-Type": "application/json",
+                "Access-Control-Allow-Origin": "*",
+                "Access-Control-Allow-Methods": "POST, OPTIONS",
+                "Access-Control-Allow-Headers": "*"
+            },
+            "body": json.dumps({
                 "status": "success",
                 "message": "Webhook received",
                 "timestamp": datetime.now().isoformat()
-            }
-            self.wfile.write(json.dumps(response).encode())
+            })
+        }
 
-        except Exception as e:
-            logger.error(f"❌ Error processing webhook: {str(e)}")
-            self.send_error(500, f"Error processing webhook: {str(e)}")
-
-    def do_OPTIONS(self):
-        self.send_response(200)
-        self.send_header('Access-Control-Allow-Origin', '*')
-        self.send_header('Access-Control-Allow-Methods', 'POST, OPTIONS')
-        self.send_header('Access-Control-Allow-Headers', '*')
-        self.end_headers() 
+    except Exception as e:
+        logger.error(f"❌ Error processing webhook: {str(e)}")
+        return {
+            "statusCode": 500,
+            "body": json.dumps({
+                "error": f"Error processing webhook: {str(e)}"
+            })
+        } 
