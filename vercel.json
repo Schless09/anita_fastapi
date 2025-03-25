@@ -3,11 +3,7 @@
   "builds": [
     {
       "src": "main.py",
-      "use": "@vercel/python",
-      "config": {
-        "maxLambdaSize": "15mb",
-        "runtime": "python3.9"
-      }
+      "use": "@vercel/python"
     }
   ],
   "routes": [
@@ -16,5 +12,7 @@
       "dest": "main.py"
     }
   ],
-  "buildCommand": "pip install --upgrade pip && pip install --no-cache-dir -r requirements.txt"
+  "env": {
+    "PYTHONUNBUFFERED": "1"
+  }
 }

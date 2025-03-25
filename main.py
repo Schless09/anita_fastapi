@@ -32,15 +32,21 @@ from urllib.parse import urlparse
 import uuid
 import logging
 import logging.handlers
+from openai import AsyncOpenAI
 
-# Set up logging
+# Ensure logs directory exists with proper permissions
+os.makedirs("logs", exist_ok=True)
+os.chmod("logs", 0o777)
+
+# Configure logging
 logging.basicConfig(
-    level=logging.WARNING,  # Changed to WARNING to show only important messages
-    format='%(levelname)s: %(message)s',
+    level=logging.DEBUG,
+    format='%(asctime)s - %(levelname)s - %(message)s',
     handlers=[
-        logging.StreamHandler()  # Only use console logging for Vercel compatibility
+        logging.StreamHandler()  # Only use console logging for Vercel
     ]
 )
+
 logger = logging.getLogger(__name__)
 
 # Load environment variables
@@ -211,13 +217,12 @@ class TranscriptData(BaseModel):
     transcript: str
 
 class RetellCallStatus(str, Enum):
-    REGISTERED = "registered"
-    ONGOING = "ongoing"
+    CREATED = "created"
+    RINGING = "ringing"
+    IN_PROGRESS = "in_progress"
     ENDED = "ended"
-    ERROR_RETELL = "error_retell"
+    ERROR = "error"
     ERROR_UNKNOWN = "error_unknown"
-    ERROR_USER_NOT_JOINED = "error_user_not_joined"
-    REGISTERED_CALL_TIMEOUT = "registered_call_timeout"
 
 class RetellCallData(BaseModel):
     candidate_id: str
@@ -816,41 +821,69 @@ async def submit_candidate(
     finally:
         print("=== Candidate submission processing complete ===\n")
 
-async def process_transcript_with_openai(transcript: str) -> Dict[str, Any]:
-    """Process transcript with OpenAI to extract structured information."""
+async def process_transcript_with_openai(transcript: str) -> dict:
+    """Process a transcript with OpenAI to extract structured information."""
     try:
-        client = OpenAI(api_key=os.getenv('OPENAI_API_KEY'))
+        # Create OpenAI client
+        client = AsyncOpenAI(api_key=OPENAI_API_KEY)
         
-        response = client.chat.completions.create(
+        # Format prompt for analysis
+        prompt = f"""
+        Please analyze this interview transcript and extract the following information:
+        1. Key skills and technologies mentioned
+        2. Years of experience
+        3. Current role and responsibilities
+        4. Notable achievements
+        5. Education and certifications
+        6. Preferred work environment
+        7. Career goals
+        8. Salary expectations (if mentioned)
+        9. Overall impression
+        
+        Transcript:
+        {transcript}
+        
+        Please format the response as a JSON object with these fields.
+        """
+        
+        # Call OpenAI API
+        response = await client.chat.completions.create(
             model="gpt-4-turbo-preview",
             messages=[
-                {"role": "system", "content": """You are an expert at analyzing job interview transcripts. Extract the following information in a structured format:
-                - key_points: List of key points discussed in the conversation
-                - experience_highlights: List of notable experience or skills mentioned
-                - next_steps: A brief summary of next steps or action items
-                - candidate_name: The candidate's name if mentioned
-                - contact_information: Any contact details mentioned (email, phone, LinkedIn)
-                - years_of_experience: Years of experience if mentioned
-                - skills: List of skills mentioned
-                - preferred_work_environment: Preferred work environment if mentioned
-                - preferred_locations: Preferred locations if mentioned
-                - minimum_salary: Salary expectations if mentioned
-                - work_authorization: Work authorization status if mentioned
-
-                Format the response as a valid JSON object with these exact keys."""},
-                {"role": "user", "content": f"Please analyze this interview transcript and extract the key information:\n\n{transcript}"}
+                {"role": "system", "content": "You are a helpful assistant that analyzes interview transcripts."},
+                {"role": "user", "content": prompt}
             ],
-            temperature=0.3,
-            max_tokens=1500,
-            response_format={ "type": "json_object" }
+            temperature=0.7,
+            max_tokens=1000,
+            response_format={"type": "json_object"}
         )
         
-        return json.loads(response.choices[0].message.content)
-
+        # Parse response
+        try:
+            result = json.loads(response.choices[0].message.content)
+            return result
+        except json.JSONDecodeError:
+            logger.error("Failed to parse OpenAI response as JSON")
+            return {"error": "Failed to parse response"}
+            
     except Exception as e:
-        print(f"Error processing transcript with OpenAI: {str(e)}")
-        print(f"Error type: {type(e)}")
-        print(f"Error traceback: {traceback.format_exc()}")
+        logger.error(f"Error processing transcript with OpenAI: {str(e)}")
+        return {"error": str(e)}
+
+async def store_in_pinecone(candidate_id: str, processed_data: dict):
+    """Store processed transcript data in Pinecone"""
+    try:
+        vector_store = VectorStore(init_openai=True)
+        vector_store.update_candidate_profile(
+            candidate_id,
+            {
+                'processed_transcript': processed_data,
+                'processed_at': datetime.now().isoformat()
+            }
+        )
+        logger.info(f"✅ Successfully stored data in Pinecone for candidate {candidate_id}")
+    except Exception as e:
+        logger.error(f"❌ Error storing in Pinecone: {str(e)}")
         raise
 
 @app.post("/candidate/transcript", response_model=Dict[str, Any])
@@ -1081,15 +1114,8 @@ async def update_call_email(call_id: str, email: str):
         
         await update_call_status(call_id, status_data)
         
-        # Create RetellCallData object for processing
-        call_data = RetellCallData(
-            call_id=call_id,
-            candidate_id=status_data.get('candidate_id'),
-            email=email
-        )
-        
         # Process the transcript and send email
-        await fetch_and_store_retell_transcript(call_data)
+        await fetch_and_store_retell_transcript(call_id)
         
         return {
             "status": "success",
@@ -1108,18 +1134,12 @@ async def update_call_email(call_id: str, email: str):
 
 @app.on_event("startup")
 async def startup_event():
-    """Initialize services and background tasks on startup"""
+    """Initialize services on startup"""
     try:
         await sync_call_statuses()
         num_removed = clean_test_calls()
         if num_removed > 0:
             logger.info(f"Removed {num_removed} test calls")
-        
-        # Start the cleanup task
-        cleanup_task = asyncio.create_task(cleanup_completed_calls())
-        app.state.cleanup_task = cleanup_task
-        logger.info("Started cleanup_completed_calls background task")
-        
         logger.info("Application startup complete")
     except Exception as e:
         logger.error(f"Startup error: {str(e)}")
@@ -1127,14 +1147,8 @@ async def startup_event():
 
 @app.on_event("shutdown")
 async def shutdown_event():
-    """Clean up background tasks on shutdown"""
+    """Clean up on shutdown"""
     try:
-        if hasattr(app.state, 'cleanup_task'):
-            app.state.cleanup_task.cancel()
-            try:
-                await app.state.cleanup_task
-            except asyncio.CancelledError:
-                pass
         logger.info("Application shutdown complete")
     except Exception as e:
         logger.error(f"Shutdown error: {str(e)}")
@@ -1304,26 +1318,6 @@ async def make_call(
     finally:
         print("=== Call Creation Complete ===\n")
 
-@app.post("/delete-knowledge-base/{knowledge_base_id}")
-async def delete_knowledge_base(knowledge_base_id: str):
-    """Delete a knowledge base from Retell AI."""
-    try:
-        success = await delete_retell_knowledge_base(knowledge_base_id)
-        if success:
-            return {
-                "status": "success",
-                "message": f"Successfully deleted knowledge base {knowledge_base_id}"
-            }
-        else:
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail=f"Failed to delete knowledge base {knowledge_base_id}"
-            )
-    except Exception as e:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=str(e)
-        )
 
 async def check_call_status(call_id: str) -> Tuple[bool, str, Dict[str, Any]]:
     """Check the status of a call with Retell AI."""
@@ -1368,121 +1362,128 @@ async def check_call_status(call_id: str) -> Tuple[bool, str, Dict[str, Any]]:
         print(f"Unexpected error checking call status: {str(e)}")
         return False, "error", {"error": str(e)}
 
+def log_webhook(call_id: str, data: dict):
+    """Log webhook data to Pinecone instead of filesystem"""
+    try:
+        # Create a vector with one non-zero value
+        dummy_vector = [0.0] * 1536
+        dummy_vector[0] = 1.0
+        
+        # Store webhook data in Pinecone
+        call_status_index.upsert(vectors=[(
+            f"webhook_{call_id}",
+            dummy_vector,
+            {
+                "type": "webhook",
+                "call_id": call_id,
+                "timestamp": datetime.now().isoformat(),
+                "data": data
+            }
+        )])
+        logger.info(f"✅ Successfully logged webhook data for call {call_id}")
+    except Exception as e:
+        logger.error(f"❌ Error logging webhook data: {str(e)}")
+
 @app.post("/webhook/retell")
 async def retell_webhook(request: Request):
-    """Handle webhook notifications from Retell AI."""
+    """Handle Retell webhook events"""
     try:
-        print("\n=== Received Retell Webhook ===")
-        # Get raw data first
-        raw_data = await request.json()
-        print(f"Raw webhook data: {json.dumps(raw_data, indent=2)}")
-        
-        # Extract required fields with fallbacks
-        call_id = raw_data.get('call_id')
+        logger.info("\n" + "="*50)
+        logger.info("📞 Received Retell webhook")
+        logger.info("="*50)
+
+        data = await request.json()
+        event_type = data.get("event")
+        call_data = data.get("call", {})
+        call_id = call_data.get("call_id")
+
         if not call_id:
-            print("Missing call_id in webhook data")
-            return {"status": "error", "message": "Missing call_id"}
-        
-        # Convert webhook status to our enum if possible
-        webhook_status = raw_data.get('call_status', 'unknown')
-        try:
-            call_status = RetellCallStatus(webhook_status)
-        except ValueError:
-            print(f"Invalid call status: {webhook_status}")
-            call_status = RetellCallStatus.ERROR_UNKNOWN
-        
-        # Get metadata with fallback
-        metadata = raw_data.get('metadata', {})
-        if not isinstance(metadata, dict):
-            metadata = {}
-            
-        # Prepare status data
-        status_data = {
-            "status": call_status,
-            "webhook_received_at": datetime.utcnow().isoformat(),
-            "raw_status": webhook_status,
-            "metadata": metadata
-        }
-        
-        # Add transcript if present
-        if 'transcript' in raw_data:
-            status_data['transcript'] = raw_data['transcript']
-            status_data['has_transcript'] = True
-        
-        # Add any additional fields from the webhook
-        for key, value in raw_data.items():
-            if key not in ['call_id', 'call_status', 'metadata', 'transcript']:
-                status_data[key] = value
-        
-        try:
-            # Update call status
-            await update_call_status(call_id, status_data)
-            print(f"Successfully processed webhook for call {call_id}")
+            logger.error("❌ Missing call_id in webhook data")
+            return {"status": "error", "message": "Missing call_id"}, 400
 
-            # If the call has ended, process transcript and send email
-            if call_status == RetellCallStatus.ENDED:
-                print(f"Call {call_id} has ended, processing transcript...")
-                
-                # Get the call data from our status storage
-                stored_status = call_statuses.get(call_id, {})
-                
-                # Create call data object for processing
-                call_data = RetellCallData(
-                    call_id=call_id,
-                    candidate_id=stored_status.get('candidate_id') or metadata.get('candidate_id'),
-                    email=stored_status.get('candidate_email') or metadata.get('email')
-                )
-                
-                # Process the transcript and send email
-                try:
-                    processed_data = await fetch_and_store_retell_transcript(call_data)
-                    print(f"Successfully processed transcript for call {call_id}")
-                    
-                    # Send email if we have the candidate's email
-                    candidate_email = stored_status.get('candidate_email') or metadata.get('email')
-                    if candidate_email:
-                        print(f"Sending email to {candidate_email}...")
-                        interaction_agent = InteractionAgent()
-                        email_result = interaction_agent.send_transcript_summary(
-                            candidate_email,
-                            processed_data
-                        )
-                        
-                        if email_result['status'] == 'success':
-                            print(f"Successfully sent email to {candidate_email}")
-                            status_data['email_sent'] = True
-                            status_data['email_sent_at'] = datetime.utcnow().isoformat()
-                            status_data['email_status'] = email_result
-                            await update_call_status(call_id, status_data)
-                        else:
-                            print(f"Failed to send email: {email_result.get('error')}")
-                    
-                except Exception as process_error:
-                    print(f"Error processing transcript: {str(process_error)}")
-                    print(f"Error type: {type(process_error)}")
-                    print(f"Error traceback: {traceback.format_exc()}")
-            
-            return {"status": "success", "call_id": call_id, "processed_status": call_status}
-            
-        except Exception as update_error:
-            print(f"Error updating call status: {str(update_error)}")
-            print(f"Error type: {type(update_error)}")
-            print(f"Error traceback: {traceback.format_exc()}")
-            return {"status": "error", "message": str(update_error)}
-        
+        logger.info(f"📞 Processing {event_type} event for call: {call_id}")
+        logger.info(f"⏰ Timestamp: {datetime.now().isoformat()}")
+        logger.info(f"📋 Call Status: {call_data.get('call_status', 'unknown')}")
+
+        # Log the full webhook data to Pinecone
+        log_webhook(call_id, data)
+        logger.info("📝 Logged webhook data to Pinecone")
+
+        # Handle different event types
+        if event_type == "call_started":
+            logger.info(f"🟢 Call started: {call_id}")
+            # Update call status to in_progress
+            await update_call_status(call_id, {
+                "status": "in_progress",
+                "start_timestamp": datetime.now().isoformat(),
+                "metadata": call_data.get("metadata", {})
+            })
+
+        elif event_type == "call_ended":
+            logger.info(f"🔄 Processing ended call: {call_id}")
+            # Update call status and trigger transcript processing
+            await update_call_status(call_id, {
+                "status": "ended",
+                "end_timestamp": datetime.now().isoformat(),
+                "disconnection_reason": call_data.get("disconnection_reason"),
+                "metadata": call_data.get("metadata", {})
+            })
+
+            try:
+                # Process the call asynchronously
+                logger.info(f"📥 Fetching transcript for call: {call_id}")
+                await fetch_and_store_retell_transcript(call_id)
+                logger.info(f"✅ Successfully processed call: {call_id}")
+            except Exception as e:
+                logger.error(f"❌ Error processing call {call_id}: {str(e)}")
+                logger.error(f"Error traceback: {traceback.format_exc()}")
+                await update_call_status(call_id, {
+                    "status": "error",
+                    "error": str(e),
+                    "timestamp": datetime.now().isoformat()
+                })
+
+        elif event_type == "call_analyzed":
+            logger.info(f"📊 Call analysis complete: {call_id}")
+            # Update call status with analysis results
+            await update_call_status(call_id, {
+                "status": "analyzed",
+                "analysis_timestamp": datetime.now().isoformat(),
+                "analysis_data": call_data.get("call_analysis", {}),
+                "metadata": call_data.get("metadata", {})
+            })
+
+        else:
+            logger.warning(f"⚠️ Unknown event type: {event_type}")
+            return {"status": "error", "message": f"Unknown event type: {event_type}"}, 400
+
+        logger.info("="*50)
+        return {"status": "success", "message": f"Successfully processed {event_type} event"}
+
     except Exception as e:
-        print(f"Error processing webhook: {str(e)}")
-        print(f"Error type: {type(e)}")
-        print(f"Error traceback: {traceback.format_exc()}")
-        return {"status": "error", "message": str(e)}
+        logger.error(f"❌ Error in webhook handler: {str(e)}")
+        logger.error(f"Error traceback: {traceback.format_exc()}")
+        return {"status": "error", "message": str(e)}, 500
 
-def clean_test_calls():
+def clean_test_calls() -> int:
     """Remove test calls from call_statuses dictionary."""
-    global call_statuses
-    test_calls = [call_id for call_id in call_statuses.keys() if call_id.startswith('test_') or call_id.startswith('call_test_')]
+    removed_count = 0
+    test_calls = []
+    
+    # Identify test calls
+    for call_id, call_data in call_statuses.items():
+        if is_test_call(call_data):
+            test_calls.append(call_id)
+            
+    # Remove test calls
     for call_id in test_calls:
-        del call_statuses[call_id]
-    return len(test_calls)
+        try:
+            del call_statuses[call_id]
+            removed_count += 1
+        except KeyError:
+            continue
+            
+    return removed_count
 
 def is_test_call(call_data: dict) -> bool:
     """Check if a call is a test call based on certain criteria."""
@@ -1509,84 +1510,65 @@ def is_test_call(call_data: dict) -> bool:
     return any(test_indicators)
 
 async def cleanup_completed_calls():
-    """Background task to clean up completed calls and process their transcripts."""
-    print("\n=== Starting Call Cleanup Task ===")
-    while True:
-        try:
-            # Get all unprocessed calls
-            unprocessed_calls = {
-                call_id: status_data
-                for call_id, status_data in call_statuses.items()
-                if not status_data.get('processed_by_system')
-            }
+    """Background task to process completed calls."""
+    try:
+        logger.info("🔄 Starting cleanup of completed calls")
+        
+        # Get unprocessed calls
+        unprocessed_calls = {
+            call_id: status_data
+            for call_id, status_data in call_statuses.items()
+            if status_data.get('status') == 'ended' and not status_data.get('processed_by_system')
+        }
+        
+        if not unprocessed_calls:
+            logger.info("✅ No unprocessed calls found")
+            return
             
-            if not unprocessed_calls:
-                print("No new calls to process")
-            else:
-                print(f"Found {len(unprocessed_calls)} unprocessed calls")
+        logger.info(f"📝 Found {len(unprocessed_calls)} unprocessed calls")
+        
+        # Process each unprocessed call
+        for call_id, status_data in unprocessed_calls.items():
+            try:
+                logger.info(f"🔄 Processing call {call_id}")
                 
-                for call_id, status_data in unprocessed_calls.items():
-                    try:
-                        print(f"\nProcessing call {call_id}...")
-                        
-                        # Create call data object for processing
-                        call_data_obj = RetellCallData(
-                            call_id=call_id,
-                            candidate_id=status_data.get('candidate_id'),
-                            email=status_data.get('candidate_email')
-                        )
-                        
-                        try:
-                            # Try to fetch and process transcript
-                            processed_data = await fetch_and_store_retell_transcript(call_data_obj)
-                            print(f"Successfully processed transcript for call {call_id}")
-                            
-                            # Send email if we have the candidate's email
-                            if status_data.get('candidate_email'):
-                                print(f"Sending email to {status_data['candidate_email']}...")
-                                interaction_agent = InteractionAgent()
-                                email_result = interaction_agent.send_transcript_summary(
-                                    status_data['candidate_email'],
-                                    processed_data
-                                )
-                                
-                                if email_result['status'] == 'success':
-                                    print(f"Successfully sent email to {status_data['candidate_email']}")
-                                    status_data['email_sent'] = True
-                                    status_data['email_sent_at'] = datetime.utcnow().isoformat()
-                                    status_data['email_status'] = email_result
-                                else:
-                                    print(f"Failed to send email: {email_result.get('error')}")
-                                    
-                        except HTTPException as he:
-                            if he.status_code == 404 and "No transcript found" in str(he.detail):
-                                print(f"No transcript available for call {call_id} - call may have ended prematurely")
-                                status_data['transcript_status'] = "No transcript available - call may have ended prematurely"
-                            else:
-                                print(f"Error processing call {call_id}: {str(he)}")
-                                status_data['error'] = str(he)
-                        except Exception as e:
-                            print(f"Error processing call {call_id}: {str(e)}")
-                            print(f"Error type: {type(e)}")
-                            print(f"Error traceback: {traceback.format_exc()}")
-                            status_data['error'] = str(e)
-                        
-                        # Mark as processed regardless of outcome
-                        status_data['processed_by_system'] = True
-                        status_data['processed_at'] = datetime.utcnow().isoformat()
-                        await update_call_status(call_id, status_data)
-                        
-                    except Exception as e:
-                        print(f"ERROR: Error processing call {call_id}: {str(e)}")
-                        print(f"ERROR: Error traceback: {traceback.format_exc()}")
-            
-            # Sleep for 30 seconds before next check
-            await asyncio.sleep(30)
-            
-        except Exception as e:
-            print(f"ERROR in cleanup task: {str(e)}")
-            print(f"ERROR traceback: {traceback.format_exc()}")
-            await asyncio.sleep(30)  # Sleep even on error to prevent rapid retries
+                # Process the transcript
+                processed_data = await fetch_and_store_retell_transcript(call_id)
+                
+                # Update status
+                status_data['processed_by_system'] = True
+                status_data['processed_at'] = datetime.now().isoformat()
+                status_data['processed_data'] = processed_data
+                
+                # Update call status
+                await update_call_status(call_id, status_data)
+                logger.info(f"✅ Successfully processed call {call_id}")
+                
+            except Exception as e:
+                logger.error(f"❌ Error processing call {call_id}: {str(e)}")
+                continue
+                
+        logger.info("✅ Completed cleanup of calls")
+        
+    except Exception as e:
+        logger.error(f"❌ Error in cleanup task: {str(e)}")
+
+@app.post("/api/cron/cleanup-calls")
+async def cron_cleanup_calls(request: Request):
+    """
+    Endpoint for Vercel cron job to process completed calls.
+    This endpoint should be called every 60 seconds by a Vercel cron job.
+    """
+    # In production, verify the request is from Vercel
+    if os.getenv("VERCEL_ENV"):
+        vercel_cron_header = request.headers.get("x-vercel-cron")
+        if not vercel_cron_header:
+            raise HTTPException(
+                status_code=401,
+                detail="Unauthorized - Missing Vercel cron header"
+            )
+    
+    return await cleanup_completed_calls()
 
 @app.get("/jobs/most-recent")
 async def get_most_recent_job():
@@ -1706,275 +1688,94 @@ async def process_job_in_background(job_id: str, file_content: bytes, filename: 
         raise
 
 async def fetch_retell_transcript(call_id: str) -> Optional[Dict]:
-    """Fetch transcript from Retell API"""
+    """Fetch transcript from Retell API."""
     try:
-        headers = {
-            "Authorization": f"Bearer {RETELL_API_KEY}",
-            "Content-Type": "application/json"
+        logger.info(f"🔄 Fetching transcript for call {call_id}")
+        
+        # Get call data from Retell
+        call_data = await get_retell_call(call_id)
+        if not call_data:
+            raise Exception(f"Could not fetch call data for {call_id}")
+            
+        # Extract transcript
+        transcript = call_data.get("transcript", "")
+        if not transcript:
+            raise Exception(f"No transcript available for call {call_id}")
+            
+        return {
+            'transcript': transcript,
+            'metadata': call_data.get('metadata', {}),
+            'call_status': call_data.get('call_status'),
+            'duration_ms': call_data.get('duration_ms')
         }
         
-        url = f"{RETELL_API_BASE}/get-call/{call_id}"
-        async with httpx.AsyncClient() as client:
-            try:
-                response = await client.get(url, headers=headers)
-                
-                if response.status_code == 404:
-                    logger.error(f"Call {call_id} not found")
-                    raise HTTPException(
-                        status_code=404,
-                        detail={
-                            'error': 'Call not found',
-                            'message': f'No call found with ID: {call_id}',
-                            'action_required': 'Please verify the call ID'
-                        }
-                    )
-                elif response.status_code == 401:
-                    logger.error("Authentication failed - invalid API key")
-                    raise HTTPException(
-                        status_code=401,
-                        detail={
-                            'error': 'Authentication failed',
-                            'message': 'Invalid API key',
-                            'action_required': 'Please check your Retell API key'
-                        }
-                    )
-                
-                response.raise_for_status()
-                data = response.json()
-                
-                # Log only essential information
-                logger.info(f"Successfully fetched transcript for call {call_id}")
-                logger.debug(f"Call data: {data.get('metadata', {})}")
-                
-                return data
-                
-            except httpx.HTTPStatusError as e:
-                logger.error(f"HTTP error fetching transcript for call {call_id}: {str(e)}")
-                if not isinstance(e, HTTPException):
-                    raise HTTPException(
-                        status_code=e.response.status_code,
-                        detail={
-                            'error': 'Retell API error',
-                            'message': str(e),
-                            'action_required': 'Please try again or contact support'
-                        }
-                    )
-                raise
-                
-    except HTTPException:
+    except Exception as e:
+        logger.error(f"❌ Error fetching transcript: {str(e)}")
         raise
+
+async def fetch_and_store_retell_transcript(call_id: str) -> dict:
+    """Fetch transcript from Retell and store in memory and Pinecone"""
+    try:
+        logger.info(f"🔄 Fetching transcript for call {call_id}")
+        
+        # Get transcript data
+        transcript_data = await fetch_retell_transcript(call_id)
+        if not transcript_data:
+            raise Exception(f"Could not fetch transcript data for {call_id}")
+            
+        # Process with OpenAI
+        processed_data = await process_transcript_with_openai(transcript_data['transcript'])
+        
+        # Store in memory
+        call_statuses[call_id] = {
+            "status": "completed",
+            "timestamp": datetime.now().isoformat(),
+            "metadata": transcript_data['metadata'],
+            "processed_data": processed_data
+        }
+        
+        # Store in Pinecone if we have a candidate ID
+        candidate_id = transcript_data['metadata'].get('candidate_id')
+        if candidate_id:
+            logger.info(f"💾 Storing transcript in Pinecone for candidate {candidate_id}")
+            await store_in_pinecone(candidate_id, processed_data)
+        
+        # Send email if we have the address
+        email = transcript_data['metadata'].get('email')
+        if email:
+            logger.info(f"📧 Sending email to {email}")
+            interaction_agent = InteractionAgent()
+            email_result = interaction_agent.send_transcript_summary(email, processed_data)
+            
+            if email_result.get("status") == "success":
+                logger.info(f"✅ Successfully sent email to {email}")
+                call_statuses[call_id]["email_sent"] = True
+                call_statuses[call_id]["email_sent_at"] = datetime.now().isoformat()
+            else:
+                logger.error(f"❌ Failed to send email: {email_result.get('error')}")
+        
+        logger.info(f"✅ Successfully processed call {call_id}")
+        return processed_data
+        
     except Exception as e:
-        logger.error(f"Error fetching transcript for call {call_id}: {str(e)}")
-        raise HTTPException(
-            status_code=500,
-            detail={
-                'error': 'Internal server error',
-                'message': str(e),
-                'action_required': 'Please try again or contact support'
+        logger.error(f"❌ Error processing transcript for call {call_id}: {str(e)}")
+        raise
+
+async def get_retell_call(call_id: str) -> dict:
+    """Fetch call data from Retell API"""
+    try:
+        logger.info(f"🔄 Fetching call data from Retell for {call_id}")
+        async with aiohttp.ClientSession() as session:
+            url = f"https://api.retellai.com/v2/get-call/{call_id}"
+            headers = {
+                "Authorization": f"Bearer {RETELL_API_KEY}"
             }
-        )
-
-@app.get("/calls/recent", response_model=Dict[str, Any])
-async def get_recent_calls():
-    """Get recent Retell AI calls from Pinecone."""
-    try:
-        print("\n=== Fetching Recent Calls ===")
-        print(f"Timestamp: {datetime.utcnow().isoformat()}")
-        
-        # Query Pinecone for recent calls
-        query_response = call_status_index.query(
-            vector=[0] * 1536,  # Dummy vector since we're just getting metadata
-            top_k=10,  # Get 10 most recent calls
-            include_metadata=True
-        )
-        
-        calls = []
-        if query_response.matches:
-            for match in query_response.matches:
-                call_data = match.metadata
-                call_data['call_id'] = match.id
-                calls.append(call_data)
-            
-            print(f"Found {len(calls)} recent calls")
-            return {
-                "status": "success",
-                "calls": calls,
-                "total": len(calls)
-            }
-        else:
-            print("No calls found in Pinecone")
-            return {
-                "status": "success",
-                "calls": [],
-                "total": 0
-            }
-            
+            async with session.get(url, headers=headers) as response:
+                if response.status != 200:
+                    raise Exception(f"Failed to fetch call data: {response.status}")
+                return await response.json()
     except Exception as e:
-        print(f"Error fetching recent calls: {str(e)}")
-        print(f"Error traceback: {traceback.format_exc()}")
-        raise HTTPException(
-            status_code=500,
-            detail=f"Failed to fetch recent calls: {str(e)}"
-        )
-
-@app.post("/calls/{call_id}/end")
-async def end_call(call_id: str):
-    """Manually mark a call as ended."""
-    try:
-        print(f"\n=== Marking call {call_id} as ended ===")
-        
-        if call_id not in call_statuses:
-            raise HTTPException(
-                status_code=404,
-                detail=f"Call {call_id} not found"
-            )
-            
-        # Update call status
-        status_data = call_statuses[call_id]
-        status_data['status'] = RetellCallStatus.ENDED
-        status_data['last_updated'] = datetime.utcnow().isoformat()
-        
-        await update_call_status(call_id, status_data)
-        
-        return {
-            "status": "success",
-            "message": f"Call {call_id} marked as ended",
-            "call_status": status_data
-        }
-        
-    except Exception as e:
-        print(f"Error marking call as ended: {str(e)}")
-        print(f"Error type: {type(e)}")
-        print(f"Error traceback: {traceback.format_exc()}")
-        raise HTTPException(
-            status_code=500,
-            detail=f"Failed to mark call as ended: {str(e)}"
-        )
-
-@app.get("/candidates/{candidate_id}/complete-profile")
-async def get_complete_candidate_profile(candidate_id: str):
-    """Get a candidate's complete profile including all information, call transcripts, and processed data."""
-    try:
-        # Initialize required components
-        vector_store = VectorStore(init_openai=True)
-        brain_agent = BrainAgent()
-        
-        # Get basic profile from vector store
-        vector_profile = vector_store.get_candidate_profile(candidate_id)
-        if vector_profile["status"] == "error":
-            raise HTTPException(
-                status_code=404,
-                detail=vector_profile["message"]
-            )
-        
-        # Get additional data from brain agent
-        brain_profile = brain_agent.candidate_profiles.get(candidate_id, {})
-        
-        # If brain_profile is empty, try to fetch call data from Retell AI
-        if not brain_profile:
-            # Query call_statuses to find the call_id for this candidate
-            call_id = None
-            for call_id, call_data in call_statuses.items():
-                if call_data.get('candidate_id') == candidate_id:
-                    call_id = call_id
-                    break
-            
-            if call_id:
-                try:
-                    # Fetch call data from Retell AI
-                    retell_data = await fetch_retell_transcript(call_id)
-                    if retell_data and 'transcript' in retell_data:
-                        # Process the transcript
-                        processed_data = await process_transcript_with_openai(retell_data['transcript'])
-                        brain_profile = {
-                            'transcript': retell_data['transcript'],
-                            'processed_transcript': processed_data
-                        }
-                        # Optionally update brain_agent's candidate_profiles
-                        brain_agent.candidate_profiles[candidate_id] = brain_profile
-                except Exception as e:
-                    print(f"Error fetching call data for candidate {candidate_id}: {str(e)}")
-        
-        # Combine all data
-        complete_profile = {
-            "status": "success",
-            "candidate_id": candidate_id,
-            "basic_info": vector_profile.get("basic_info", {}),
-            "resume_text": vector_profile.get("resume_text", ""),
-            "processed_resume": vector_profile.get("processed_data", {}),
-            "call_data": {
-                "transcript": brain_profile.get("transcript"),
-                "processed_transcript": brain_profile.get("processed_transcript"),
-                "screening_result": brain_profile.get("screening_result"),
-                "match_result": brain_profile.get("match_result"),
-                "dealbreakers": brain_profile.get("dealbreakers"),
-                "match_reason": brain_profile.get("match_reason")
-            },
-            "state": brain_agent.state.get(candidate_id, "unknown"),
-            "total_chunks": vector_profile.get("total_chunks", 0)
-        }
-        
-        return complete_profile
-        
-    except Exception as e:
-        print(f"Error retrieving complete candidate profile: {str(e)}")
-        raise HTTPException(
-            status_code=500,
-            detail=str(e)
-        )
-
-@app.post("/calls/{call_id}/process-transcript")
-async def process_call_transcript(call_id: str):
-    """Manually process a call's transcript."""
-    try:
-        # Get call data from Retell AI
-        retell_data = await fetch_retell_transcript(call_id)
-        if not retell_data:
-            raise HTTPException(
-                status_code=404,
-                detail=f"No data found for call {call_id}"
-            )
-            
-        # Create call data object
-        call_data = {
-            'call_id': call_id,
-            'candidate_id': retell_data.get('metadata', {}).get('candidate_id'),
-            'candidate_email': retell_data.get('metadata', {}).get('email'),
-            'candidate_name': retell_data.get('metadata', {}).get('name')
-        }
-        
-        # Process the transcript
-        processed_data = await fetch_and_store_retell_transcript(call_data)
-        
-        return {
-            "status": "success",
-            "message": "Transcript processed successfully",
-            "data": processed_data
-        }
-        
-    except Exception as e:
-        print(f"Error processing call transcript: {str(e)}")
-        raise HTTPException(
-            status_code=500,
-            detail=str(e)
-        )
-
-@app.get("/jobs/match-candidates", response_model=MatchResponse)
-async def match_candidates_to_job(request: JobMatchRequest):
-    """Match candidates to a job based on job ID."""
-    try:
-        vector_store = VectorStore(init_openai=True)
-        result = vector_store.match_candidates_to_job(request.job_id, request.top_k)
-        
-        return {
-            "status": "success",
-            "matches": result['matches'],
-            "total_matches": len(result['matches'])
-        }
-    except Exception as e:
-        raise HTTPException(
-            status_code=500,
-            detail=f"Error matching candidates to job: {str(e)}"
-        )
+        logger.error(f"❌ Error fetching call data: {str(e)}")
+        raise
 
 app = app
