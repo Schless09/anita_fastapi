@@ -33,7 +33,7 @@ import uuid
 import logging
 import logging.handlers
 from openai import AsyncOpenAI
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
 import hmac
 import hashlib
 
@@ -1475,9 +1475,10 @@ async def retell_webhook(request: Request):
             logging.warning(f"Unknown event type: {event}")
         
         # Return success response
-        return JSONResponse(
+        return Response(
             status_code=204,
-            content={}
+            content=None,
+            media_type=None
         )
         
     except Exception as e:
