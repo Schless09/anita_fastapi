@@ -34,11 +34,7 @@ import logging
 import logging.handlers
 from openai import AsyncOpenAI
 
-# Ensure logs directory exists with proper permissions
-os.makedirs("logs", exist_ok=True)
-os.chmod("logs", 0o777)
-
-# Configure logging
+# Configure logging for serverless environment
 logging.basicConfig(
     level=logging.DEBUG,
     format='%(asctime)s - %(levelname)s - %(message)s',
