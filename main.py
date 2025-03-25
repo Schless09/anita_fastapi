@@ -843,7 +843,8 @@ async def process_transcript_with_openai(transcript: str) -> dict:
         
         # Format prompt for analysis
         prompt = f"""
-        Please analyze this interview transcript and extract the following information:
+        Please analyze this interview transcript and create a professional summary. Extract and present the following information in clear, grammatically correct English:
+
         1. Key skills and technologies mentioned
         2. Years of experience
         3. Current role and responsibilities
@@ -853,18 +854,21 @@ async def process_transcript_with_openai(transcript: str) -> dict:
         7. Career goals
         8. Salary expectations (if mentioned)
         9. Overall impression
+
+        Write the summary in a way that can be directly used in an email to the candidate, using "you" and "your" appropriately.
+        For example: "You mentioned having 5 years of experience" instead of "The candidate has 5 years of experience"
         
         Transcript:
         {transcript}
         
-        Please format the response as a JSON object with these fields.
+        Format the response as a JSON object with these fields, ensuring proper grammar and professional but friendlytone throughout.
         """
         
         # Call OpenAI API
         response = await client.chat.completions.create(
             model="gpt-4-turbo-preview",
             messages=[
-                {"role": "system", "content": "You are a helpful assistant that analyzes interview transcripts."},
+                {"role": "system", "content": "You are a professional career advisor writing personalized email summaries for candidates."},
                 {"role": "user", "content": prompt}
             ],
             temperature=0.7,
@@ -1501,20 +1505,18 @@ async def retell_webhook(request: Request):
         elif event == "call_analyzed":
             logging.info(f"Call analyzed: {call.get('call_id')}")
             try:
-                # Get the call analysis from the call data
-                call_analysis = call.get('call_analysis', {})
-                
-                if not call_analysis:
-                    logging.error("No call analysis found in call_analyzed event")
-                    return JSONResponse(
-                        status_code=400,
-                        content={"error": "Missing call analysis"}
-                    )
-                
-                # Get candidate email and name from metadata
+                # Get the raw transcript and metadata from the call data
+                raw_transcript = call.get('transcript')
                 metadata = call.get('metadata', {})
                 email = metadata.get('email')
-                first_name = metadata.get('name', '').split()[0]  # Get first name
+                first_name = metadata.get('name', '').split()[0] if metadata.get('name') else ''
+                
+                if not raw_transcript:
+                    logging.error("No transcript found in call_analyzed event")
+                    return JSONResponse(
+                        status_code=400,
+                        content={"error": "Missing transcript"}
+                    )
                 
                 if not email:
                     logging.error("No email found in call metadata")
@@ -1523,28 +1525,36 @@ async def retell_webhook(request: Request):
                         content={"error": "No email found in metadata"}
                     )
                 
-                # Get the call summary and personalize it
-                summary = call_analysis.get('call_summary', '')
-                summary = summary.replace(f"{first_name} ", "You ")  # Replace "Name " with "You "
-                summary = summary.replace(f"{first_name}", "you")   # Replace remaining "Name" with "you"
+                # Process the transcript with OpenAI
+                processed_data = await process_transcript_with_openai(raw_transcript)
                 
-                # Process the transcript using call analysis data
-                processed_data = {
-                    'first_name': first_name,  # Add first name to the processed data
+                if processed_data.get('error'):
+                    logging.error(f"Error processing transcript: {processed_data['error']}")
+                    return JSONResponse(
+                        status_code=500,
+                        content={"error": "Error processing transcript"}
+                    )
+                
+                # Format the email data
+                email_data = {
+                    'first_name': first_name,
                     'key_points': [
-                        summary  # Use the personalized call summary from Retell
+                        f"Current Role: {processed_data.get('current_role', 'Not discussed')}",
+                        f"Experience: {processed_data.get('years_of_experience', 'Not discussed')} years",
+                        f"Key Skills: {', '.join(processed_data.get('key_skills_and_technologies', [])[:5])}",  # Top 5 skills
+                        f"Career Goals: {processed_data.get('career_goals', 'Not discussed')}",
+                        f"Preferred Work Environment: {processed_data.get('preferred_work_environment', 'Not discussed')}"
                     ],
                     'experience_highlights': [
-                        "Based on our conversation, I've noted your key qualifications and experience",
-                        "Your responses showed strong alignment with our requirements",
-                        "We discussed potential opportunities that match your background"
+                        f"Notable Achievements: {processed_data.get('notable_achievements', 'Not discussed')}",
+                        f"Education: {processed_data.get('education_and_certifications', 'Not discussed')}"
                     ],
                     'next_steps': "I will be reviewing your profile and matching you with relevant opportunities. You will receive an email from me when I find a great match for your skills and preferences."
                 }
                 
                 # Send the summary email
                 interaction_agent = InteractionAgent()
-                email_result = interaction_agent.send_transcript_summary(email, processed_data)
+                email_result = interaction_agent.send_transcript_summary(email, email_data)
                 
                 if email_result.get("status") == "success":
                     logging.info(f"Successfully sent summary email to {email}")
