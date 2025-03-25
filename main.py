@@ -177,6 +177,15 @@ app = FastAPI(
     version="2.0.0"
 )
 
+# Configure CORS
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
 @app.get("/health")
 def health_check():
     return {"status": "healthy"}
@@ -500,15 +509,6 @@ class RetellWebhookPayload(BaseModel):
     call_status: RetellCallStatus
     metadata: Dict[str, Any]
     transcript: Optional[str] = None
-
-# Configure CORS
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],  # Allows all origins
-    allow_credentials=True,
-    allow_methods=["*"],  # Allows all methods
-    allow_headers=["*"],  # Allows all headers
-)
 
 async def process_pdf_to_text(file: UploadFile) -> Dict[str, Any]:
     """Process a PDF file and extract its text content."""
@@ -1374,6 +1374,7 @@ async def retell_webhook(request: Request):
     try:
         # Log the raw request for debugging
         logger.info("📥 Received Retell webhook")
+        logger.info(f"Headers: {dict(request.headers)}")
         body = await request.json()
         logger.info(f"📦 Webhook payload: {json.dumps(body, indent=2)}")
 
