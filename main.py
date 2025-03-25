@@ -25,7 +25,7 @@ import asyncio
 from PyPDF2 import PdfReader
 from pinecone import Pinecone
 import phonenumbers
-from retell import Retell
+from retell_sdk import Retell
 import time
 import re
 from urllib.parse import urlparse
