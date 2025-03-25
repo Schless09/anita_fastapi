@@ -8,6 +8,12 @@
   ],
   "routes": [
     {
+      "src": "/webhook/retell",
+      "dest": "main.py",
+      "methods": ["POST"],
+      "continue": true
+    },
+    {
       "src": "/(.*)",
       "dest": "main.py"
     }
