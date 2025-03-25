@@ -33,6 +33,7 @@ import uuid
 import logging
 import logging.handlers
 from openai import AsyncOpenAI
+from fastapi.responses import JSONResponse
 
 # Configure logging for serverless environment
 logging.basicConfig(
@@ -52,6 +53,11 @@ load_dotenv()
 OPENAI_API_KEY = os.getenv('OPENAI_API_KEY')
 if not OPENAI_API_KEY:
     raise ValueError("OPENAI_API_KEY environment variable is not set")
+
+# Get Vercel protection bypass secret
+VERCEL_PROTECTION_BYPASS = os.getenv('VERCEL_PROTECTION_BYPASS')
+if not VERCEL_PROTECTION_BYPASS:
+    raise ValueError("VERCEL_PROTECTION_BYPASS environment variable is not set")
 
 # Initialize OpenAI client
 openai_client = openai.OpenAI(api_key=OPENAI_API_KEY)
@@ -504,11 +510,23 @@ class CallStatusRequest(BaseModel):
     candidate_id: str
     call_id: str
 
-class RetellWebhookPayload(BaseModel):
+class RetellWebhookCall(BaseModel):
     call_id: str
-    call_status: RetellCallStatus
-    metadata: Dict[str, Any]
+    call_status: str
+    metadata: Dict[str, Any] = {}
     transcript: Optional[str] = None
+    start_timestamp: Optional[str] = None
+    end_timestamp: Optional[str] = None
+    disconnection_reason: Optional[str] = None
+    transcript_object: Optional[Dict[str, Any]] = None
+    from_number: Optional[str] = None
+    to_number: Optional[str] = None
+    direction: Optional[str] = None
+    agent_id: Optional[str] = None
+
+class RetellWebhookPayload(BaseModel):
+    event: str
+    call: RetellWebhookCall
 
 async def process_pdf_to_text(file: UploadFile) -> Dict[str, Any]:
     """Process a PDF file and extract its text content."""
@@ -1368,55 +1386,132 @@ def log_webhook(call_id: str, data: dict):
     except Exception as e:
         logger.error(f"❌ Error logging webhook data: {str(e)}")
 
+def verify_retell_signature(request_body: bytes, signature: str, api_key: str) -> bool:
+    """Verify the Retell webhook signature."""
+    import hmac
+    import hashlib
+
+    try:
+        # Create HMAC using API key as secret
+        expected_signature = hmac.new(
+            api_key.encode(),
+            request_body,
+            hashlib.sha256
+        ).hexdigest()
+
+        # Compare signatures using constant time comparison
+        return hmac.compare_digest(expected_signature, signature)
+    except Exception as e:
+        print(f"Error verifying signature: {str(e)}")
+        return False
+
 @app.post("/api/webhook")
 @app.post("/webhook/retell")  # Add support for both paths
 async def retell_webhook(request: Request):
     """Handle Retell webhook events."""
     try:
         # Log the raw request for debugging
-        logger.info("📥 Received Retell webhook")
-        logger.info(f"Headers: {dict(request.headers)}")
+        print("\n==================== WEBHOOK REQUEST RECEIVED ====================")
+        print(f"Timestamp: {datetime.now().isoformat()}")
         
-        # Get the raw body first
+        # Log headers
+        headers = dict(request.headers)
+        print("\nHeaders received:")
+        print(json.dumps(headers, indent=2))
+        
+        # Get and log the raw body
         raw_body = await request.body()
-        logger.info(f"Raw body: {raw_body}")
+        body_text = raw_body.decode() if raw_body else 'Empty body'
+        print(f"\nRaw body received: {body_text}")
+
+        # Add Vercel protection bypass header to response
+        response_headers = {"x-vercel-protection-bypass": VERCEL_PROTECTION_BYPASS}
+
+        # Verify Retell signature
+        signature = request.headers.get('x-retell-signature')
+        print(f"\nRetell signature header: {signature}")
+        
+        if not signature:
+            print("\n❌ Missing Retell signature header")
+            return JSONResponse(
+                status_code=401,
+                content={"status": "error", "message": "Missing x-retell-signature header"},
+                headers=response_headers
+            )
+
+        if not RETELL_API_KEY:
+            print("\n❌ Missing RETELL_API_KEY environment variable")
+            print("Available environment variables:")
+            for key, value in os.environ.items():
+                if 'key' in key.lower() or 'secret' in key.lower():
+                    print(f"{key}: {'*' * len(value)}")
+                else:
+                    print(f"{key}: {value}")
+            return JSONResponse(
+                status_code=500,
+                content={"status": "error", "message": "Server configuration error"},
+                headers=response_headers
+            )
+
+        print(f"\nVerifying Retell signature using API key: {'*' * len(RETELL_API_KEY)}")
+        if not verify_retell_signature(raw_body, signature, RETELL_API_KEY):
+            print("\n❌ Invalid Retell signature")
+            print(f"API Key used: {'*' * len(RETELL_API_KEY)}")
+            print(f"Raw body used for verification: {raw_body}")
+            print(f"Signature received: {signature}")
+            return JSONResponse(
+                status_code=401,
+                content={"status": "error", "message": "Invalid signature"},
+                headers=response_headers
+            )
+
+        print("\n✅ Retell signature verified")
         
         if not raw_body:
-            logger.error("❌ Empty request body")
-            raise HTTPException(
-                status_code=400,
-                detail="Empty request body"
+            print("\n❌ Empty request body received")
+            print("Headers for empty body request:")
+            print(json.dumps(headers, indent=2))
+            return JSONResponse(
+                status_code=200,  # Return 200 to prevent Retell from retrying
+                content={"status": "error", "message": "Empty request body"},
+                headers=response_headers
             )
 
         try:
             body = json.loads(raw_body)
+            print("\nParsed JSON body:")
+            print(json.dumps(body, indent=2))
         except json.JSONDecodeError as e:
-            logger.error(f"❌ Invalid JSON in webhook payload: {str(e)}")
-            logger.error(f"Raw body that caused error: {raw_body}")
-            raise HTTPException(
-                status_code=400,
-                detail=f"Invalid JSON payload: {str(e)}"
+            print(f"\n❌ Invalid JSON in webhook payload: {str(e)}")
+            print(f"Raw body that caused error: {raw_body}")
+            return JSONResponse(
+                status_code=200,  # Return 200 to prevent Retell from retrying
+                content={"status": "error", "message": f"Invalid JSON payload: {str(e)}"},
+                headers=response_headers
             )
 
-        logger.info(f"📦 Webhook payload: {json.dumps(body, indent=2)}")
-
-        # Extract event data from the correct structure
+        # Extract event data
         event = body.get("event")
         call_data = body.get("call", {})
         call_id = call_data.get("call_id")
         call_status = call_data.get("call_status")
         metadata = call_data.get("metadata", {})
 
+        print(f"\n📞 Processing event: {event}")
+        print(f"Call ID: {call_id}")
+        print(f"Call Status: {call_status}")
+        print(f"Metadata: {json.dumps(metadata, indent=2)}")
+
         if not event or not call_id:
-            logger.error("❌ Missing required fields in webhook payload")
-            raise HTTPException(
-                status_code=400,
-                detail="Missing required fields: event or call_id"
+            print("\n❌ Missing required fields in webhook payload")
+            print(f"Received payload: {json.dumps(body, indent=2)}")
+            return JSONResponse(
+                status_code=200,  # Return 200 to prevent Retell from retrying
+                content={"status": "error", "message": "Missing required fields: event or call_id"},
+                headers=response_headers
             )
 
-        logger.info(f"📞 Processing {event} event for call {call_id}")
-
-        # Store call status with all relevant data
+        # Store call status
         call_statuses[call_id] = {
             "status": call_status,
             "event": event,
@@ -1434,26 +1529,28 @@ async def retell_webhook(request: Request):
             "processed_by_system": False
         }
 
+        print(f"\n✅ Successfully stored call status for {call_id}")
+
         # If call has ended, process the transcript
         if event == "call_ended":
-            logger.info(f"🔄 Call {call_id} ended, scheduling transcript processing")
-            # Process in background to avoid blocking webhook response
+            print(f"\n🔄 Call {call_id} ended, scheduling transcript processing")
             asyncio.create_task(fetch_and_store_retell_transcript(call_id))
 
-        return {"status": "success", "message": "Webhook received", "timestamp": datetime.now().isoformat()}
-
-    except json.JSONDecodeError:
-        logger.error("❌ Invalid JSON in webhook payload")
-        raise HTTPException(
-            status_code=400,
-            detail="Invalid JSON payload"
+        print("\n==================== WEBHOOK PROCESSING COMPLETE ====================")
+        return JSONResponse(
+            status_code=200,
+            content={"status": "success", "message": "Webhook received", "timestamp": datetime.now().isoformat()},
+            headers=response_headers
         )
+
     except Exception as e:
-        logger.error(f"❌ Error processing webhook: {str(e)}")
-        logger.error(f"Traceback: {traceback.format_exc()}")
-        raise HTTPException(
-            status_code=500,
-            detail=f"Error processing webhook: {str(e)}"
+        print(f"\n❌ Error processing webhook: {str(e)}")
+        print(f"Traceback: {traceback.format_exc()}")
+        # Return 200 even on error to prevent Retell from retrying
+        return JSONResponse(
+            status_code=200,
+            content={"status": "error", "message": f"Error processing webhook: {str(e)}"},
+            headers={"x-vercel-protection-bypass": VERCEL_PROTECTION_BYPASS}
         )
 
 def clean_test_calls() -> int:
