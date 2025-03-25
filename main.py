@@ -501,7 +501,7 @@ class RetellWebhookPayload(BaseModel):
     metadata: Dict[str, Any]
     transcript: Optional[str] = None
 
-# Add CORS middleware
+# Configure CORS
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],  # Allows all origins
