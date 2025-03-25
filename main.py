@@ -1369,13 +1369,35 @@ def log_webhook(call_id: str, data: dict):
         logger.error(f"❌ Error logging webhook data: {str(e)}")
 
 @app.post("/api/webhook")
+@app.post("/webhook/retell")  # Add support for both paths
 async def retell_webhook(request: Request):
     """Handle Retell webhook events."""
     try:
         # Log the raw request for debugging
         logger.info("📥 Received Retell webhook")
         logger.info(f"Headers: {dict(request.headers)}")
-        body = await request.json()
+        
+        # Get the raw body first
+        raw_body = await request.body()
+        logger.info(f"Raw body: {raw_body}")
+        
+        if not raw_body:
+            logger.error("❌ Empty request body")
+            raise HTTPException(
+                status_code=400,
+                detail="Empty request body"
+            )
+
+        try:
+            body = json.loads(raw_body)
+        except json.JSONDecodeError as e:
+            logger.error(f"❌ Invalid JSON in webhook payload: {str(e)}")
+            logger.error(f"Raw body that caused error: {raw_body}")
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid JSON payload: {str(e)}"
+            )
+
         logger.info(f"📦 Webhook payload: {json.dumps(body, indent=2)}")
 
         # Extract event data from the correct structure
@@ -1418,7 +1440,7 @@ async def retell_webhook(request: Request):
             # Process in background to avoid blocking webhook response
             asyncio.create_task(fetch_and_store_retell_transcript(call_id))
 
-        return {"status": "success", "message": "Webhook received"}
+        return {"status": "success", "message": "Webhook received", "timestamp": datetime.now().isoformat()}
 
     except json.JSONDecodeError:
         logger.error("❌ Invalid JSON in webhook payload")
