@@ -4,23 +4,9 @@
     {
       "src": "main.py",
       "use": "@vercel/python"
-    },
-    {
-      "src": "api/webhook.py",
-      "use": "@vercel/python"
     }
   ],
   "routes": [
-    {
-      "src": "/webhook/retell",
-      "dest": "/api/webhook.py",
-      "methods": ["POST", "OPTIONS"],
-      "headers": {
-        "Access-Control-Allow-Origin": "*",
-        "Access-Control-Allow-Methods": "POST, OPTIONS",
-        "Access-Control-Allow-Headers": "*"
-      }
-    },
     {
       "src": "/(.*)",
       "dest": "main.py"
