@@ -8,6 +8,10 @@
   ],
   "routes": [
     {
+      "src": "/favicon.ico",
+      "dest": "public/images/anita2rounded.png"
+    },
+    {
       "src": "/webhook/retell",
       "dest": "main.py",
       "methods": ["POST", "OPTIONS"],
