@@ -92,7 +92,7 @@ uvicorn main:app --reload --log-level debug
 
 ### Candidate Management
 
-- `POST /candidates`: Submit new candidate information with asynchronous resume processing
+- `POST /candidates`: Submit a new candidate profile
 - `GET /candidates/{candidate_id}/profile`: Get candidate profile
 - `POST /candidates/match-jobs`: Find matching jobs for a candidate
 - `POST /candidate/retell-transcript`: Process and store call transcripts
@@ -106,10 +106,12 @@ uvicorn main:app --reload --log-level debug
 - `POST /jobs/submit`: Submit new job posting
 - `GET /jobs/open-positions`: List all open positions
 - `POST /jobs/match-candidates`: Find matching candidates for a job
+- `GET /jobs/most-recent`: Get the most recent job posting
+- `GET /jobs/{job_id}`: Get a specific job posting
+- `GET /jobs/{job_id}/status`: Get the status of a job posting
 
 ### System Management
 
-- `POST /delete-knowledge-base/{knowledge_base_id}`: Clean up Retell AI knowledge bases
 - `POST /webhook/retell`: Handle Retell AI call status updates
 
 ## Development
