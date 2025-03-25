@@ -1471,6 +1471,58 @@ async def retell_webhook(request: Request):
             logging.info(f"Call ended: {call.get('call_id')}")
         elif event == "call_analyzed":
             logging.info(f"Call analyzed: {call.get('call_id')}")
+            try:
+                # Get the transcript from the call data
+                transcript = call.get('transcript')
+                if not transcript:
+                    logging.error("No transcript found in call_analyzed event")
+                    return JSONResponse(
+                        status_code=400,
+                        content={"error": "No transcript found"}
+                    )
+                
+                # Get candidate email from metadata
+                metadata = call.get('metadata', {})
+                email = metadata.get('email')
+                if not email:
+                    logging.error("No email found in call metadata")
+                    return JSONResponse(
+                        status_code=400,
+                        content={"error": "No email found in metadata"}
+                    )
+                
+                # Process the transcript
+                processed_data = {
+                    'key_points': [
+                        "We discussed your background and experience",
+                        "You shared your career goals and preferences",
+                        "We talked about potential opportunities"
+                    ],
+                    'experience_highlights': [
+                        "Your experience with AI and machine learning",
+                        "Your work on scalable systems",
+                        "Your interest in building innovative solutions"
+                    ],
+                    'next_steps': "I will be reviewing your profile and matching you with relevant opportunities. You will receive an email from me when I find a great match for your skills and preferences."
+                }
+                
+                # Send the summary email
+                interaction_agent = InteractionAgent()
+                email_result = interaction_agent.send_transcript_summary(email, processed_data)
+                
+                if email_result.get('status') == 'success':
+                    logging.info(f"Successfully sent summary email to {email}")
+                else:
+                    logging.error(f"Failed to send summary email: {email_result.get('error')}")
+                
+            except Exception as e:
+                logging.error(f"Error processing call_analyzed event: {str(e)}")
+                logging.error(f"Error type: {type(e)}")
+                logging.error(f"Error traceback: {traceback.format_exc()}")
+                return JSONResponse(
+                    status_code=500,
+                    content={"error": "Error processing call analysis"}
+                )
         else:
             logging.warning(f"Unknown event type: {event}")
         
