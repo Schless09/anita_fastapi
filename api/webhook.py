@@ -1,6 +1,6 @@
-from http.server import BaseHTTPRequestHandler
+from fastapi import FastAPI, Request, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
 import json
-import os
 import logging
 from datetime import datetime
 
@@ -8,54 +8,54 @@ from datetime import datetime
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-class handler(BaseHTTPRequestHandler):
-    def do_POST(self):
-        try:
-            # Get request body
-            content_length = int(self.headers['Content-Length'])
-            body = self.rfile.read(content_length)
-            payload = json.loads(body)
+app = FastAPI()
 
-            # Log webhook data
-            logger.info("📥 Received Retell webhook")
-            logger.info(f"Headers: {dict(self.headers)}")
-            logger.info(f"📦 Webhook payload: {json.dumps(payload, indent=2)}")
+# Configure CORS
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
-            # Extract event data
-            event = payload.get("event")
-            call_data = payload.get("call", {})
-            call_id = call_data.get("call_id")
-            call_status = call_data.get("call_status")
-            metadata = call_data.get("metadata", {})
+@app.post("/api/webhook")
+async def webhook_handler(request: Request):
+    """Handle Retell webhook events."""
+    try:
+        # Log webhook data
+        logger.info("📥 Received Retell webhook")
+        logger.info(f"Headers: {dict(request.headers)}")
+        
+        # Get request body
+        body = await request.json()
+        logger.info(f"📦 Webhook payload: {json.dumps(body, indent=2)}")
 
-            if not event or not call_id:
-                self.send_error(400, "Missing required fields: event or call_id")
-                return
+        # Extract event data
+        event = body.get("event")
+        call_data = body.get("call", {})
+        call_id = call_data.get("call_id")
+        call_status = call_data.get("call_status")
+        metadata = call_data.get("metadata", {})
 
-            logger.info(f"📞 Processing {event} event for call {call_id}")
+        if not event or not call_id:
+            logger.error("❌ Missing required fields in webhook payload")
+            raise HTTPException(
+                status_code=400,
+                detail="Missing required fields: event or call_id"
+            )
 
-            # Send success response
-            self.send_response(200)
-            self.send_header('Content-type', 'application/json')
-            self.send_header('Access-Control-Allow-Origin', '*')
-            self.send_header('Access-Control-Allow-Methods', 'POST, OPTIONS')
-            self.send_header('Access-Control-Allow-Headers', '*')
-            self.end_headers()
+        logger.info(f"📞 Processing {event} event for call {call_id}")
 
-            response = {
-                "status": "success",
-                "message": "Webhook received",
-                "timestamp": datetime.now().isoformat()
-            }
-            self.wfile.write(json.dumps(response).encode())
+        return {
+            "status": "success",
+            "message": "Webhook received",
+            "timestamp": datetime.now().isoformat()
+        }
 
-        except Exception as e:
-            logger.error(f"❌ Error processing webhook: {str(e)}")
-            self.send_error(500, f"Error processing webhook: {str(e)}")
-
-    def do_OPTIONS(self):
-        self.send_response(200)
-        self.send_header('Access-Control-Allow-Origin', '*')
-        self.send_header('Access-Control-Allow-Methods', 'POST, OPTIONS')
-        self.send_header('Access-Control-Allow-Headers', '*')
-        self.end_headers() 
+    except Exception as e:
+        logger.error(f"❌ Error processing webhook: {str(e)}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error processing webhook: {str(e)}"
+        ) 

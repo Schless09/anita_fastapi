@@ -13,13 +13,12 @@
   "routes": [
     {
       "src": "/webhook/retell",
-      "dest": "/api/webhook.py",
+      "dest": "/api/webhook",
       "methods": ["POST", "OPTIONS"],
       "headers": {
         "Access-Control-Allow-Origin": "*",
         "Access-Control-Allow-Methods": "POST, OPTIONS",
-        "Access-Control-Allow-Headers": "*",
-        "Access-Control-Allow-Credentials": "true"
+        "Access-Control-Allow-Headers": "*"
       }
     },
     {
@@ -32,8 +31,8 @@
   },
   "crons": [
     {
-      "path": "/api/cron/cleanup-calls",
-      "schedule": "* * * * *"
+      "path": "/api/cleanup",
+      "schedule": "0 0 * * *"
     }
   ]
 }
