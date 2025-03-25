@@ -6,6 +6,12 @@
       "use": "@vercel/python"
     }
   ],
+  "rewrites": [
+    {
+      "source": "/webhook/retell",
+      "destination": "/api/webhook"
+    }
+  ],
   "routes": [
     {
       "src": "/webhook/retell",

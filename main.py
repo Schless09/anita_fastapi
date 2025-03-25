@@ -1368,7 +1368,7 @@ def log_webhook(call_id: str, data: dict):
     except Exception as e:
         logger.error(f"❌ Error logging webhook data: {str(e)}")
 
-@app.post("/webhook/retell")
+@app.post("/api/webhook")
 async def retell_webhook(request: Request):
     """Handle Retell webhook events."""
     try:
