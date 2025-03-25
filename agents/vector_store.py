@@ -123,10 +123,13 @@ class VectorStore:
                 "name": name,
                 "email": candidate_data.get("email"),
                 "phone_number": candidate_data.get("phone_number"),
-                "linkedin": candidate_data.get("linkedin"),
                 "candidate_id": candidate_id,  # Add this for easier querying
                 "timestamp": datetime.utcnow().isoformat()
             }
+            
+            # Only add linkedin if it has a value
+            if candidate_data.get("linkedin"):
+                metadata["linkedin"] = candidate_data.get("linkedin")
             
             # If no resume text, create a basic profile vector
             if not resume_text:
