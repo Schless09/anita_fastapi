@@ -8,6 +8,26 @@
   ],
   "routes": [
     {
+      "src": "/webhook/retell",
+      "dest": "main.py",
+      "methods": ["POST", "OPTIONS"],
+      "headers": {
+        "Access-Control-Allow-Origin": "https://api.retellai.com",
+        "Access-Control-Allow-Methods": "POST, OPTIONS",
+        "Access-Control-Allow-Headers": "x-retell-auth, x-vercel-protection-bypass, content-type"
+      }
+    },
+    {
+      "src": "/api/webhook",
+      "dest": "main.py",
+      "methods": ["POST", "OPTIONS"],
+      "headers": {
+        "Access-Control-Allow-Origin": "https://api.retellai.com",
+        "Access-Control-Allow-Methods": "POST, OPTIONS",
+        "Access-Control-Allow-Headers": "x-retell-auth, x-vercel-protection-bypass, content-type"
+      }
+    },
+    {
       "src": "/(.*)",
       "dest": "main.py"
     }
