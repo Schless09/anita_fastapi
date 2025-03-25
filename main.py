@@ -194,6 +194,16 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+@app.get("/")
+async def root():
+    """Root endpoint that returns basic API information"""
+    return {
+        "name": "Anita AI Recruitment API",
+        "version": "2.0.0",
+        "status": "running",
+        "documentation": "/docs"
+    }
+
 @app.get("/health")
 def health_check():
     return {"status": "healthy"}
