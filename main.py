@@ -23,7 +23,7 @@ import aiohttp
 import traceback
 import asyncio
 from PyPDF2 import PdfReader
-from pinecone import Pinecone, ServerlessSpec, CloudProvider, AwsRegion, VectorType
+from pinecone import Pinecone
 import phonenumbers
 from retell import Retell
 import time
@@ -167,25 +167,13 @@ Text to analyze:
 logger.info("Initializing Pinecone...")
 pc = Pinecone(api_key=os.getenv("PINECONE_API_KEY"))
 
-# Create call-statuses index if it doesn't exist
+# Get list of existing indexes
 existing_indexes = [index.name for index in pc.list_indexes()]
-if "call-statuses" not in existing_indexes:
-    logger.info("Creating call-statuses index...")
-    pc.create_index(
-        name="call-statuses",
-        dimension=1536,  # Same dimension as other indexes
-        metric="cosine",
-        spec=ServerlessSpec(
-            cloud=CloudProvider.AWS,
-            region=os.getenv("PINECONE_ENVIRONMENT", "us-east-1")
-        )
-    )
-    logger.info("Successfully created call-statuses index")
-else:
-    logger.info("call-statuses index already exists")
+logger.info(f"Existing indexes: {existing_indexes}")
 
+# Initialize indexes
 job_index = pc.Index("job-details")
-call_status_index = pc.Index("call-statuses")  # New index for call statuses
+call_status_index = pc.Index("call-statuses")
 
 app = FastAPI(
     title="Anita AI Recruitment API",
