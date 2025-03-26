@@ -78,12 +78,22 @@ app.add_middleware(
 
 @app.get("/")
 async def root():
-    """Root endpoint that returns basic API information"""
+    """Root endpoint that returns API information and environment details"""
+    environment = "development" if os.getenv("VERCEL_ENV") is None else os.getenv("VERCEL_ENV")
+    pinecone_index = os.getenv("PINECONE_JOBS_INDEX", "Unknown")
+    
     return {
         "name": "Anita AI Recruitment API",
         "version": "2.0.0",
         "status": "running",
-        "documentation": "/docs"
+        "documentation": "/docs",
+        "environment": environment,
+        "vector_db": {
+            "name": "Pinecone",
+            "jobs_index": pinecone_index,
+            "candidates_index": os.getenv("PINECONE_CANDIDATES_INDEX", "Unknown"),
+            "call_status_index": os.getenv("PINECONE_CALL_STATUS_INDEX", "Unknown")
+        }
     }
 
 @app.get("/health")
