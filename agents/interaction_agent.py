@@ -2,7 +2,7 @@ import os
 import logging
 import ssl
 from sendgrid import SendGridAPIClient
-from sendgrid.helpers.mail import Mail, Email, To
+from sendgrid.helpers.mail import Mail, Email, To, From, Subject, HtmlContent, PlainTextContent
 from dotenv import load_dotenv
 from typing import Dict, Any, Optional
 from datetime import datetime
@@ -260,10 +260,12 @@ class InteractionAgent:
                 'message': str(e)
             }
 
-    def send_transcript_summary(self, email: str, processed_data: dict) -> Dict[str, Any]:
-        """Sends a summary email to the candidate after their call with Retell AI."""
+    async def send_transcript_summary(self, email: str, processed_data: Dict[str, Any]) -> Dict[str, Any]:
+        """Send a summary email to a candidate with their transcript analysis."""
         try:
             logger.info(f"Preparing transcript summary email for {email}")
+            
+            # Create SendGrid client
 
             # Create the email message
             message = Mail(
