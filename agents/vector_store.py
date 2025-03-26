@@ -9,6 +9,7 @@ from tenacity import retry, stop_after_attempt, wait_exponential
 from dotenv import load_dotenv
 from openai import OpenAI
 import json
+import logging
 from .matching_utils import (
     check_location_match,
     check_work_environment_match,
@@ -16,6 +17,17 @@ from .matching_utils import (
     check_work_authorization_match,
     generate_match_reason
 )
+
+# Configure logger
+logger = logging.getLogger(__name__)
+logger.setLevel(logging.INFO)
+
+# Create console handler with formatting
+console_handler = logging.StreamHandler()
+console_handler.setLevel(logging.INFO)
+formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+console_handler.setFormatter(formatter)
+logger.addHandler(console_handler)
 
 class VectorStore:
     def __init__(self, init_openai: bool = False, existing_indexes: Optional[Dict[str, Any]] = None):
