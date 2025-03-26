@@ -138,149 +138,139 @@ class JobStatus(str, Enum):
     FAILED = "failed"
 
 # Job analysis prompt template
-JOB_ANALYSIS_PROMPT = """
-You are an AI assistant helping a recruiter match candidates to technical roles at startups. For each role provided, extract and structure the data into a standardized JSON format optimized for matching algorithms.
+JOB_ANALYSIS_PROMPT = """You are an AI assistant helping a recruiter match candidates to technical roles at startups. For each role provided, extract and structure the data into a standardized JSON format optimized for matching algorithms.
 
-Return the information as a JSON object with the following fields:
+Return Format Requirements:
+- Output a valid JSON object format (not a stringified JavaScript object)
+- Use double quotes for all keys and string values
+- Include all fields listed below. Use "n/a" for missing or unavailable information
+- Use two-space indentation for readability
+- Do not include trailing commas
+- Quote numeric values (e.g., "5+" instead of 5+)
+- Return arrays using proper JSON syntax (e.g., ["value1", "value2"])
+- Return booleans as true or false (do not quote them)
+- Use consistent formats:
+  - Salaries and funding: "$200k+", "$50M"
+  - Equity: "0.1% - 0.5%"
+  - Always return cities and states as arrays, even if only one value (e.g., ["New York"], ["NY"])
 
-### Company Information
+Value Standardization Rules:
+- Tech Stack Normalization: Standardize technology names (e.g., React.js/ReactJS → React, TensorFlow/TF → TensorFlow)
+- Location Standardization: Use consistent "City, ST" formats and return "city" and "state" as arrays
+- Requirement Classification:
+  - "must_have": Absolute requirements
+  - "preferred": Desired but not required
+  - "nice_to_have": Beneficial but optional
+- Return the following as arrays of strings if multiple items apply:
+  - "investors", "tech_stack_must_haves", "tech_stack_nice_to_haves", "tech_stack_tags", "coding_languages_versions", "version_control_experience", "ci_cd_tools", "collaborative_tools", "domain_expertise", "infrastructure_experience", "technical_challenges", "key_responsibilities", "expected_deliverables", "ideal_companies", "deal_breakers", "culture_fit_indicators", "startup_mindset_requirements", "growth_mindset_indicators", "interview_process_tags", "interview_focus_areas"
+
+Required JSON Structure:
 {
-  "company_name": string,
-  "company_url": string,
+  "company_name": "string",
+  "company_url": "string",
   "company_stage": ["Seed", "Series A", "Series B", "Series C", "Growth"],
-  "most_recent_funding_round_amount": string,
-  "total_funding_amount": string,
-  "investors": [string],
-  "team_size": string,
-  "founding_year": string,
-  "company_mission": string,
+  "most_recent_funding_round_amount": "string",
+  "total_funding_amount": "string",
+  "investors": ["string"],
+  "team_size": "string",
+  "founding_year": "string",
+  "company_mission": "string",
   "target_market": ["B2B", "B2C", "Enterprise", "SMB"],
-  "industry_vertical": string,
-  "company_vision": string,
-  "company_growth_story": string,
+  "industry_vertical": "string",
+  "company_vision": "string",
+  "company_growth_story": "string",
   "company_culture": {
-    "work_environment": string,
-    "decision_making": string,
-    "collaboration_style": string,
-    "risk_tolerance": string,
-    "values": string
+    "work_environment": "string",
+    "decision_making": "string",
+    "collaboration_style": "string",
+    "risk_tolerance": "string",
+    "values": "string"
   },
-  "scaling_plans": string,
-  "mission_and_impact": string,
-  "tech_innovation": string
-}
-
-### Role Details
-{
-  "job_title": string,
-  "job_url": string,
-  "positions_available": string,
+  "scaling_plans": "string",
+  "mission_and_impact": "string",
+  "tech_innovation": "string",
+  "job_title": "string",
+  "job_url": "string",
+  "positions_available": "string",
   "hiring_urgency": ["ASAP", "Within 30 days", "Within 60 days", "Ongoing"],
   "seniority_level": ["1+ years", "3+ years", "5+ years", "7+ years", "10+ years"],
   "work_arrangement": ["Remote", "On-site", "Hybrid"],
-  "city": [string],
-  "state": [string],
-  "visa_sponsorship": string,
-  "work_authorization": string,
-  "salary_range": string,
-  "equity_range": string,
-  "reporting_structure": string,
-  "team_composition": string,
-  "role_status": string
-}
-
-### Technical Requirements
-{
+  "city": ["string"],
+  "state": ["string"],
+  "visa_sponsorship": "string",
+  "work_authorization": "string",
+  "salary_range": "string",
+  "equity_range": "string",
+  "reporting_structure": "string",
+  "team_composition": "string",
+  "role_status": "string",
   "role_category": ["SWE", "ML Engineer", "AI Engineer", "Data Engineer", "DevOps"],
-  "tech_stack_must_haves": [string],
-  "tech_stack_nice_to_haves": [string],
-  "tech_stack_tags": [string],
+  "tech_stack_must_haves": ["string"],
+  "tech_stack_nice_to_haves": ["string"],
+  "tech_stack_tags": ["string"],
   "tech_breadth_requirement": ["Full-Stack", "Frontend-Leaning", "Backend-Leaning", "ML/AI-Focused"],
-  "minimum_years_of_experience": string,
-  "domain_expertise": [string],
-  "ai_ml_experience": string,
-  "infrastructure_experience": [string],
-  "system_design_level": string,
+  "minimum_years_of_experience": "string",
+  "domain_expertise": ["string"],
+  "ai_ml_experience": "string",
+  "infrastructure_experience": ["string"],
+  "system_design_level": "string",
   "coding_proficiency_required": ["Basic", "Intermediate", "Expert"],
-  "coding_languages_versions": [string],
-  "version_control_experience": [string],
-  "ci_cd_tools": [string],
-  "collaborative_tools": [string]
-}
-
-### Qualification Requirements
-{
+  "coding_languages_versions": ["string"],
+  "version_control_experience": ["string"],
+  "ci_cd_tools": ["string"],
+  "collaborative_tools": ["string"],
   "leadership_requirement": ["None", "Preferred", "Required"],
-  "education_requirement": string,
-  "advanced_degree_preference": string,
-  "papers_publications_preferred": string,
+  "education_requirement": "string",
+  "advanced_degree_preference": "string",
+  "papers_publications_preferred": "string",
   "prior_startup_experience": ["Required", "Preferred", "Not required"],
   "advancement_history_required": boolean,
-  "independent_work_capacity": string,
-  "skills_must_have": [string],
-  "skills_preferred": [string]
-}
-
-### Product & Role Context
-{
-  "product_details": string,
+  "independent_work_capacity": "string",
+  "skills_must_have": ["string"],
+  "skills_preferred": ["string"],
+  "product_details": "string",
   "product_development_stage": ["Prototype", "MVP", "Market-ready", "Scaling"],
-  "technical_challenges": [string],
-  "key_responsibilities": [string],
+  "technical_challenges": ["string"],
+  "key_responsibilities": ["string"],
   "scope_of_impact": ["Team", "Department", "Company", "Industry"],
-  "expected_deliverables": [string],
-  "product_development_methodology": ["Agile", "Scrum", "Kanban"]
-}
-
-### Startup-Specific Factors
-{
+  "expected_deliverables": ["string"],
+  "product_development_methodology": ["Agile", "Scrum", "Kanban"],
   "stage_of_codebase": ["Greenfield", "Established", "Legacy Refactoring"],
-  "growth_trajectory": string,
-  "founder_background": string,
-  "funding_stability": string,
-  "expected_hours": string
+  "growth_trajectory": "string",
+  "founder_background": "string",
+  "funding_stability": "string",
+  "expected_hours": "string",
+  "ideal_companies": ["string"],
+  "deal_breakers": ["string"],
+  "culture_fit_indicators": ["string"],
+  "startup_mindset_requirements": ["string"],
+  "autonomy_level_required": "string",
+  "growth_mindset_indicators": ["string"],
+  "ideal_candidate_profile": "string",
+  "interview_process_tags": ["string"],
+  "technical_assessment_type": ["string"],
+  "interview_focus_areas": ["string"],
+  "time_to_hire": "string",
+  "decision_makers": ["string"],
+  "recruiter_pitch_points": ["string"]
 }
 
-### Candidate Targeting
-{
-  "ideal_companies": [string],
-  "disqualifying_traits": [string],
-  "deal_breakers": [string],
-  "culture_fit_indicators": [string],
-  "startup_mindset_requirements": [string],
-  "autonomy_level_required": string,
-  "growth_mindset_indicators": [string],
-  "ideal_candidate_profile": string
-}
-
-### Interview Process
-{
-  "interview_process_tags": [string],
-  "technical_assessment_type": [string],
-  "interview_focus_areas": [string],
-  "time_to_hire": string,
-  "decision_makers": [string]
-}
-
-### Recruiter Pitch Points
-{
-  "recruiter_pitch_points": [string]
-}
-
-For any fields where information is not explicitly mentioned in the text, use "n/a" for string fields and [] for array fields.
-
-Be particularly careful to:
-1. Extract the company website URL if mentioned
-2. Extract the job posting URL if present
-3. Capture compensation details including base salary, equity, and total comp ranges
-4. Extract technical requirements and must-have skills
-5. Identify work arrangement and location details
-6. Note interview process specifics
-7. Include company stage and funding information
-
-Text to analyze:
-{raw_text}
-"""
+Instructions:
+1. Extract all relevant data from the information provided.
+2. If information is not explicitly stated:
+   - Make reasonable inferences based on context, but do not overextend.
+   - Use "n/a" for missing or unknown information.
+3. For startup tech roles, prioritize identifying:
+   - Tech stack and depth
+   - Startup experience/mindset
+   - Autonomy and ownership
+   - Growth and scaling context
+4. For ML/AI roles, prioritize identifying:
+   - ML frameworks and methods
+   - Research vs. applied ML experience
+   - Deployment and infrastructure skills
+   - Domain-specific AI experience
+5. Return complete JSON with all fields populated using "n/a" or reasonable default formatting when necessary."""
 
 # Initialize Pinecone
 logger.info("Initializing Pinecone...")
@@ -2217,23 +2207,15 @@ async def submit_job(
             )
             
             # Parse the OpenAI response
-            processed_data = json.loads(response.choices[0].message.content)
-            print("Successfully processed job text with OpenAI")
-            
-            # Validate required fields
-            required_fields = ['job_title', 'company_name', 'job_url']
-            missing_fields = [field for field in required_fields if not processed_data.get(field)]
-            if missing_fields:
-                error_msg = f"Missing required fields in processed data: {', '.join(missing_fields)}"
-                print(error_msg)
-                job_statuses[job_id] = {
-                    "status": JobStatus.FAILED,
-                    "progress": 0,
-                    "message": error_msg
-                }
+            try:
+                processed_data = json.loads(response.choices[0].message.content)
+                print("Successfully processed job text with OpenAI")
+            except json.JSONDecodeError as e:
+                print(f"Error parsing OpenAI response: {e}")
+                print(f"Raw response: {response.choices[0].message.content}")
                 raise HTTPException(
-                    status_code=400,
-                    detail=error_msg
+                    status_code=500,
+                    detail="Failed to parse job analysis response"
                 )
             
             # Update job status
@@ -2267,20 +2249,22 @@ async def submit_job(
             }
             
         except Exception as e:
+            print(f"Error processing job submission: {str(e)}")
             job_statuses[job_id] = {
                 "status": JobStatus.FAILED,
                 "progress": 0,
-                "message": f"Job processing failed: {str(e)}"
+                "message": f"Error: {str(e)}"
             }
-            raise
+            raise HTTPException(
+                status_code=500,
+                detail=f"Failed to process job submission: {str(e)}"
+            )
             
-    except HTTPException as he:
-        raise he
     except Exception as e:
-        print(f"Error processing job submission: {str(e)}")
+        print(f"Error in job submission endpoint: {str(e)}")
         raise HTTPException(
             status_code=500,
-            detail=f"Failed to process job submission: {str(e)}"
+            detail=f"Error processing job submission: {str(e)}"
         )
     finally:
         print("=== Job submission processing complete ===\n")
