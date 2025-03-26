@@ -139,93 +139,139 @@ class JobStatus(str, Enum):
 
 # Job analysis prompt template
 JOB_ANALYSIS_PROMPT = """
-Please analyze the following job posting text and extract detailed information into a structured format.
-The text may include a transcript of a conversation about the role and/or a formal job description.
+You are an AI assistant helping a recruiter match candidates to technical roles at startups. For each role provided, extract and structure the data into a standardized JSON format optimized for matching algorithms.
 
 Return the information as a JSON object with the following fields:
-{{
-    "company_name": string,
-    "company_website": string,
-    "paraform_url": string,
-    "company_stage": string,
-    "funding_details": {{
-        "most_recent_round": string,
-        "total_funding": string,
-        "key_investors": [string]
-    }},
-    "team_size": string,
-    "founding_year": string,
-    "company_mission": string,
-    "target_market": [string],
-    "industry_vertical": string,
-    "company_vision": string,
-    "company_growth_story": string,
-    "company_culture": {{
-        "work_environment": string,
-        "decision_making": string,
-        "collaboration_style": string,
-        "risk_tolerance": string,
-        "values": string
-    }},
-    "job_title": string,
-    "positions_available": string,
-    "hiring_urgency": string,
-    "seniority_level": string,
-    "work_arrangement": string,
-    "location": {{
-        "city": string,
-        "state": string,
-        "office_details": string
-    }},
-    "visa_sponsorship": string,
-    "compensation": {{
-        "base_salary_range": string,
-        "equity_details": string,
-        "total_comp_range": string
-    }},
-    "reporting_structure": string,
-    "team_composition": string,
-    "role_category": string,
-    "tech_stack": {{
-        "must_haves": [string],
-        "nice_to_haves": [string],
-        "tools_and_frameworks": [string]
-    }},
-    "experience_requirements": {{
-        "minimum_years": string,
-        "level": string,
-        "domain_expertise": [string],
-        "specific_skills": string
-    }},
-    "education_requirements": {{
-        "minimum": string,
-        "preferred": string,
-        "notes": string
-    }},
-    "key_responsibilities": [string],
-    "ideal_candidate_profile": string,
-    "interview_process": {{
-        "stages": [string],
-        "work_trial_details": string,
-        "timeline": string
-    }},
-    "recruiter_pitch_points": [string],
-    "key_responsibilities": [string],
-    "ideal_candidate_profile": string,
-    "interview_process": {{
-        "stages": [string],
-        "work_trial_details": string,
-        "timeline": string,
-    }},
-    "deal_breakers": [string],
-    "growth_opportunities": string
-}}
 
-For any fields where information is not explicitly mentioned in the text, use "Not specified" for string fields and [] for array fields.
+### Company Information
+{
+  "company_name": string,
+  "company_url": string,
+  "company_stage": ["Seed", "Series A", "Series B", "Series C", "Growth"],
+  "most_recent_funding_round_amount": string,
+  "total_funding_amount": string,
+  "investors": [string],
+  "team_size": string,
+  "founding_year": string,
+  "company_mission": string,
+  "target_market": ["B2B", "B2C", "Enterprise", "SMB"],
+  "industry_vertical": string,
+  "company_vision": string,
+  "company_growth_story": string,
+  "company_culture": {
+    "work_environment": string,
+    "decision_making": string,
+    "collaboration_style": string,
+    "risk_tolerance": string,
+    "values": string
+  },
+  "scaling_plans": string,
+  "mission_and_impact": string,
+  "tech_innovation": string
+}
+
+### Role Details
+{
+  "job_title": string,
+  "job_url": string,
+  "positions_available": string,
+  "hiring_urgency": ["ASAP", "Within 30 days", "Within 60 days", "Ongoing"],
+  "seniority_level": ["1+ years", "3+ years", "5+ years", "7+ years", "10+ years"],
+  "work_arrangement": ["Remote", "On-site", "Hybrid"],
+  "city": [string],
+  "state": [string],
+  "visa_sponsorship": string,
+  "work_authorization": string,
+  "salary_range": string,
+  "equity_range": string,
+  "reporting_structure": string,
+  "team_composition": string,
+  "role_status": string
+}
+
+### Technical Requirements
+{
+  "role_category": ["SWE", "ML Engineer", "AI Engineer", "Data Engineer", "DevOps"],
+  "tech_stack_must_haves": [string],
+  "tech_stack_nice_to_haves": [string],
+  "tech_stack_tags": [string],
+  "tech_breadth_requirement": ["Full-Stack", "Frontend-Leaning", "Backend-Leaning", "ML/AI-Focused"],
+  "minimum_years_of_experience": string,
+  "domain_expertise": [string],
+  "ai_ml_experience": string,
+  "infrastructure_experience": [string],
+  "system_design_level": string,
+  "coding_proficiency_required": ["Basic", "Intermediate", "Expert"],
+  "coding_languages_versions": [string],
+  "version_control_experience": [string],
+  "ci_cd_tools": [string],
+  "collaborative_tools": [string]
+}
+
+### Qualification Requirements
+{
+  "leadership_requirement": ["None", "Preferred", "Required"],
+  "education_requirement": string,
+  "advanced_degree_preference": string,
+  "papers_publications_preferred": string,
+  "prior_startup_experience": ["Required", "Preferred", "Not required"],
+  "advancement_history_required": boolean,
+  "independent_work_capacity": string,
+  "skills_must_have": [string],
+  "skills_preferred": [string]
+}
+
+### Product & Role Context
+{
+  "product_details": string,
+  "product_development_stage": ["Prototype", "MVP", "Market-ready", "Scaling"],
+  "technical_challenges": [string],
+  "key_responsibilities": [string],
+  "scope_of_impact": ["Team", "Department", "Company", "Industry"],
+  "expected_deliverables": [string],
+  "product_development_methodology": ["Agile", "Scrum", "Kanban"]
+}
+
+### Startup-Specific Factors
+{
+  "stage_of_codebase": ["Greenfield", "Established", "Legacy Refactoring"],
+  "growth_trajectory": string,
+  "founder_background": string,
+  "funding_stability": string,
+  "expected_hours": string
+}
+
+### Candidate Targeting
+{
+  "ideal_companies": [string],
+  "disqualifying_traits": [string],
+  "deal_breakers": [string],
+  "culture_fit_indicators": [string],
+  "startup_mindset_requirements": [string],
+  "autonomy_level_required": string,
+  "growth_mindset_indicators": [string],
+  "ideal_candidate_profile": string
+}
+
+### Interview Process
+{
+  "interview_process_tags": [string],
+  "technical_assessment_type": [string],
+  "interview_focus_areas": [string],
+  "time_to_hire": string,
+  "decision_makers": [string]
+}
+
+### Recruiter Pitch Points
+{
+  "recruiter_pitch_points": [string]
+}
+
+For any fields where information is not explicitly mentioned in the text, use "n/a" for string fields and [] for array fields.
 
 Be particularly careful to:
 1. Extract the company website URL if mentioned
-2. Extract the Paraform job posting URL if present
+2. Extract the job posting URL if present
 3. Capture compensation details including base salary, equity, and total comp ranges
 4. Extract technical requirements and must-have skills
 5. Identify work arrangement and location details
@@ -2183,39 +2229,7 @@ async def submit_job(
             
             # Store in vector database
             vector_store = VectorStore(init_openai=True)
-            
-            # Flatten nested dictionaries and convert all values to strings
-            job_data = {
-                "job_title": str(processed_data.get("job_title", "Unknown Title")),
-                "company_name": str(processed_data.get("company_name", "Unknown Company")),
-                "location_city": str(processed_data.get("location", {}).get("city", "")),
-                "location_state": str(processed_data.get("location", {}).get("state", "")),
-                "description": str("\n".join(processed_data.get("key_responsibilities", []))),
-                "requirements": str(processed_data.get("experience_requirements", {})),
-                "benefits": str(processed_data.get("compensation", {})),
-                "paraform_link": str(processed_data.get("paraform_url", "")),
-                # Flatten role_details
-                "role_seniority": str(processed_data.get("seniority_level", "")),
-                "role_work_arrangement": str(processed_data.get("work_arrangement", "")),
-                "role_visa_sponsorship": str(processed_data.get("visa_sponsorship", "")),
-                "role_tech_stack_must_haves": str(processed_data.get("tech_stack", {}).get("must_haves", [])),
-                "role_tech_stack_nice_to_haves": str(processed_data.get("tech_stack", {}).get("nice_to_haves", [])),
-                "role_tech_stack_tools": str(processed_data.get("tech_stack", {}).get("tools_and_frameworks", [])),
-                # Flatten company_information
-                "company_stage": str(processed_data.get("company_stage", "")),
-                "company_funding_round": str(processed_data.get("funding_details", {}).get("most_recent_round", "")),
-                "company_funding_total": str(processed_data.get("funding_details", {}).get("total_funding", "")),
-                "company_funding_investors": str(processed_data.get("funding_details", {}).get("key_investors", [])),
-                "company_team_size": str(processed_data.get("team_size", "")),
-                "company_mission": str(processed_data.get("company_mission", "")),
-                "company_culture_work_env": str(processed_data.get("company_culture", {}).get("work_environment", "")),
-                "company_culture_decision": str(processed_data.get("company_culture", {}).get("decision_making", "")),
-                "company_culture_collab": str(processed_data.get("company_culture", {}).get("collaboration_style", "")),
-                "company_culture_risk": str(processed_data.get("company_culture", {}).get("risk_tolerance", "")),
-                "company_culture_values": str(processed_data.get("company_culture", {}).get("values", ""))
-            }
-            
-            store_result = vector_store.store_job(job_id, job_data)
+            store_result = vector_store.store_job(job_id, processed_data)
             
             if store_result.get("status") == "error":
                 raise Exception(store_result.get("message", "Unknown error storing job"))
