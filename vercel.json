@@ -16,7 +16,7 @@
       "dest": "main.py",
       "methods": ["POST", "OPTIONS"],
       "headers": {
-        "Access-Control-Allow-Origin": "https://api.retellai.com",
+        "Access-Control-Allow-Origin": "*",
         "Access-Control-Allow-Methods": "POST, OPTIONS",
         "Access-Control-Allow-Headers": "x-retell-auth, x-retell-signature, x-vercel-protection-bypass, content-type",
         "x-vercel-protection-bypass": "${VERCEL_PROTECTION_BYPASS}"
@@ -29,7 +29,7 @@
       "dest": "main.py",
       "methods": ["POST", "OPTIONS"],
       "headers": {
-        "Access-Control-Allow-Origin": "https://api.retellai.com",
+        "Access-Control-Allow-Origin": "*",
         "Access-Control-Allow-Methods": "POST, OPTIONS",
         "Access-Control-Allow-Headers": "x-retell-auth, x-retell-signature, x-vercel-protection-bypass, content-type",
         "x-vercel-protection-bypass": "${VERCEL_PROTECTION_BYPASS}"
@@ -49,10 +49,6 @@
     {
       "path": "/api/cleanup",
       "schedule": "0 0 * * *"
-    },
-    {
-      "path": "/api/cron/process-transcripts",
-      "schedule": "* * * * *"
     }
   ]
 }
