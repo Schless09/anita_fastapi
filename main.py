@@ -1983,14 +1983,37 @@ async def fetch_retell_transcript(call_id: str) -> Optional[Dict]:
         if not call_data:
             raise Exception(f"Could not fetch call data for {call_id}")
             
-        # Extract transcript
+        # Extract transcript and metadata
         transcript = call_data.get("transcript", "")
+        metadata = call_data.get("metadata", {})
+        
+        # Log metadata for debugging
+        logger.info(f"📞 Call metadata: {metadata}")
+        
+        # If no transcript, check if it was an unanswered call
         if not transcript:
-            raise Exception(f"No transcript available for call {call_id}")
+            call_status = call_data.get("call_status", "").lower()
+            disconnection_reason = call_data.get("disconnection_reason", "").lower()
+            
+            # Check for various unanswered call scenarios
+            if (call_status in ["no_answer", "busy", "failed", "error"] or 
+                disconnection_reason in ["dial_no_answer", "busy", "failed"]):
+                logger.info(f"Call {call_id} was not answered (status: {call_status}, reason: {disconnection_reason})")
+                return {
+                    'transcript': "",
+                    'metadata': metadata,  # Pass through the full metadata
+                    'call_status': call_status,
+                    'duration_ms': call_data.get('duration_ms', 0),
+                    'unanswered': True,
+                    'disconnection_reason': disconnection_reason
+                }
+            else:
+                logger.error(f"❌ No transcript available and call status ({call_status}) not recognized as unanswered")
+                raise Exception(f"No transcript available for call {call_id}")
             
         return {
             'transcript': transcript,
-            'metadata': call_data.get('metadata', {}),
+            'metadata': metadata,  # Pass through the full metadata
             'call_status': call_data.get('call_status'),
             'duration_ms': call_data.get('duration_ms')
         }
@@ -2016,12 +2039,39 @@ async def fetch_and_store_retell_transcript(call_id: str) -> dict:
         if not transcript_data:
             raise Exception(f"Could not fetch transcript data for {call_id}")
             
-        # Process with OpenAI
-        logger.info(f"📝 Processing transcript with OpenAI for call {call_id}")
-        processed_data = await process_transcript_with_openai(
-            transcript_data['transcript'],
-            transcript_data['metadata']  # Pass metadata to get candidate name
-        )
+        # Determine call status based on transcript and call data
+        call_status = "completed"  # default status
+        transcript = transcript_data['transcript']
+        duration_ms = transcript_data.get('duration_ms', 0)
+        
+        # Check if call was unanswered
+        if transcript_data.get('unanswered', False):
+            call_status = "missed"
+            logger.info(f"Call {call_id} was not answered")
+        # Check if call was missed (no transcript or very short duration)
+        elif not transcript or duration_ms < 1000:  # Less than 1 second
+            call_status = "missed"
+            logger.info(f"Call {call_id} was missed (no transcript or very short duration)")
+        # Check if call was cut short (short duration or minimal transcript)
+        elif duration_ms < 30000 or len(transcript.split()) < 50:  # Less than 30 seconds or less than 50 words
+            call_status = "short"
+            logger.info(f"Call {call_id} was cut short (short duration or minimal transcript)")
+        
+        # Process with OpenAI only if we have a completed call
+        processed_data = {}
+        if call_status == "completed":
+            logger.info(f"📝 Processing transcript with OpenAI for call {call_id}")
+            processed_data = await process_transcript_with_openai(
+                transcript_data['transcript'],
+                transcript_data['metadata']  # Pass metadata to get candidate name
+            )
+        else:
+            # For missed or short calls, create minimal processed data
+            processed_data = {
+                'first_name': transcript_data['metadata'].get('name', '').split()[0],
+                'call_status': call_status,
+                'timestamp': datetime.now().isoformat()
+            }
         
         # Store in Pinecone if we have a candidate ID
         candidate_id = transcript_data['metadata'].get('candidate_id')
@@ -2032,7 +2082,8 @@ async def fetch_and_store_retell_transcript(call_id: str) -> dict:
                 'candidate_id': candidate_id,
                 'call_id': call_id,
                 'processed_at': datetime.now().isoformat(),
-                'processed_data': json.dumps(processed_data)  # Serialize the complex object
+                'processed_data': json.dumps(processed_data),  # Serialize the complex object
+                'call_status': call_status
             }
             await store_in_pinecone(candidate_id, pinecone_metadata)
         
@@ -2042,6 +2093,7 @@ async def fetch_and_store_retell_transcript(call_id: str) -> dict:
             try:
                 logger.info(f"\n📧 Email Process Started for call {call_id}")
                 logger.info(f"Recipient: {email}")
+                logger.info(f"Call Status: {call_status}")
                 
                 # Check if email was already sent
                 logger.info("Checking Pinecone for previous email status...")
@@ -2054,7 +2106,7 @@ async def fetch_and_store_retell_transcript(call_id: str) -> dict:
                 
                 if not query_response.matches or not query_response.matches[0].metadata.get('email_sent'):
                     logger.info("📧 Sending email via InteractionAgent...")
-                    await interaction_agent.send_transcript_summary(email, processed_data)
+                    await interaction_agent.send_transcript_summary(email, processed_data, call_status)
                     
                     # Update Pinecone with email sent status
                     try:
@@ -2067,7 +2119,8 @@ async def fetch_and_store_retell_transcript(call_id: str) -> dict:
                             'status': 'completed',
                             'email_sent': True,
                             'email_sent_at': datetime.utcnow().isoformat(),
-                            'processed_data': json.dumps(processed_data)  # Serialize the complex object
+                            'processed_data': json.dumps(processed_data),  # Serialize the complex object
+                            'call_status': call_status
                         }
                         
                         call_status_index.upsert(vectors=[(
@@ -2086,6 +2139,7 @@ async def fetch_and_store_retell_transcript(call_id: str) -> dict:
                     if call_id in call_statuses:
                         call_statuses[call_id]['email_sent'] = True
                         call_statuses[call_id]['email_sent_at'] = datetime.now().isoformat()
+                        call_statuses[call_id]['call_status'] = call_status
                     
                     logger.info(f"✅ Email sent successfully to {email}")
                 else:
@@ -2100,7 +2154,8 @@ async def fetch_and_store_retell_transcript(call_id: str) -> dict:
             call_statuses[call_id].update({
                 'processed': True,
                 'processed_at': datetime.now().isoformat(),
-                'processed_data': processed_data
+                'processed_data': processed_data,
+                'call_status': call_status
             })
         
         return processed_data
