@@ -162,7 +162,7 @@ Value Standardization Rules:
   - "preferred": Desired but not required
   - "nice_to_have": Beneficial but optional
 - Return the following as arrays of strings if multiple items apply:
-  - "investors", "tech_stack_must_haves", "tech_stack_nice_to_haves", "tech_stack_tags", "coding_languages_versions", "version_control_experience", "ci_cd_tools", "collaborative_tools", "domain_expertise", "infrastructure_experience", "technical_challenges", "key_responsibilities", "expected_deliverables", "ideal_companies", "disqualifying_traits", "deal_breakers", "culture_fit_indicators", "startup_mindset_requirements", "growth_mindset_indicators", "interview_process_tags", "interview_focus_areas"
+  - "investors", "tech_stack_must_haves", "tech_stack_nice_to_haves", "tech_stack_tags", "coding_languages_versions", "version_control_experience", "ci_cd_tools", "collaborative_tools", "domain_expertise", "infrastructure_experience", "technical_challenges", "key_responsibilities", "expected_deliverables", "ideal_companies", "deal_breakers", "culture_fit_indicators", "startup_mindset_requirements", "growth_mindset_indicators", "interview_process_tags", "interview_focus_areas"
 
 Required JSON Structure:
 {
@@ -241,7 +241,6 @@ Required JSON Structure:
   "funding_stability": "string",
   "expected_hours": "string",
   "ideal_companies": ["string"],
-  "disqualifying_traits": ["string"],
   "deal_breakers": ["string"],
   "culture_fit_indicators": ["string"],
   "startup_mindset_requirements": ["string"],
@@ -2208,8 +2207,16 @@ async def submit_job(
             )
             
             # Parse the OpenAI response
-            processed_data = json.loads(response.choices[0].message.content)
-            print("Successfully processed job text with OpenAI")
+            try:
+                processed_data = json.loads(response.choices[0].message.content)
+                print("Successfully processed job text with OpenAI")
+            except json.JSONDecodeError as e:
+                print(f"Error parsing OpenAI response: {e}")
+                print(f"Raw response: {response.choices[0].message.content}")
+                raise HTTPException(
+                    status_code=500,
+                    detail="Failed to parse job analysis response"
+                )
             
             # Update job status
             job_statuses[job_id] = {
@@ -2242,20 +2249,22 @@ async def submit_job(
             }
             
         except Exception as e:
+            print(f"Error processing job submission: {str(e)}")
             job_statuses[job_id] = {
                 "status": JobStatus.FAILED,
                 "progress": 0,
-                "message": f"Job processing failed: {str(e)}"
+                "message": f"Error: {str(e)}"
             }
-            raise
+            raise HTTPException(
+                status_code=500,
+                detail=f"Failed to process job submission: {str(e)}"
+            )
             
-    except HTTPException as he:
-        raise he
     except Exception as e:
-        print(f"Error processing job submission: {str(e)}")
+        print(f"Error in job submission endpoint: {str(e)}")
         raise HTTPException(
             status_code=500,
-            detail=f"Failed to process job submission: {str(e)}"
+            detail=f"Error processing job submission: {str(e)}"
         )
     finally:
         print("=== Job submission processing complete ===\n")
