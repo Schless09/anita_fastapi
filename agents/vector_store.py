@@ -9,6 +9,7 @@ from tenacity import retry, stop_after_attempt, wait_exponential
 from dotenv import load_dotenv
 from openai import OpenAI
 import json
+import logging
 from .matching_utils import (
     check_location_match,
     check_work_environment_match,
@@ -16,6 +17,17 @@ from .matching_utils import (
     check_work_authorization_match,
     generate_match_reason
 )
+
+# Configure logger
+logger = logging.getLogger(__name__)
+logger.setLevel(logging.INFO)
+
+# Create console handler with formatting
+console_handler = logging.StreamHandler()
+console_handler.setLevel(logging.INFO)
+formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+console_handler.setFormatter(formatter)
+logger.addHandler(console_handler)
 
 class VectorStore:
     def __init__(self, init_openai: bool = False, existing_indexes: Optional[Dict[str, Any]] = None):
@@ -566,139 +578,161 @@ class VectorStore:
     def store_job(self, job_id: str, job_data: Dict[str, Any]) -> Dict[str, Any]:
         """Store a job posting in the vector database."""
         try:
-            # Create a text representation of the job for embedding
+            # Create text representation of the job for embedding
             job_text = f"""
             Job Title: {job_data.get('job_title', 'n/a')}
             Company: {job_data.get('company_name', 'n/a')}
-            Location: {job_data.get('location', {}).get('city', 'n/a')}, {job_data.get('location', {}).get('state', 'n/a')}
-            Product Details: {job_data.get('product_details', {}).get('product_type', 'n/a')}
-            Key Responsibilities: {', '.join(job_data.get('key_responsibilities', []))}
-            Tech Stack Must-Haves: {', '.join(job_data.get('tech_stack_must_haves', []))}
-            Tech Stack Nice-to-Haves: {', '.join(job_data.get('tech_stack_nice_to_haves', []))}
-            Experience Level: {job_data.get('experience_level', 'n/a')}
-            Role Type: {job_data.get('role_type', 'n/a')}
+            Location: {', '.join(job_data.get('city', ['n/a']))}, {', '.join(job_data.get('state', ['n/a']))}
+            Description: {job_data.get('job_description', 'n/a')}
+            Requirements: {', '.join(job_data.get('tech_stack_must_haves', ['n/a']))}
+            Nice to Have: {', '.join(job_data.get('tech_stack_nice_to_haves', ['n/a']))}
+            Experience: {job_data.get('minimum_years_of_experience', 'n/a')}
+            Salary: {job_data.get('salary_range', 'n/a')}
+            Equity: {job_data.get('equity_range', 'n/a')}
+            Work Arrangement: {', '.join(job_data.get('work_arrangement', ['n/a']))}
+            Role Category: {', '.join(job_data.get('role_category', ['n/a']))}
             """
             
-            # Create embedding for the job text
-            job_embedding = self.get_embedding(job_text)
+            # Generate embedding for the job text
+            embedding = self.openai_client.embeddings.create(
+                model="text-embedding-3-small",
+                input=job_text
+            ).data[0].embedding
             
-            # Create metadata dictionary with all available fields
+            # Create metadata dictionary with all fields
             metadata = {
-                'job_id': job_id,
-                'job_title': job_data.get('job_title', 'n/a'),
-                'company_name': job_data.get('company_name', 'n/a'),
-                'job_url': job_data.get('job_url', 'n/a'),
-                'company_url': job_data.get('company_url', 'n/a'),
-                'company_stage': job_data.get('company_stage', []),
-                'most_recent_funding_round_amount': job_data.get('most_recent_funding_round_amount', 'n/a'),
-                'total_funding_amount': job_data.get('total_funding_amount', 'n/a'),
-                'investors': job_data.get('investors', []),
-                'team_size': job_data.get('team_size', 'n/a'),
-                'founding_year': job_data.get('founding_year', 'n/a'),
-                'company_mission': job_data.get('company_mission', 'n/a'),
-                'target_market': job_data.get('target_market', []),
-                'industry_vertical': job_data.get('industry_vertical', 'n/a'),
-                'company_vision': job_data.get('company_vision', 'n/a'),
-                'company_growth_story': job_data.get('company_growth_story', 'n/a'),
-                'company_culture.work_environment': job_data.get('company_culture', {}).get('work_environment', 'n/a'),
-                'company_culture.decision_making': job_data.get('company_culture', {}).get('decision_making', 'n/a'),
-                'company_culture.collaboration_style': job_data.get('company_culture', {}).get('collaboration_style', 'n/a'),
-                'company_culture.risk_tolerance': job_data.get('company_culture', {}).get('risk_tolerance', 'n/a'),
-                'company_culture.values': job_data.get('company_culture', {}).get('values', 'n/a'),
-                'scaling_plans': job_data.get('scaling_plans', 'n/a'),
-                'mission_and_impact': job_data.get('mission_and_impact', 'n/a'),
-                'tech_innovation': job_data.get('tech_innovation', 'n/a'),
-                'positions_available': job_data.get('positions_available', 'n/a'),
-                'hiring_urgency': job_data.get('hiring_urgency', []),
-                'seniority_level': job_data.get('seniority_level', []),
-                'work_arrangement': job_data.get('work_arrangement', []),
-                'city': job_data.get('city', []),
-                'state': job_data.get('state', []),
-                'visa_sponsorship': job_data.get('visa_sponsorship', 'n/a'),
-                'work_authorization': job_data.get('work_authorization', 'n/a'),
-                'salary_range': job_data.get('salary_range', 'n/a'),
-                'equity_range': job_data.get('equity_range', 'n/a'),
-                'reporting_structure': job_data.get('reporting_structure', 'n/a'),
-                'team_composition': job_data.get('team_composition', 'n/a'),
-                'role_status': job_data.get('role_status', 'n/a'),
-                'role_category': job_data.get('role_category', []),
-                'tech_stack_must_haves': job_data.get('tech_stack_must_haves', []),
-                'tech_stack_nice_to_haves': job_data.get('tech_stack_nice_to_haves', []),
-                'tech_stack_tags': job_data.get('tech_stack_tags', []),
-                'tech_breadth_requirement': job_data.get('tech_breadth_requirement', []),
-                'minimum_years_of_experience': job_data.get('minimum_years_of_experience', 'n/a'),
-                'domain_expertise': job_data.get('domain_expertise', []),
-                'ai_ml_experience': job_data.get('ai_ml_experience', 'n/a'),
-                'infrastructure_experience': job_data.get('infrastructure_experience', []),
-                'system_design_level': job_data.get('system_design_level', 'n/a'),
-                'coding_proficiency_required': job_data.get('coding_proficiency_required', []),
-                'coding_languages_versions': job_data.get('coding_languages_versions', []),
-                'version_control_experience': job_data.get('version_control_experience', []),
-                'ci_cd_tools': job_data.get('ci_cd_tools', []),
-                'collaborative_tools': job_data.get('collaborative_tools', []),
-                'leadership_requirement': job_data.get('leadership_requirement', []),
-                'education_requirement': job_data.get('education_requirement', 'n/a'),
-                'advanced_degree_preference': job_data.get('advanced_degree_preference', 'n/a'),
-                'papers_publications_preferred': job_data.get('papers_publications_preferred', 'n/a'),
-                'prior_startup_experience': job_data.get('prior_startup_experience', []),
-                'advancement_history_required': str(job_data.get('advancement_history_required', False)),
-                'independent_work_capacity': job_data.get('independent_work_capacity', 'n/a'),
-                'skills_must_have': job_data.get('skills_must_have', []),
-                'skills_preferred': job_data.get('skills_preferred', []),
-                'product_details': job_data.get('product_details', 'n/a'),
-                'product_development_stage': job_data.get('product_development_stage', []),
-                'technical_challenges': job_data.get('technical_challenges', []),
-                'key_responsibilities': job_data.get('key_responsibilities', []),
-                'scope_of_impact': job_data.get('scope_of_impact', []),
-                'expected_deliverables': job_data.get('expected_deliverables', []),
-                'product_development_methodology': job_data.get('product_development_methodology', []),
-                'stage_of_codebase': job_data.get('stage_of_codebase', []),
-                'growth_trajectory': job_data.get('growth_trajectory', 'n/a'),
-                'founder_background': job_data.get('founder_background', 'n/a'),
-                'funding_stability': job_data.get('funding_stability', 'n/a'),
-                'expected_hours': job_data.get('expected_hours', 'n/a'),
-                'ideal_companies': job_data.get('ideal_companies', []),
-                'disqualifying_traits': job_data.get('disqualifying_traits', []),
-                'deal_breakers': job_data.get('deal_breakers', []),
-                'culture_fit_indicators': job_data.get('culture_fit_indicators', []),
-                'startup_mindset_requirements': job_data.get('startup_mindset_requirements', []),
-                'autonomy_level_required': job_data.get('autonomy_level_required', 'n/a'),
-                'growth_mindset_indicators': job_data.get('growth_mindset_indicators', []),
-                'ideal_candidate_profile': job_data.get('ideal_candidate_profile', 'n/a'),
-                'interview_process_tags': job_data.get('interview_process_tags', []),
-                'technical_assessment_type': job_data.get('technical_assessment_type', []),
-                'interview_focus_areas': job_data.get('interview_focus_areas', []),
-                'time_to_hire': job_data.get('time_to_hire', 'n/a'),
-                'decision_makers': job_data.get('decision_makers', []),
-                'recruiter_pitch_points': job_data.get('recruiter_pitch_points', [])
+                "job_id": job_id,
+                "job_title": job_data.get('job_title', 'n/a'),
+                "company_name": job_data.get('company_name', 'n/a'),
+                "job_url": job_data.get('job_url', 'n/a'),
+                "company_url": job_data.get('company_url', 'n/a'),
+                "company_stage": job_data.get('company_stage', ['n/a']),
+                "most_recent_funding_round_amount": job_data.get('most_recent_funding_round_amount', 'n/a'),
+                "total_funding_amount": job_data.get('total_funding_amount', 'n/a'),
+                "investors": job_data.get('investors', ['n/a']),
+                "team_size": job_data.get('team_size', 'n/a'),
+                "founding_year": job_data.get('founding_year', 'n/a'),
+                "company_mission": job_data.get('company_mission', 'n/a'),
+                "target_market": job_data.get('target_market', ['n/a']),
+                "industry_vertical": job_data.get('industry_vertical', 'n/a'),
+                "company_vision": job_data.get('company_vision', 'n/a'),
+                "company_growth_story": job_data.get('company_growth_story', 'n/a'),
+                "work_environment": job_data.get('company_culture', {}).get('work_environment', 'n/a'),
+                "decision_making": job_data.get('company_culture', {}).get('decision_making', 'n/a'),
+                "collaboration_style": job_data.get('company_culture', {}).get('collaboration_style', 'n/a'),
+                "risk_tolerance": job_data.get('company_culture', {}).get('risk_tolerance', 'n/a'),
+                "company_values": job_data.get('company_culture', {}).get('values', 'n/a'),
+                "scaling_plans": job_data.get('scaling_plans', 'n/a'),
+                "mission_and_impact": job_data.get('mission_and_impact', 'n/a'),
+                "tech_innovation": job_data.get('tech_innovation', 'n/a'),
+                "positions_available": job_data.get('positions_available', 'n/a'),
+                "hiring_urgency": job_data.get('hiring_urgency', ['n/a']),
+                "seniority_level": job_data.get('seniority_level', ['n/a']),
+                "work_arrangement": job_data.get('work_arrangement', ['n/a']),
+                "city": job_data.get('city', ['n/a']),
+                "state": job_data.get('state', ['n/a']),
+                "visa_sponsorship": job_data.get('visa_sponsorship', 'n/a'),
+                "work_authorization": job_data.get('work_authorization', 'n/a'),
+                "salary_range": job_data.get('salary_range', 'n/a'),
+                "equity_range": job_data.get('equity_range', 'n/a'),
+                "reporting_structure": job_data.get('reporting_structure', 'n/a'),
+                "team_composition": job_data.get('team_composition', 'n/a'),
+                "role_status": job_data.get('role_status', 'n/a'),
+                "role_category": job_data.get('role_category', ['n/a']),
+                "tech_stack_must_haves": job_data.get('tech_stack_must_haves', ['n/a']),
+                "tech_stack_nice_to_haves": job_data.get('tech_stack_nice_to_haves', ['n/a']),
+                "tech_stack_tags": job_data.get('tech_stack_tags', ['n/a']),
+                "tech_breadth_requirement": job_data.get('tech_breadth_requirement', ['n/a']),
+                "minimum_years_of_experience": job_data.get('minimum_years_of_experience', 'n/a'),
+                "domain_expertise": job_data.get('domain_expertise', ['n/a']),
+                "ai_ml_experience": job_data.get('ai_ml_experience', 'n/a'),
+                "infrastructure_experience": job_data.get('infrastructure_experience', ['n/a']),
+                "system_design_level": job_data.get('system_design_level', 'n/a'),
+                "coding_proficiency_required": job_data.get('coding_proficiency_required', ['n/a']),
+                "coding_languages_versions": job_data.get('coding_languages_versions', ['n/a']),
+                "version_control_experience": job_data.get('version_control_experience', ['n/a']),
+                "ci_cd_tools": job_data.get('ci_cd_tools', ['n/a']),
+                "collaborative_tools": job_data.get('collaborative_tools', ['n/a']),
+                "leadership_requirement": job_data.get('leadership_requirement', ['n/a']),
+                "education_requirement": job_data.get('education_requirement', 'n/a'),
+                "advanced_degree_preference": job_data.get('advanced_degree_preference', 'n/a'),
+                "papers_publications_preferred": job_data.get('papers_publications_preferred', 'n/a'),
+                "prior_startup_experience": job_data.get('prior_startup_experience', ['n/a']),
+                "advancement_history_required": job_data.get('advancement_history_required', False),
+                "independent_work_capacity": job_data.get('independent_work_capacity', 'n/a'),
+                "skills_must_have": job_data.get('skills_must_have', ['n/a']),
+                "skills_preferred": job_data.get('skills_preferred', ['n/a']),
+                "product_details": job_data.get('product_details', 'n/a'),
+                "product_development_stage": job_data.get('product_development_stage', ['n/a']),
+                "technical_challenges": job_data.get('technical_challenges', ['n/a']),
+                "key_responsibilities": job_data.get('key_responsibilities', ['n/a']),
+                "scope_of_impact": job_data.get('scope_of_impact', ['n/a']),
+                "expected_deliverables": job_data.get('expected_deliverables', ['n/a']),
+                "product_development_methodology": job_data.get('product_development_methodology', ['n/a']),
+                "stage_of_codebase": job_data.get('stage_of_codebase', ['n/a']),
+                "growth_trajectory": job_data.get('growth_trajectory', 'n/a'),
+                "founder_background": job_data.get('founder_background', 'n/a'),
+                "funding_stability": job_data.get('funding_stability', 'n/a'),
+                "expected_hours": job_data.get('expected_hours', 'n/a'),
+                "ideal_companies": job_data.get('ideal_companies', ['n/a']),
+                "deal_breakers": job_data.get('deal_breakers', ['n/a']),
+                "culture_fit_indicators": job_data.get('culture_fit_indicators', ['n/a']),
+                "startup_mindset_requirements": job_data.get('startup_mindset_requirements', ['n/a']),
+                "autonomy_level_required": job_data.get('autonomy_level_required', 'n/a'),
+                "growth_mindset_indicators": job_data.get('growth_mindset_indicators', ['n/a']),
+                "ideal_candidate_profile": job_data.get('ideal_candidate_profile', 'n/a'),
+                "interview_process_tags": job_data.get('interview_process_tags', ['n/a']),
+                "technical_assessment_type": job_data.get('technical_assessment_type', ['n/a']),
+                "interview_focus_areas": job_data.get('interview_focus_areas', ['n/a']),
+                "time_to_hire": job_data.get('time_to_hire', 'n/a'),
+                "decision_makers": job_data.get('decision_makers', ['n/a']),
+                "recruiter_pitch_points": job_data.get('recruiter_pitch_points', ['n/a'])
             }
             
-            # Store in Pinecone
-            self.jobs_index.upsert(vectors=[(
-                job_id,
-                job_embedding,
-                metadata
-            )])
-            
-            # Verify storage
-            query_response = self.jobs_index.query(
-                vector=job_embedding,
-                filter={"job_id": job_id},
-                top_k=1,
-                include_metadata=True
+            # Store the job in Pinecone
+            self.jobs_index.upsert(
+                vectors=[{
+                    "id": job_id,
+                    "values": embedding,
+                    "metadata": metadata
+                }]
             )
             
-            if not query_response.matches:
-                raise Exception("Failed to verify job storage")
+            # Add a small delay to allow for indexing
+            time.sleep(1)
             
-            return {
-                "status": "success",
-                "message": "Job stored successfully",
-                "job_id": job_id
-            }
+            # Verify the job was stored by querying it
+            max_retries = 3
+            retry_delay = 1
+            
+            for attempt in range(max_retries):
+                try:
+                    # Query the job by ID
+                    query_response = self.jobs_index.query(
+                        id=job_id,
+                        top_k=1,
+                        include_metadata=True
+                    )
+                    
+                    if query_response.matches and query_response.matches[0].id == job_id:
+                        logger.info(f"Successfully verified job storage for ID: {job_id}")
+                        return {"status": "success", "job_id": job_id}
+                    
+                    if attempt < max_retries - 1:
+                        logger.warning(f"Verification attempt {attempt + 1} failed, retrying in {retry_delay} seconds...")
+                        time.sleep(retry_delay)
+                        retry_delay *= 2  # Exponential backoff
+                    
+                except Exception as e:
+                    logger.error(f"Error verifying job storage (attempt {attempt + 1}): {str(e)}")
+                    if attempt < max_retries - 1:
+                        time.sleep(retry_delay)
+                        retry_delay *= 2
+            
+            # If we get here, verification failed but the job was likely stored
+            logger.warning(f"Job {job_id} was likely stored but verification failed after {max_retries} attempts")
+            return {"status": "success", "job_id": job_id, "verification": "incomplete"}
             
         except Exception as e:
-            return {
-                "status": "error",
-                "message": str(e)
-            } 
+            logger.error(f"Error storing job {job_id}: {str(e)}")
+            raise 
