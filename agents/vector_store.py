@@ -574,19 +574,34 @@ class VectorStore:
             # Create embedding for the job
             vector = self.get_embedding(job_text)
             
-            # Prepare metadata
+            # Prepare metadata - flatten all nested structures and convert to strings
             metadata = {
                 "job_id": job_id,
-                "job_title": job_data.get("job_title"),
-                "company_name": job_data.get("company_name"),
-                "location_city": job_data.get("location_city"),
-                "location_state": job_data.get("location_state"),
-                "description": job_data.get("description"),
-                "requirements": job_data.get("requirements"),
-                "benefits": job_data.get("benefits"),
-                "paraform_link": job_data.get("paraform_link"),
-                "role_details": job_data.get("role_details", {}),
-                "company_information": job_data.get("company_information", {}),
+                "job_title": str(job_data.get("job_title", "")),
+                "company_name": str(job_data.get("company_name", "")),
+                "location_city": str(job_data.get("location_city", "")),
+                "location_state": str(job_data.get("location_state", "")),
+                "description": str(job_data.get("description", "")),
+                "requirements": str(job_data.get("requirements", "")),
+                "benefits": str(job_data.get("benefits", "")),
+                "paraform_link": str(job_data.get("paraform_link", "")),
+                "role_seniority": str(job_data.get("role_seniority", "")),
+                "role_work_arrangement": str(job_data.get("role_work_arrangement", "")),
+                "role_visa_sponsorship": str(job_data.get("role_visa_sponsorship", "")),
+                "role_tech_stack_must_haves": str(job_data.get("role_tech_stack_must_haves", "")),
+                "role_tech_stack_nice_to_haves": str(job_data.get("role_tech_stack_nice_to_haves", "")),
+                "role_tech_stack_tools": str(job_data.get("role_tech_stack_tools", "")),
+                "company_stage": str(job_data.get("company_stage", "")),
+                "company_funding_round": str(job_data.get("company_funding_round", "")),
+                "company_funding_total": str(job_data.get("company_funding_total", "")),
+                "company_funding_investors": str(job_data.get("company_funding_investors", "")),
+                "company_team_size": str(job_data.get("company_team_size", "")),
+                "company_mission": str(job_data.get("company_mission", "")),
+                "company_culture_work_env": str(job_data.get("company_culture_work_env", "")),
+                "company_culture_decision": str(job_data.get("company_culture_decision", "")),
+                "company_culture_collab": str(job_data.get("company_culture_collab", "")),
+                "company_culture_risk": str(job_data.get("company_culture_risk", "")),
+                "company_culture_values": str(job_data.get("company_culture_values", "")),
                 "timestamp": datetime.utcnow().isoformat()
             }
             

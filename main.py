@@ -1,5 +1,6 @@
 from fastapi import FastAPI, HTTPException, status, UploadFile, File, Form, Depends, Request, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 from agents.brain_agent import BrainAgent
 from agents.interaction_agent import InteractionAgent
 from agents.vector_store import VectorStore
@@ -39,17 +40,65 @@ import hashlib
 
 # Configure logging for serverless environment
 logging.basicConfig(
-    level=logging.DEBUG,
+    level=logging.INFO,  # Changed from DEBUG to INFO
     format='%(asctime)s - %(levelname)s - %(message)s',
     handlers=[
         logging.StreamHandler()  # Only use console logging for Vercel
     ]
 )
 
+# Set specific loggers to INFO level
+logging.getLogger('httpx').setLevel(logging.INFO)
+logging.getLogger('openai').setLevel(logging.INFO)
+logging.getLogger('pinecone').setLevel(logging.INFO)
+
 logger = logging.getLogger(__name__)
 
 # Load environment variables
 load_dotenv()
+
+# Initialize FastAPI app
+app = FastAPI(
+    title="Anita AI Recruitment API",
+    description="API for AI-driven recruitment with enhanced candidate-job matching",
+    version="2.0.0"
+)
+
+# Mount static files
+app.mount("/public", StaticFiles(directory="public"), name="public")
+
+# Configure CORS
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+@app.get("/")
+async def root():
+    """Root endpoint that returns API information and environment details"""
+    environment = "development" if os.getenv("VERCEL_ENV") is None else os.getenv("VERCEL_ENV")
+    pinecone_index = os.getenv("PINECONE_JOBS_INDEX", "Unknown")
+    
+    return {
+        "name": "Anita AI Recruitment API",
+        "version": "2.0.0",
+        "status": "running",
+        "documentation": "/docs",
+        "environment": environment,
+        "vector_db": {
+            "name": "Pinecone",
+            "jobs_index": pinecone_index,
+            "candidates_index": os.getenv("PINECONE_CANDIDATES_INDEX", "Unknown"),
+            "call_status_index": os.getenv("PINECONE_CALL_STATUS_INDEX", "Unknown")
+        }
+    }
+
+@app.get("/health")
+def health_check():
+    return {"status": "healthy"}
 
 # Configure OpenAI
 OPENAI_API_KEY = os.getenv('OPENAI_API_KEY')
@@ -205,35 +254,6 @@ logger.info(f"Running in {environment} environment")
 logger.info(f"Using jobs index: {jobs_index_name}")
 logger.info(f"Using candidates index: {candidates_index_name}")
 logger.info(f"Using call status index: {call_status_index_name}")
-
-app = FastAPI(
-    title="Anita AI Recruitment API",
-    description="API for AI-driven recruitment with enhanced candidate-job matching",
-    version="2.0.0"
-)
-
-# Configure CORS
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
-@app.get("/")
-async def root():
-    """Root endpoint that returns basic API information"""
-    return {
-        "name": "Anita AI Recruitment API",
-        "version": "2.0.0",
-        "status": "running",
-        "documentation": "/docs"
-    }
-
-@app.get("/health")
-def health_check():
-    return {"status": "healthy"}
 
 interaction_agent = InteractionAgent()
 brain_agent = BrainAgent()
@@ -1927,5 +1947,143 @@ async def get_retell_call(call_id: str) -> dict:
     except Exception as e:
         logger.error(f"❌ Error fetching call data: {str(e)}")
         raise
+
+@app.post("/jobs/submit")
+async def submit_job(
+    file: UploadFile = File(...),
+    background_tasks: BackgroundTasks = BackgroundTasks()
+):
+    """
+    Submit a job posting by uploading a text file.
+    The file content will be processed using OpenAI and stored in Pinecone.
+    """
+    try:
+        print(f"\n=== Processing job submission at {datetime.utcnow().isoformat()} ===")
+        
+        # Validate file type
+        if not file.filename.lower().endswith(('.txt', '.md')):
+            raise HTTPException(
+                status_code=400,
+                detail="File must be a text file (.txt or .md)"
+            )
+        
+        # Read the file content
+        content = await file.read()
+        try:
+            raw_text = content.decode('utf-8')
+        except UnicodeDecodeError:
+            raise HTTPException(
+                status_code=400,
+                detail="File must be UTF-8 encoded text"
+            )
+        
+        # Generate a unique job ID
+        job_id = f"job_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}"
+        print(f"Generated job ID: {job_id}")
+        
+        # Update job status
+        job_statuses[job_id] = {
+            "status": JobStatus.PROCESSING,
+            "progress": 0,
+            "message": "Starting job analysis"
+        }
+        
+        try:
+            # Process job text with OpenAI
+            print("Processing with OpenAI...")
+            response = openai_client.chat.completions.create(
+                model="gpt-4-turbo-preview",
+                messages=[
+                    {"role": "system", "content": JOB_ANALYSIS_PROMPT},
+                    {"role": "user", "content": raw_text}
+                ],
+                temperature=0.3,
+                response_format={"type": "json_object"}
+            )
+            
+            # Parse the OpenAI response
+            processed_data = json.loads(response.choices[0].message.content)
+            print("Successfully processed job text with OpenAI")
+            
+            # Update job status
+            job_statuses[job_id] = {
+                "status": JobStatus.PROCESSING,
+                "progress": 50,
+                "message": "Storing job in database"
+            }
+            
+            # Store in vector database
+            vector_store = VectorStore(init_openai=True)
+            
+            # Flatten nested dictionaries and convert all values to strings
+            job_data = {
+                "job_title": str(processed_data.get("job_title", "Unknown Title")),
+                "company_name": str(processed_data.get("company_name", "Unknown Company")),
+                "location_city": str(processed_data.get("location", {}).get("city", "")),
+                "location_state": str(processed_data.get("location", {}).get("state", "")),
+                "description": str("\n".join(processed_data.get("key_responsibilities", []))),
+                "requirements": str(processed_data.get("experience_requirements", {})),
+                "benefits": str(processed_data.get("compensation", {})),
+                "paraform_link": str(processed_data.get("paraform_url", "")),
+                # Flatten role_details
+                "role_seniority": str(processed_data.get("seniority_level", "")),
+                "role_work_arrangement": str(processed_data.get("work_arrangement", "")),
+                "role_visa_sponsorship": str(processed_data.get("visa_sponsorship", "")),
+                "role_tech_stack_must_haves": str(processed_data.get("tech_stack", {}).get("must_haves", [])),
+                "role_tech_stack_nice_to_haves": str(processed_data.get("tech_stack", {}).get("nice_to_haves", [])),
+                "role_tech_stack_tools": str(processed_data.get("tech_stack", {}).get("tools_and_frameworks", [])),
+                # Flatten company_information
+                "company_stage": str(processed_data.get("company_stage", "")),
+                "company_funding_round": str(processed_data.get("funding_details", {}).get("most_recent_round", "")),
+                "company_funding_total": str(processed_data.get("funding_details", {}).get("total_funding", "")),
+                "company_funding_investors": str(processed_data.get("funding_details", {}).get("key_investors", [])),
+                "company_team_size": str(processed_data.get("team_size", "")),
+                "company_mission": str(processed_data.get("company_mission", "")),
+                "company_culture_work_env": str(processed_data.get("company_culture", {}).get("work_environment", "")),
+                "company_culture_decision": str(processed_data.get("company_culture", {}).get("decision_making", "")),
+                "company_culture_collab": str(processed_data.get("company_culture", {}).get("collaboration_style", "")),
+                "company_culture_risk": str(processed_data.get("company_culture", {}).get("risk_tolerance", "")),
+                "company_culture_values": str(processed_data.get("company_culture", {}).get("values", ""))
+            }
+            
+            store_result = vector_store.store_job(job_id, job_data)
+            
+            if store_result.get("status") == "error":
+                raise Exception(store_result.get("message", "Unknown error storing job"))
+            
+            # Update final status
+            job_statuses[job_id] = {
+                "status": JobStatus.COMPLETED,
+                "progress": 100,
+                "message": "Job processed and stored successfully",
+                "job_id": job_id,
+                "processed_data": processed_data
+            }
+            
+            return {
+                "status": "success",
+                "message": "Job processed and stored successfully",
+                "job_id": job_id,
+                "processed_data": processed_data
+            }
+            
+        except Exception as e:
+            job_statuses[job_id] = {
+                "status": JobStatus.FAILED,
+                "progress": 0,
+                "message": f"Job processing failed: {str(e)}"
+            }
+            raise
+            
+    except HTTPException as he:
+        raise he
+    except Exception as e:
+        print(f"Error processing job submission: {str(e)}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to process job submission: {str(e)}"
+        )
+    finally:
+        print("=== Job submission processing complete ===\n")
 
 app = app
