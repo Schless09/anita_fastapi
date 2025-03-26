@@ -2220,6 +2220,22 @@ async def submit_job(
             processed_data = json.loads(response.choices[0].message.content)
             print("Successfully processed job text with OpenAI")
             
+            # Validate required fields
+            required_fields = ['job_title', 'company_name', 'job_url']
+            missing_fields = [field for field in required_fields if not processed_data.get(field)]
+            if missing_fields:
+                error_msg = f"Missing required fields in processed data: {', '.join(missing_fields)}"
+                print(error_msg)
+                job_statuses[job_id] = {
+                    "status": JobStatus.FAILED,
+                    "progress": 0,
+                    "message": error_msg
+                }
+                raise HTTPException(
+                    status_code=400,
+                    detail=error_msg
+                )
+            
             # Update job status
             job_statuses[job_id] = {
                 "status": JobStatus.PROCESSING,
