@@ -32,9 +32,13 @@ class VectorStore:
             
         self.pc = Pinecone(api_key=pinecone_api_key)
         
-        # Get index names from environment variables with defaults
-        candidates_index_name = os.getenv('PINECONE_INDEX_NAME', 'anita-candidates-dev')
-        jobs_index_name = os.getenv('PINECONE_INDEX_NAME_JOBS', 'job-details')
+        # Get index names from environment variables
+        candidates_index_name = os.getenv('PINECONE_CANDIDATES_INDEX')
+        jobs_index_name = os.getenv('PINECONE_JOBS_INDEX')
+        
+        # Validate environment variables
+        if not candidates_index_name or not jobs_index_name:
+            raise ValueError("Missing required environment variables: PINECONE_CANDIDATES_INDEX, PINECONE_JOBS_INDEX")
         
         print(f"Pinecone initialized successfully")
         print(f"Attempting to connect to indexes: {candidates_index_name}, {jobs_index_name}")
@@ -42,6 +46,12 @@ class VectorStore:
         # Get list of existing indexes
         existing_indexes = [index.name for index in self.pc.list_indexes()]
         print("Existing indexes:", existing_indexes)
+        
+        # Validate indexes exist
+        if candidates_index_name not in existing_indexes:
+            raise ValueError(f"Candidates index '{candidates_index_name}' does not exist")
+        if jobs_index_name not in existing_indexes:
+            raise ValueError(f"Jobs index '{jobs_index_name}' does not exist")
         
         # Connect to indexes
         self.candidates_index = self.pc.Index(candidates_index_name)

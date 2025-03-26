@@ -175,9 +175,36 @@ pc = Pinecone(api_key=os.getenv("PINECONE_API_KEY"))
 existing_indexes = [index.name for index in pc.list_indexes()]
 logger.info(f"Existing indexes: {existing_indexes}")
 
+# Get index names from environment variables
+jobs_index_name = os.getenv('PINECONE_JOBS_INDEX')
+candidates_index_name = os.getenv('PINECONE_CANDIDATES_INDEX')
+call_status_index_name = os.getenv('PINECONE_CALL_STATUS_INDEX', 'call-statuses')  # Default to call-statuses
+
+# Validate environment variables
+if not jobs_index_name:
+    raise ValueError("Missing required environment variable: PINECONE_JOBS_INDEX")
+if not candidates_index_name:
+    raise ValueError("Missing required environment variable: PINECONE_CANDIDATES_INDEX")
+
+# Validate indexes exist
+if jobs_index_name not in existing_indexes:
+    raise ValueError(f"Jobs index '{jobs_index_name}' does not exist")
+if candidates_index_name not in existing_indexes:
+    raise ValueError(f"Candidates index '{candidates_index_name}' does not exist")
+if call_status_index_name not in existing_indexes:
+    raise ValueError(f"Call status index '{call_status_index_name}' does not exist")
+
 # Initialize indexes
-job_index = pc.Index("job-details")
-call_status_index = pc.Index("call-statuses")
+job_index = pc.Index(jobs_index_name)
+candidates_index = pc.Index(candidates_index_name)
+call_status_index = pc.Index(call_status_index_name)
+
+# Log environment info
+environment = os.getenv('ENVIRONMENT', 'development')
+logger.info(f"Running in {environment} environment")
+logger.info(f"Using jobs index: {jobs_index_name}")
+logger.info(f"Using candidates index: {candidates_index_name}")
+logger.info(f"Using call status index: {call_status_index_name}")
 
 app = FastAPI(
     title="Anita AI Recruitment API",
