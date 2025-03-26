@@ -197,6 +197,14 @@ Return the information as a JSON object with the following fields:
         "work_trial_details": string,
         "timeline": string
     }},
+    "recruiter_pitch_points": [string],
+    "key_responsibilities": [string],
+    "ideal_candidate_profile": string,
+    "interview_process": {{
+        "stages": [string],
+        "work_trial_details": string,
+        "timeline": string,
+    }},
     "deal_breakers": [string],
     "growth_opportunities": string
 }}
