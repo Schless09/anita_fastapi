@@ -618,36 +618,60 @@ async def process_pdf_to_text(file: UploadFile) -> Dict[str, Any]:
                 
                 # Extract text from all pages
                 text_content = []
-                for page in pdf_reader.pages:
-                    try:
-                        text = page.extract_text()
-                        if text and text.strip():
-                            text_content.append(text)
-                    except Exception as page_error:
-                        print(f"Error extracting text from page: {str(page_error)}")
-                        continue
+                image_pages = []
                 
-                if not text_content:
-                    raise HTTPException(
-                        status_code=400, 
-                        detail="No text content could be extracted from the PDF. The file might be scanned or image-based."
-                    )
+                for page_num, page in enumerate(pdf_reader.pages, 1):
+                    try:
+                        # Try to extract text
+                        text = page.extract_text()
+                        
+                        # Check if page contains mostly images
+                        if text and text.strip():
+                            # If we got text, add it
+                            text_content.append(text)
+                        else:
+                            # If no text, mark as image page
+                            image_pages.append(page_num)
+                            
+                    except Exception as page_error:
+                        print(f"Error extracting text from page {page_num}: {str(page_error)}")
+                        image_pages.append(page_num)
+                        continue
                 
                 # Combine all text
                 combined_text = "\n\n".join(text_content)
                 
+                # If we have image pages, add a warning
+                if image_pages:
+                    print(f"Warning: Pages {image_pages} appear to be image-based and may not be fully processed")
+                
+                # If we got no text at all, raise an error
+                if not text_content:
+                    raise HTTPException(
+                        status_code=400, 
+                        detail="Your resume is unreadable and may contain too many images. Please submit a text-based resume."
+                    )
+                
+                # Calculate text quality metrics
+                total_pages = len(pdf_reader.pages)
+                text_pages = total_pages - len(image_pages)
+                text_quality = (text_pages / total_pages) * 100 if total_pages > 0 else 0
+                
                 return {
                     "text": combined_text,
                     "filename": file.filename,
-                    "page_count": len(pdf_reader.pages),
-                    "text_pages": len(text_content)
+                    "page_count": total_pages,
+                    "text_pages": text_pages,
+                    "image_pages": image_pages,
+                    "text_quality": text_quality,
+                    "warning": f"Pages {image_pages} appear to be image-based" if image_pages else None
                 }
                     
             except Exception as pdf_error:
                 print(f"Error reading PDF: {str(pdf_error)}")
                 raise HTTPException(
                     status_code=400,
-                    detail=f"The PDF file appears to be corrupted or in an unsupported format. Please ensure you're uploading a valid PDF file. Error: {str(pdf_error)}"
+                    detail="Your resume is unreadable and may contain too many images. Please submit a text-based resume."
                 )
             finally:
                 # Clean up the temporary file
@@ -662,7 +686,7 @@ async def process_pdf_to_text(file: UploadFile) -> Dict[str, Any]:
         print(f"Error processing PDF: {str(e)}")
         raise HTTPException(
             status_code=500,
-            detail=f"Failed to process PDF file: {str(e)}"
+            detail="Your resume is unreadable and may contain too many images. Please submit a text-based resume."
         )
     finally:
         await file.seek(0)
@@ -790,7 +814,7 @@ async def submit_candidate(
         candidate_id = f"candidate_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}"
         print(f"\n=== Processing candidate submission {candidate_id} ===")
         
-        # Process the PDF file
+        # Process the PDF file - this is quick and needed for the call
         try:
             pdf_result = await process_pdf_to_text(resume)
             resume_text = pdf_result["text"]
@@ -801,18 +825,20 @@ async def submit_candidate(
                 detail=f"Failed to process resume: {pdf_error.detail}"
             )
 
-        # Create the candidate profile
+        # Create basic candidate profile for initial storage
         profile = {
             "id": candidate_id,
             "name": name,
             "email": email,
             "phone_number": phone_number,
             "linkedin": linkedin,
-            "resume_text": resume_text
+            "resume_text": resume_text,
+            "status": "processing",
+            "submitted_at": datetime.utcnow().isoformat()
         }
         print("Created candidate profile")
 
-        # Store candidate in vector database
+        # Store basic profile in vector database
         try:
             print("Initializing VectorStore with OpenAI support...")
             vector_store = VectorStore(init_openai=True)
@@ -851,6 +877,9 @@ async def submit_candidate(
                 resume=resume_copy
             )
             
+            # Add resume processing to background tasks
+            background_tasks.add_task(process_candidate_resume, candidate_id, resume_text)
+            
             return {
                 "status": "success",
                 "message": "Candidate profile created and call initiated successfully",
@@ -881,6 +910,44 @@ async def submit_candidate(
         )
     finally:
         print("=== Candidate submission processing complete ===\n")
+
+async def process_candidate_resume(candidate_id: str, resume_text: str):
+    """Process candidate resume in the background."""
+    try:
+        print(f"\n=== Processing resume for candidate {candidate_id} ===")
+        
+        # Process resume with OpenAI
+        resume_data = {
+            "text": resume_text,
+            "candidate_id": candidate_id
+        }
+        processed_resume = await process_resume_text(resume_data)
+        
+        # Update candidate profile with processed data
+        vector_store = VectorStore(init_openai=True)
+        vector_store.update_candidate_profile(
+            candidate_id,
+            {
+                "processed_resume": processed_resume,
+                "status": "completed",
+                "processed_at": datetime.utcnow().isoformat()
+            }
+        )
+        
+        print(f"Successfully processed resume for candidate {candidate_id}")
+        
+    except Exception as e:
+        print(f"Error processing resume: {str(e)}")
+        # Update status to failed
+        vector_store = VectorStore(init_openai=True)
+        vector_store.update_candidate_profile(
+            candidate_id,
+            {
+                "status": "failed",
+                "error": str(e),
+                "processed_at": datetime.utcnow().isoformat()
+            }
+        )
 
 async def process_transcript_with_openai(transcript: str) -> dict:
     """Process a transcript with OpenAI to extract structured information."""
@@ -1281,33 +1348,34 @@ async def make_call(
             )
         print(f"Resume file: {resume.filename}")
 
-        # Process resume with OpenAI to get structured data including current company
+        # Quick PDF text extraction for basic dynamic variables
         pdf_result = await process_pdf_to_text(resume)
         resume_text = pdf_result["text"]
-        resume_data = {
-            "text": resume_text,
-            "candidate_id": candidate_id
-        }
-        processed_resume = await process_resume_text(resume_data)
-        current_company = processed_resume.get("structured_data", {}).get("current_company", "")
-        print(f"Extracted current company: {current_company}")
-
-        # Create a summary of key information from the resume
-        structured_data = processed_resume.get("structured_data", {})
-        skills = structured_data.get('skills', [])
-        # Handle skills array properly
-        top_skills = []
-        if isinstance(skills, list):
-            top_skills = skills[:5] if len(skills) > 0 else []
-        skills_text = ', '.join(top_skills) if top_skills else 'Not specified'
         
+        # Extract basic information from resume text for dynamic variables
+        # This is a quick extraction without OpenAI processing
+        current_company = ""
+        current_role = ""
+        
+        # Look for common patterns in the resume text
+        lines = resume_text.split('\n')
+        for line in lines:
+            # Look for current position indicators
+            if any(indicator in line.lower() for indicator in ['present', 'current', 'now']):
+                parts = line.split('|')
+                if len(parts) >= 2:
+                    current_role = parts[0].strip()
+                    current_company = parts[1].strip()
+                    break
+        
+        # Create a basic summary for dynamic variables
         resume_summary = f"""
-        Current Role: {structured_data.get('current_role', 'Not specified')}
-        Current Company: {structured_data.get('current_company', 'Not specified')}
-        Years of Experience: {len(structured_data.get('experience', []))} years
-        Key Skills: {skills_text}
-        Education: {structured_data.get('education', ['Not specified'])[0] if structured_data.get('education') else 'Not specified'}
-        Summary: {structured_data.get('summary', 'Not specified')}
+        Name: {name}
+        Current Role: {current_role or 'Not specified'}
+        Current Company: {current_company or 'Not specified'}
+        Email: {email}
+        Phone: {formatted_number}
+        LinkedIn: {linkedin or 'Not provided'}
         """.strip()
 
         # Prepare the request object
@@ -1328,7 +1396,7 @@ async def make_call(
                 "current_company": current_company or "",  # Use extracted current company or empty string
                 "email": email,
                 "phone_number": formatted_number,
-                "resume_summary": resume_summary  # Add the summarized resume information
+                "resume_summary": resume_summary  # Add the basic resume information
             }
         }
 
@@ -1376,7 +1444,8 @@ async def make_call(
                 "timestamp": datetime.utcnow().isoformat(),
                 "candidate_name": name,
                 "candidate_email": email,
-                "current_company": current_company
+                "current_company": current_company,
+                "resume_text": resume_text  # Store the raw resume text for later processing
             }
             await update_call_status(call_id, status_data)
             print(f"Registered call status: {json.dumps(status_data, indent=2)}")
@@ -1466,7 +1535,7 @@ def log_webhook(call_id: str, data: dict):
         logger.error(f"❌ Error logging webhook data: {str(e)}")
 
 @app.post("/webhook/retell")
-async def retell_webhook(request: Request):
+async def retell_webhook(request: Request, background_tasks: BackgroundTasks):
     """Handle incoming webhooks from Retell."""
     try:
         # Get the raw request body
@@ -1524,8 +1593,6 @@ async def retell_webhook(request: Request):
                 )
         except Exception as e:
             logging.error(f"Error verifying signature: {str(e)}")
-            logging.error(f"Error type: {type(e)}")
-            logging.error(f"Error traceback: {traceback.format_exc()}")
             return JSONResponse(
                 status_code=401,
                 content={"error": "Invalid signature"}
@@ -1550,72 +1617,23 @@ async def retell_webhook(request: Request):
         elif event == "call_ended":
             logging.info(f"Call ended: {call.get('call_id')}")
         elif event == "call_analyzed":
-            logging.info(f"Call analyzed: {call.get('call_id')}")
-            try:
-                # Get the raw transcript and metadata from the call data
-                raw_transcript = call.get('transcript')
-                metadata = call.get('metadata', {})
-                email = metadata.get('email')
-                first_name = metadata.get('name', '').split()[0] if metadata.get('name') else ''
-                
-                if not raw_transcript:
-                    logging.error("No transcript found in call_analyzed event")
-                    return JSONResponse(
-                        status_code=400,
-                        content={"error": "Missing transcript"}
-                    )
-                
-                if not email:
-                    logging.error("No email found in call metadata")
-                    return JSONResponse(
-                        status_code=400,
-                        content={"error": "No email found in metadata"}
-                    )
-                
-                # Process the transcript with OpenAI
-                processed_data = await process_transcript_with_openai(raw_transcript)
-                
-                if processed_data.get('error'):
-                    logging.error(f"Error processing transcript: {processed_data['error']}")
-                    return JSONResponse(
-                        status_code=500,
-                        content={"error": "Error processing transcript"}
-                    )
-                
-                # Format the email data
-                email_data = {
-                    'first_name': first_name,
-                    'key_points': [
-                        f"Current Role: {processed_data.get('current_role', 'Not discussed')}",
-                        f"Experience: {processed_data.get('years_of_experience', 'Not discussed')} years",
-                        f"Key Skills: {', '.join(processed_data.get('key_skills_and_technologies', [])[:5])}",  # Top 5 skills
-                        f"Career Goals: {processed_data.get('career_goals', 'Not discussed')}",
-                        f"Preferred Work Environment: {processed_data.get('preferred_work_environment', 'Not discussed')}"
-                    ],
-                    'experience_highlights': [
-                        f"Notable Achievements: {processed_data.get('notable_achievements', 'Not discussed')}",
-                        f"Education: {processed_data.get('education_and_certifications', 'Not discussed')}"
-                    ],
-                    'next_steps': "I will be reviewing your profile and matching you with relevant opportunities. You will receive an email from me when I find a great match for your skills and preferences."
-                }
-                
-                # Send the summary email
-                interaction_agent = InteractionAgent()
-                email_result = interaction_agent.send_transcript_summary(email, email_data)
-                
-                if email_result.get("status") == "success":
-                    logging.info(f"Successfully sent summary email to {email}")
-                else:
-                    logging.error(f"Failed to send summary email: {email_result.get('error')}")
-                
-            except Exception as e:
-                logging.error(f"Error processing call_analyzed event: {str(e)}")
-                logging.error(f"Error type: {type(e)}")
-                logging.error(f"Error traceback: {traceback.format_exc()}")
-                return JSONResponse(
-                    status_code=500,
-                    content={"error": "Error processing call analysis"}
-                )
+            call_id = call.get('call_id')
+            logging.info(f"Call analyzed: {call_id}")
+            
+            # Update call status to indicate it needs processing
+            status_data = {
+                "status": "needs_processing",
+                "timestamp": datetime.utcnow().isoformat(),
+                "metadata": call.get('metadata', {}),
+                "call_status": call.get('call_status'),
+                "processed": False
+            }
+            
+            # Store status in memory and Pinecone
+            background_tasks.add_task(update_call_status, call_id, status_data)
+            
+            # Return immediately to acknowledge webhook
+            return Response(status_code=202)  # Accepted
         else:
             logging.warning(f"Unknown event type: {event}")
         
@@ -1628,11 +1646,72 @@ async def retell_webhook(request: Request):
         
     except Exception as e:
         logging.error(f"Error processing webhook: {str(e)}")
-        logging.error(f"Error type: {type(e)}")
-        logging.error(f"Error traceback: {traceback.format_exc()}")
         return JSONResponse(
             status_code=500,
             content={"error": "Internal server error"}
+        )
+
+@app.post("/api/cron/process-transcripts")
+async def process_pending_transcripts(request: Request):
+    """
+    Endpoint for Vercel cron job to process transcripts.
+    This endpoint should be called every 60 seconds by a Vercel cron job.
+    """
+    try:
+        # In production, verify the request is from Vercel
+        if os.getenv("VERCEL_ENV"):
+            vercel_cron_header = request.headers.get("x-vercel-cron")
+            if not vercel_cron_header:
+                raise HTTPException(
+                    status_code=401,
+                    detail="Unauthorized - Missing Vercel cron header"
+                )
+        
+        # Find calls that need processing
+        pending_calls = {
+            call_id: data for call_id, data in call_statuses.items()
+            if data.get('status') == 'needs_processing' and not data.get('processed')
+        }
+        
+        if not pending_calls:
+            return {"status": "success", "message": "No pending transcripts to process"}
+        
+        processed_count = 0
+        errors = []
+        
+        # Process each pending call
+        for call_id, data in pending_calls.items():
+            try:
+                # Process one transcript at a time to stay within time limits
+                processed_data = await fetch_and_store_retell_transcript(call_id)
+                
+                # Update status
+                data['processed'] = True
+                data['processed_at'] = datetime.utcnow().isoformat()
+                data['status'] = 'completed'
+                await update_call_status(call_id, data)
+                
+                processed_count += 1
+                
+                # Break after processing one to stay within time limits
+                # Next cron run will handle remaining transcripts
+                break
+                
+            except Exception as e:
+                errors.append(f"Error processing call {call_id}: {str(e)}")
+                continue
+        
+        return {
+            "status": "success",
+            "processed_count": processed_count,
+            "remaining_count": len(pending_calls) - processed_count,
+            "errors": errors
+        }
+        
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error processing transcripts: {str(e)}"
         )
 
 def clean_test_calls() -> int:
