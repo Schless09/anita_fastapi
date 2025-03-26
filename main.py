@@ -15,7 +15,7 @@ import openai
 from pydantic import ValidationError
 import json
 import base64
-from openai import OpenAI
+from openai import OpenAI, AsyncOpenAI
 import io
 import tempfile
 import requests
@@ -33,10 +33,12 @@ from urllib.parse import urlparse
 import uuid
 import logging
 import logging.handlers
-from openai import AsyncOpenAI
 from fastapi.responses import JSONResponse, Response
 import hmac
 import hashlib
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
+import email
 
 # Configure logging for serverless environment
 logging.basicConfig(
@@ -87,6 +89,89 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Initialize Slack client
+SLACK_APP_ID = os.getenv('SLACK_APP_ID')
+SLACK_CLIENT_ID = os.getenv('SLACK_CLIENT_ID')
+SLACK_CLIENT_SECRET = os.getenv('SLACK_CLIENT_SECRET')
+SLACK_SIGNING_SECRET = os.getenv('SLACK_SIGNING_SECRET')
+SLACK_BOT_TOKEN = os.getenv('SLACK_BOT_TOKEN')
+SLACK_CHANNEL_ID = "C08KAN8AYJJ"  # Updated channel ID
+
+def verify_slack_request(request_body: bytes, timestamp: str, signature: str) -> bool:
+    """Verify that the request came from Slack."""
+    if not SLACK_SIGNING_SECRET:
+        logger.error("Slack signing secret not configured")
+        return False
+
+    # Create basestring by concatenating version, timestamp, and body
+    basestring = f"v0:{timestamp}:{request_body.decode()}"
+    
+    # Create signature using HMAC SHA256
+    my_signature = 'v0=' + hmac.new(
+        SLACK_SIGNING_SECRET.encode(),
+        basestring.encode(),
+        hashlib.sha256
+    ).hexdigest()
+    
+    # Compare signatures using constant time comparison
+    return hmac.compare_digest(my_signature, signature)
+
+async def send_slack_notification(message: str) -> bool:
+    """
+    Send a notification to Slack using the simplified approach.
+    Returns True if successful, False otherwise.
+    """
+    if not SLACK_BOT_TOKEN:
+        logger.error("❌ Slack notification failed: Missing SLACK_BOT_TOKEN")
+        return False
+
+    url = "https://slack.com/api/chat.postMessage"
+    headers = {
+        "Authorization": f"Bearer {SLACK_BOT_TOKEN}",
+        "Content-Type": "application/json"
+    }
+    data = {
+        "channel": SLACK_CHANNEL_ID,
+        "text": message,
+        "blocks": [
+            {
+                "type": "section",
+                "text": {
+                    "type": "mrkdwn",
+                    "text": f"📧 *New Message*\n\n{message}"
+                }
+            }
+        ]
+    }
+
+    try:
+        async with httpx.AsyncClient() as client:
+            logger.info(f"🔔 Sending Slack notification...")
+            logger.info(f"🎯 Target Channel: {SLACK_CHANNEL_ID}")
+            logger.info(f"🔑 Using token starting with: {SLACK_BOT_TOKEN[:20]}...")
+            
+            response = await client.post(url, headers=headers, json=data)
+            response_data = response.json()
+            
+            if response.status_code == 200 and response_data.get('ok'):
+                logger.info("✅ Slack notification sent successfully")
+                return True
+            else:
+                error = response_data.get('error', 'Unknown error')
+                logger.error(f"❌ Slack API error: {error}")
+                logger.error(f"📝 Full response: {response_data}")
+                if error == 'invalid_auth':
+                    logger.error("🔐 Authentication failed. Please check your Bot User OAuth Token")
+                elif error == 'channel_not_found':
+                    logger.error(f"📢 Channel {SLACK_CHANNEL_ID} not found. Make sure the bot is invited to the channel")
+                return False
+
+    except Exception as e:
+        logger.error(f"❌ Failed to send Slack notification: {str(e)}")
+        logger.error(f"💥 Error type: {type(e)}")
+        logger.error(f"📜 Stack trace: {traceback.format_exc()}")
+        return False
 
 @app.get("/")
 async def root():
@@ -1008,7 +1093,7 @@ async def process_candidate_resume(candidate_id: str, resume_text: str):
         )
 
 async def process_transcript_with_openai(transcript: str, metadata: Dict[str, Any]) -> Dict[str, Any]:
-    """Process transcript with OpenAI to generate summary and analysis."""
+    """Process transcript with OpenAI to generate summary and extract structured data."""
     try:
         # Extract first name from metadata
         candidate_name = metadata.get('name', '')
@@ -1020,46 +1105,75 @@ async def process_transcript_with_openai(transcript: str, metadata: Dict[str, An
         Transcript:
         {transcript}
         
-        Please provide a summary in this format:
+        Please extract and provide the following information in a structured format:
         
+        1. Key Information (required for matching):
+        - Skills: List all technical and soft skills mentioned
+        - Years of Experience: Total years of relevant experience
+        - Preferred Work Environment: Remote/Hybrid/On-site preferences
+        - Preferred Locations: List of cities/regions they're interested in
+        - Minimum Salary: Expected or minimum salary requirement
+        - Work Authorization: Current work authorization status
+        
+        2. Additional Information:
+        - Current Role: Details about current position
+        - Career Goals: Career objectives and aspirations
+        - Notable Projects: Key projects or achievements
+        - Leadership Experience: Any leadership or management experience
+        - Education: Educational background
+        - Industry Preferences: Preferred industries or company types
+        
+        3. Summary for Email:
         Hi {first_name},
         
-        Thank you for taking the time to speak with me today! I wanted to summarize the key points from our conversation:
+        Thank you for taking the time to speak with me today! Here are the key points from our conversation:
         
-        Key Points from Our Conversation:
-        - Current Role: [Details discussed about current position]
-        - Experience: [Years and types of experience discussed]
-        - Key Skills: [Main technical and soft skills highlighted]
-        - Career Goals: [Career objectives and aspirations discussed]
-        - Preferred Work Environment: [Work style and environment preferences]
+        [List 3-5 key points from the conversation]
         
-        Your Experience Highlights:
-        - Notable achievements and responsibilities discussed
-        - Technical expertise and project highlights
-        - Leadership and collaboration examples
+        [Include any specific next steps or action items discussed]
         
-        Next Steps:
-        [Outline the next steps discussed or recommended actions]
+        Please provide the response in JSON format with these keys:
+        {
+            "skills": [],
+            "years_of_experience": "",
+            "preferred_work_environment": "",
+            "preferred_locations": [],
+            "minimum_salary": "",
+            "work_authorization": "",
+            "current_role": "",
+            "career_goals": "",
+            "notable_projects": "",
+            "leadership_experience": "",
+            "education": "",
+            "industry_preferences": "",
+            "key_points": [],
+            "next_steps": "",
+            "email_summary": ""
+        }
         """
 
         # Get response from OpenAI
         response = openai_client.chat.completions.create(
             model="gpt-4-turbo-preview",
             messages=[
-                {"role": "system", "content": "You are a professional recruiter summarizing a job interview."},
+                {"role": "system", "content": "You are a professional recruiter analyzing a job interview. Extract all required information accurately and format it as specified."},
                 {"role": "user", "content": prompt}
             ],
             temperature=0.7,
-            max_tokens=1000
+            max_tokens=1500,
+            response_format={ "type": "json_object" }
         )
 
-        # Extract and return the summary
-        summary = response.choices[0].message.content
-
-        return {
-            "summary": summary,
-            "timestamp": datetime.now().isoformat()
-        }
+        # Parse the JSON response
+        try:
+            processed_data = json.loads(response.choices[0].message.content)
+            # Add first name to processed data
+            processed_data['first_name'] = first_name
+            processed_data['timestamp'] = datetime.now().isoformat()
+            return processed_data
+        except json.JSONDecodeError as e:
+            logger.error(f"Error parsing OpenAI response as JSON: {str(e)}")
+            raise
 
     except Exception as e:
         logger.error(f"Error processing transcript with OpenAI: {str(e)}")
@@ -2022,6 +2136,18 @@ async def fetch_retell_transcript(call_id: str) -> Optional[Dict]:
         logger.error(f"❌ Error fetching transcript: {str(e)}")
         raise
 
+def has_sufficient_data(processed_data: Dict[str, Any]) -> bool:
+    """Check if we have sufficient data from the call to proceed with matchmaking."""
+    required_fields = [
+        'skills',
+        'years_of_experience',
+        'preferred_work_environment',
+        'preferred_locations',
+        'minimum_salary',
+        'work_authorization'
+    ]
+    return all(processed_data.get(field) for field in required_fields)
+
 async def fetch_and_store_retell_transcript(call_id: str) -> dict:
     """Fetch transcript from Retell and store in memory and Pinecone"""
     try:
@@ -2065,6 +2191,41 @@ async def fetch_and_store_retell_transcript(call_id: str) -> dict:
                 transcript_data['transcript'],
                 transcript_data['metadata']  # Pass metadata to get candidate name
             )
+
+            # Check if we have sufficient data for matchmaking
+            if has_sufficient_data(processed_data):
+                logger.info("✅ Sufficient data gathered from call, proceeding with matchmaking")
+                
+                # Get candidate ID from metadata
+                candidate_id = transcript_data['metadata'].get('candidate_id')
+                if candidate_id:
+                    try:
+                        # Create candidate data for matching
+                        candidate_data = {
+                            'id': candidate_id,
+                            'skills': processed_data.get('skills', []),
+                            'years_of_experience': processed_data.get('years_of_experience'),
+                            'preferred_work_environment': processed_data.get('preferred_work_environment'),
+                            'preferred_locations': processed_data.get('preferred_locations'),
+                            'minimum_salary': processed_data.get('minimum_salary'),
+                            'work_authorization': processed_data.get('work_authorization'),
+                            'email': transcript_data['metadata'].get('email')
+                        }
+                        
+                        # Trigger matchmaking through brain agent
+                        match_result = brain_agent.handle_candidate_submission(candidate_data)
+                        
+                        if match_result.get('status') == 'success':
+                            logger.info(f"✅ Successfully matched candidate {candidate_id}")
+                            # Add match results to processed data
+                            processed_data['match_results'] = match_result.get('match_details')
+                        else:
+                            logger.warning(f"⚠️ No immediate matches found for candidate {candidate_id}")
+                    except Exception as e:
+                        logger.error(f"❌ Error in matchmaking process: {str(e)}")
+                        # Don't raise here as we still want to proceed with email sending
+            else:
+                logger.info("⚠️ Insufficient data from call for matchmaking")
         else:
             # For missed or short calls, create minimal processed data
             processed_data = {
@@ -2301,5 +2462,284 @@ async def submit_job(
         )
     finally:
         print("=== Job submission processing complete ===\n")
+
+class InboundEmailData(BaseModel):
+    headers: Dict[str, str]
+    text: str
+    html: Optional[str]
+    from_email: str
+    subject: str
+    to: str
+    envelope: Dict[str, Any]
+    attachments: Optional[List[Dict[str, Any]]] = []
+    
+async def process_candidate_email(email_data: InboundEmailData) -> Dict[str, Any]:
+    """Process an incoming email from a candidate."""
+    try:
+        logger.info(f"🔍 Processing email from: {email_data.from_email}")
+        
+        # Extract candidate email from the 'from' field
+        candidate_email = email_data.from_email
+        
+        # Search for candidate in Pinecone by email
+        logger.info("🔎 Searching for candidate in database...")
+        candidate_query = {
+            'filter': {
+                'email': candidate_email
+            }
+        }
+        
+        results = candidates_index.query(
+            vector=[0] * 1536,  # Dummy vector for query
+            filter=candidate_query['filter'],
+            top_k=1,
+            include_metadata=True
+        )
+        
+        if not results.matches:
+            logger.error(f"❓ No candidate found for email: {candidate_email}")
+            return {
+                'status': 'error',
+                'message': 'Candidate not found'
+            }
+            
+        candidate_id = results.matches[0].id
+        candidate_metadata = results.matches[0].metadata
+        logger.info(f"✅ Found candidate: {candidate_metadata.get('name', 'Unknown')}")
+        
+        # Process the email content with OpenAI for internal analysis
+        logger.info("🤖 Analyzing email content with AI...")
+        analysis_prompt = f"""Analyze this email from a candidate and help understand their question or concern:
+
+        Email Subject: {email_data.subject}
+        Email Content: {email_data.text}
+        
+        Please provide:
+        1. The main question or concern
+        2. Any specific job roles mentioned
+        3. Any new preferences or requirements mentioned
+        4. Suggested response approach
+        
+        Format the response as JSON with these keys:
+        {{
+            "main_question": string,
+            "mentioned_jobs": list[string],
+            "new_preferences": dict,
+            "response_approach": string,
+            "requires_human_review": boolean
+        }}
+        """
+        
+        response = openai_client.chat.completions.create(
+            model="gpt-4-turbo-preview",
+            messages=[
+                {"role": "system", "content": "You are an AI assistant helping to analyze candidate emails."},
+                {"role": "user", "content": analysis_prompt}
+            ],
+            temperature=0.7,
+            max_tokens=1000,
+            response_format={ "type": "json_object" }
+        )
+        
+        analysis = json.loads(response.choices[0].message.content)
+        logger.info(f"📊 Analysis complete:")
+        logger.info(f"❓ Main question: {analysis['main_question']}")
+        logger.info(f"💼 Jobs mentioned: {', '.join(analysis['mentioned_jobs']) if analysis['mentioned_jobs'] else 'None'}")
+        logger.info(f"👀 Requires human review: {'Yes' if analysis['requires_human_review'] else 'No'}")
+        
+        # Update candidate profile with new preferences
+        if analysis['new_preferences']:
+            logger.info("📝 Updating candidate preferences...")
+            updated_metadata = candidate_metadata.copy()
+            updated_metadata['preferences'] = {
+                **updated_metadata.get('preferences', {}),
+                **analysis['new_preferences']
+            }
+            updated_metadata['last_interaction'] = datetime.now().isoformat()
+            updated_metadata['interaction_history'] = updated_metadata.get('interaction_history', []) + [{
+                'type': 'email_reply',
+                'timestamp': datetime.now().isoformat(),
+                'content': email_data.text,
+                'analysis': analysis
+            }]
+            
+            # Store vector of email content for future reference
+            logger.info("🔤 Generating email content embedding...")
+            email_embedding = await get_embedding(email_data.text)
+            
+            # Update candidate in Pinecone
+            logger.info("💾 Updating candidate profile in database...")
+            candidates_index.upsert(vectors=[(
+                candidate_id,
+                email_embedding,
+                updated_metadata
+            )])
+        
+        # Generate and send response
+        if not analysis['requires_human_review']:
+            logger.info("✍️ Generating AI response...")
+            # Get candidate's first name
+            candidate_name = candidate_metadata.get('name', '').split()[0]
+            
+            response_prompt = f"""You are Anita, an AI Career Co-Pilot having a friendly email conversation with {candidate_name}. Write a natural, helpful response to their email.
+
+            Context:
+            - Their email: {email_data.text}
+            - Their question/concern: {analysis['main_question']}
+            - Jobs they mentioned: {', '.join(analysis['mentioned_jobs']) if analysis['mentioned_jobs'] else 'None'}
+            - Previous interactions: {json.dumps(updated_metadata.get('interaction_history', [])[-3:], indent=2)}
+
+            Guidelines:
+            1. Write in a warm, professional tone
+            2. Address them by first name
+            3. Directly answer their specific question/concern
+            4. If they mentioned specific jobs, provide relevant details
+            5. Ask follow-up questions to better understand their needs
+            6. Keep the response concise but helpful
+            7. Sign as "Anita" without mentioning you're an AI
+            8. Don't use any JSON formatting - write a natural email
+
+            Write your response now:"""
+            
+            response = openai_client.chat.completions.create(
+                model="gpt-4-turbo-preview",
+                messages=[
+                    {"role": "system", "content": "You are Anita, writing a friendly and professional email response to a candidate."},
+                    {"role": "user", "content": response_prompt}
+                ],
+                temperature=0.7,
+                max_tokens=1000
+            )
+            
+            reply_content = response.choices[0].message.content
+            logger.info("📧 Sending email response...")
+            
+            # Send email reply
+            await interaction_agent.send_email(
+                to_email=candidate_email,
+                subject=f"Re: {email_data.subject}",
+                content=reply_content
+            )
+            logger.info("✅ Email sent successfully!")
+        else:
+            # Send Slack notification for human review
+            logger.info("👥 Preparing notification for human review...")
+            candidate_name = candidate_metadata.get('name', 'Unknown')
+            slack_message = f"""🔍 *Human Review Needed for Candidate Email*
+
+*From:* {candidate_name} ({candidate_email})
+*Subject:* {email_data.subject}
+*Question/Concern:* {analysis['main_question']}
+
+*Email Content:*
+{email_data.text}
+
+*Analysis:*
+• Jobs Mentioned: {', '.join(analysis['mentioned_jobs']) if analysis['mentioned_jobs'] else 'None'}
+• New Preferences: {json.dumps(analysis['new_preferences'], indent=2) if analysis['new_preferences'] else 'None'}
+• Suggested Approach: {analysis['response_approach']}
+
+Please review and respond to this email as soon as possible."""
+            
+            await send_slack_notification(slack_message)
+            logger.info("✅ Slack notification sent!")
+            
+        return {
+            'status': 'success',
+            'candidate_id': candidate_id,
+            'requires_human_review': analysis['requires_human_review'],
+            'analysis': analysis
+        }
+        
+    except Exception as e:
+        logger.error(f"❌ Error processing candidate email: {str(e)}")
+        logger.error(f"💥 Error type: {type(e)}")
+        logger.error(f"📜 Stack trace: {traceback.format_exc()}")
+        return {
+            'status': 'error',
+            'message': str(e)
+        }
+
+@app.post("/email/webhook")
+async def handle_sendgrid_webhook(request: Request):
+    """Handle incoming emails from SendGrid's Inbound Parse webhook."""
+    logger.info("📨 Received webhook from SendGrid")
+    
+    try:
+        # Log the raw request data
+        body = await request.body()
+        form = await request.form()
+        logger.info(f"📝 Received form data keys: {form.keys()}")
+        
+        # Log headers for debugging
+        headers = dict(request.headers)
+        logger.info(f"🔍 Request headers: {headers}")
+        
+        # Extract email data
+        email_data = {
+            "to": form.get("to", ""),
+            "from": form.get("from", ""),
+            "subject": form.get("subject", ""),
+            "text": form.get("text", ""),
+            "html": form.get("html", ""),
+        }
+        logger.info(f"📧 Processed email data: {email_data}")
+        
+        # Notify Slack for debugging
+        await send_slack_notification(
+            f"*New Email Received*\n"
+            f"From: {email_data['from']}\n"
+            f"Subject: {email_data['subject']}\n"
+            f"Content: {email_data['text'][:200]}..."
+        )
+        
+        return {"status": "success", "message": "Email processed successfully"}
+        
+    except Exception as e:
+        logger.error(f"❌ Error processing webhook: {str(e)}")
+        logger.error(f"💥 Error type: {type(e)}")
+        logger.error(f"📜 Stack trace: {traceback.format_exc()}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+async def get_embedding(text: str) -> List[float]:
+    """Get embedding vector for text using OpenAI's API."""
+    try:
+        # Ensure text is a string and not empty
+        if not isinstance(text, str) or not text.strip():
+            raise ValueError("Text must be a non-empty string")
+            
+        # Truncate text if too long (OpenAI has token limits)
+        max_tokens = 8000  # Conservative limit
+        text = text[:max_tokens]
+        
+        response = await openai_client.embeddings.create(
+            model="text-embedding-ada-002",
+            input=text
+        )
+        
+        return response.data[0].embedding
+        
+    except Exception as e:
+        logger.error(f"Error getting embedding: {str(e)}")
+        # Return a zero vector as fallback
+        return [0.0] * 1536
+
+@app.get("/test-slack")
+async def test_slack_notification():
+    """Test endpoint to verify Slack notifications are working."""
+    message = (
+        "🧪 *Test Notification*\n\n"
+        "This is a test message from Recruitcha's email processing system.\n"
+        "• Timestamp: {}\n"
+        "• Environment: Development\n"
+        "• Status: Testing"
+    ).format(datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
+    
+    success = await send_slack_notification(message)
+    
+    if success:
+        return {"status": "success", "message": "Slack notification sent successfully"}
+    else:
+        raise HTTPException(status_code=500, detail="Failed to send Slack notification")
 
 app = app

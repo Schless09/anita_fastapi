@@ -386,3 +386,43 @@ class InteractionAgent:
                 'error': str(e),
                 'recipient': email
             }
+
+    async def send_email(self, to_email: str, subject: str, content: str) -> Dict[str, Any]:
+        """Send a general email to a recipient."""
+        try:
+            logger.info(f"📧 Sending email to {to_email}")
+            logger.info(f"Subject: {subject}")
+            
+            message = Mail(
+                from_email=self.sender_email,
+                to_emails=to_email,
+                subject=subject,
+                html_content=content
+            )
+            
+            logger.info("Creating SendGrid client...")
+            sg = SendGridAPIClient(self.sendgrid_api_key)
+            
+            logger.info("Sending email...")
+            response = sg.send(message)
+            
+            logger.info(f"SendGrid response status code: {response.status_code}")
+            logger.info(f"SendGrid response headers: {response.headers}")
+            
+            return {
+                'status': 'success',
+                'recipient': to_email,
+                'subject': subject,
+                'response_code': response.status_code
+            }
+            
+        except Exception as e:
+            logger.error(f"Error sending email: {str(e)}")
+            logger.error(f"Error type: {type(e)}")
+            import traceback
+            logger.error(f"Traceback: {traceback.format_exc()}")
+            return {
+                'status': 'error',
+                'error': str(e),
+                'recipient': to_email
+            }
