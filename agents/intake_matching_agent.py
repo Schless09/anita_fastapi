@@ -3,8 +3,9 @@ from .vector_store import VectorStore
 from typing import Dict, Any, Optional, List
 
 class IntakeMatchingAgent:
-    def __init__(self):
-        self.vector_store = VectorStore()
+    def __init__(self, vector_store: Optional[VectorStore] = None):
+        """Initialize IntakeMatchingAgent with an optional vector_store."""
+        self.vector_store = vector_store or VectorStore()
 
     def match_candidate(self, candidate_data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         """
