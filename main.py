@@ -278,8 +278,8 @@ logger.info(f"Using call status index: {call_status_index_name}")
 # Initialize agents with the existing Pinecone instances
 interaction_agent = InteractionAgent()
 vector_store = VectorStore(init_openai=True, existing_indexes={
-    'jobs_index': job_index,
     'candidates_index': candidates_index,
+    'jobs_index': job_index,
     'call_status_index': call_status_index
 })
 brain_agent = BrainAgent(vector_store)
