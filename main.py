@@ -1007,90 +1007,63 @@ async def process_candidate_resume(candidate_id: str, resume_text: str):
             }
         )
 
-async def process_transcript_with_openai(transcript: str) -> dict:
-    """Process a transcript with OpenAI to extract structured information."""
+async def process_transcript_with_openai(transcript: str, metadata: Dict[str, Any]) -> Dict[str, Any]:
+    """Process transcript with OpenAI to generate summary and analysis."""
     try:
-        # Create OpenAI client
-        client = AsyncOpenAI(api_key=OPENAI_API_KEY)
-        
-        # Format prompt for analysis
-        prompt = f"""
-        Please analyze this interview transcript and create a professional summary. Extract and present the following information in clear, grammatically correct English.
+        # Extract first name from metadata
+        candidate_name = metadata.get('name', '')
+        first_name = candidate_name.split()[0] if candidate_name else ''
 
-        Return the information in this exact JSON format:
-        {{
-            "key_points": [
-                "Current Role: [role details or 'Not discussed']",
-                "Experience: [years of experience or 'Not explicitly discussed']",
-                "Key Skills: [list of specific skills mentioned]",
-                "Career Goals: [detailed career objectives and aspirations]",
-                "Preferred Work Environment: [work environment preferences]"
-            ],
-            "experience_highlights": [
-                "Notable achievements and responsibilities",
-                "Technical expertise and project highlights",
-                "Leadership and collaboration examples"
-            ],
-            "next_steps": "Clear action items and follow-up plans"
-        }}
-
-        Write all content in a way that directly addresses the candidate using "you" and "your".
-        For example: "You mentioned having 5 years of experience" instead of "The candidate has 5 years of experience"
-
-        Make sure each point is complete, grammatically correct, and provides specific details from the conversation.
-        If certain information was not discussed, clearly state that it was not discussed rather than leaving it blank.
+        # Create the prompt with the transcript
+        prompt = f"""Please analyze this job interview transcript and provide a structured summary.
         
         Transcript:
         {transcript}
-        """
         
-        # Call OpenAI API
-        response = await client.chat.completions.create(
+        Please provide a summary in this format:
+        
+        Hi {first_name},
+        
+        Thank you for taking the time to speak with me today! I wanted to summarize the key points from our conversation:
+        
+        Key Points from Our Conversation:
+        - Current Role: [Details discussed about current position]
+        - Experience: [Years and types of experience discussed]
+        - Key Skills: [Main technical and soft skills highlighted]
+        - Career Goals: [Career objectives and aspirations discussed]
+        - Preferred Work Environment: [Work style and environment preferences]
+        
+        Your Experience Highlights:
+        - Notable achievements and responsibilities discussed
+        - Technical expertise and project highlights
+        - Leadership and collaboration examples
+        
+        Next Steps:
+        [Outline the next steps discussed or recommended actions]
+        """
+
+        # Get response from OpenAI
+        response = openai_client.chat.completions.create(
             model="gpt-4-turbo-preview",
             messages=[
-                {"role": "system", "content": "You are a professional career advisor writing personalized email summaries for candidates."},
+                {"role": "system", "content": "You are a professional recruiter summarizing a job interview."},
                 {"role": "user", "content": prompt}
             ],
             temperature=0.7,
-            max_tokens=1000,
-            response_format={"type": "json_object"}
+            max_tokens=1000
         )
-        
-        # Parse response
-        try:
-            result = json.loads(response.choices[0].message.content)
-            return result
-        except json.JSONDecodeError:
-            logger.error("Failed to parse OpenAI response as JSON")
-            return {
-                "key_points": [
-                    "Current Role: Not discussed",
-                    "Experience: Not explicitly discussed",
-                    "Key Skills: Not discussed",
-                    "Career Goals: Not discussed",
-                    "Preferred Work Environment: Not discussed"
-                ],
-                "experience_highlights": [
-                    "Unable to process conversation details"
-                ],
-                "next_steps": "I will review your profile and contact you with relevant opportunities."
-            }
-            
+
+        # Extract and return the summary
+        summary = response.choices[0].message.content
+
+        return {
+            "summary": summary,
+            "timestamp": datetime.now().isoformat()
+        }
+
     except Exception as e:
         logger.error(f"Error processing transcript with OpenAI: {str(e)}")
-        return {
-            "key_points": [
-                "Current Role: Not discussed",
-                "Experience: Not explicitly discussed",
-                "Key Skills: Not discussed",
-                "Career Goals: Not discussed",
-                "Preferred Work Environment: Not discussed"
-            ],
-            "experience_highlights": [
-                "Unable to process conversation details"
-            ],
-            "next_steps": "I will review your profile and contact you with relevant opportunities."
-        }
+        raise
 
 async def store_in_pinecone(candidate_id: str, processed_data: dict):
     """Store processed transcript data in Pinecone"""
@@ -1119,7 +1092,9 @@ async def add_transcript(transcript_data: TranscriptData):
     """
     try:
         # Process transcript with OpenAI
-        processed_data = await process_transcript_with_openai(transcript_data.transcript)
+        processed_data = await process_transcript_with_openai(transcript_data.transcript, {
+            "name": transcript_data.candidate_id.split('_')[1]
+        })
         
         # Update the candidate profile with both raw and processed transcript
         result = brain_agent.add_transcript_to_profile(
@@ -2008,14 +1983,37 @@ async def fetch_retell_transcript(call_id: str) -> Optional[Dict]:
         if not call_data:
             raise Exception(f"Could not fetch call data for {call_id}")
             
-        # Extract transcript
+        # Extract transcript and metadata
         transcript = call_data.get("transcript", "")
+        metadata = call_data.get("metadata", {})
+        
+        # Log metadata for debugging
+        logger.info(f"📞 Call metadata: {metadata}")
+        
+        # If no transcript, check if it was an unanswered call
         if not transcript:
-            raise Exception(f"No transcript available for call {call_id}")
+            call_status = call_data.get("call_status", "").lower()
+            disconnection_reason = call_data.get("disconnection_reason", "").lower()
+            
+            # Check for various unanswered call scenarios
+            if (call_status in ["no_answer", "busy", "failed", "error"] or 
+                disconnection_reason in ["dial_no_answer", "busy", "failed"]):
+                logger.info(f"Call {call_id} was not answered (status: {call_status}, reason: {disconnection_reason})")
+                return {
+                    'transcript': "",
+                    'metadata': metadata,  # Pass through the full metadata
+                    'call_status': call_status,
+                    'duration_ms': call_data.get('duration_ms', 0),
+                    'unanswered': True,
+                    'disconnection_reason': disconnection_reason
+                }
+            else:
+                logger.error(f"❌ No transcript available and call status ({call_status}) not recognized as unanswered")
+                raise Exception(f"No transcript available for call {call_id}")
             
         return {
             'transcript': transcript,
-            'metadata': call_data.get('metadata', {}),
+            'metadata': metadata,  # Pass through the full metadata
             'call_status': call_data.get('call_status'),
             'duration_ms': call_data.get('duration_ms')
         }
@@ -2041,9 +2039,39 @@ async def fetch_and_store_retell_transcript(call_id: str) -> dict:
         if not transcript_data:
             raise Exception(f"Could not fetch transcript data for {call_id}")
             
-        # Process with OpenAI
-        logger.info(f"📝 Processing transcript with OpenAI for call {call_id}")
-        processed_data = await process_transcript_with_openai(transcript_data['transcript'])
+        # Determine call status based on transcript and call data
+        call_status = "completed"  # default status
+        transcript = transcript_data['transcript']
+        duration_ms = transcript_data.get('duration_ms', 0)
+        
+        # Check if call was unanswered
+        if transcript_data.get('unanswered', False):
+            call_status = "missed"
+            logger.info(f"Call {call_id} was not answered")
+        # Check if call was missed (no transcript or very short duration)
+        elif not transcript or duration_ms < 1000:  # Less than 1 second
+            call_status = "missed"
+            logger.info(f"Call {call_id} was missed (no transcript or very short duration)")
+        # Check if call was cut short (short duration or minimal transcript)
+        elif duration_ms < 30000 or len(transcript.split()) < 50:  # Less than 30 seconds or less than 50 words
+            call_status = "short"
+            logger.info(f"Call {call_id} was cut short (short duration or minimal transcript)")
+        
+        # Process with OpenAI only if we have a completed call
+        processed_data = {}
+        if call_status == "completed":
+            logger.info(f"📝 Processing transcript with OpenAI for call {call_id}")
+            processed_data = await process_transcript_with_openai(
+                transcript_data['transcript'],
+                transcript_data['metadata']  # Pass metadata to get candidate name
+            )
+        else:
+            # For missed or short calls, create minimal processed data
+            processed_data = {
+                'first_name': transcript_data['metadata'].get('name', '').split()[0],
+                'call_status': call_status,
+                'timestamp': datetime.now().isoformat()
+            }
         
         # Store in Pinecone if we have a candidate ID
         candidate_id = transcript_data['metadata'].get('candidate_id')
@@ -2054,7 +2082,8 @@ async def fetch_and_store_retell_transcript(call_id: str) -> dict:
                 'candidate_id': candidate_id,
                 'call_id': call_id,
                 'processed_at': datetime.now().isoformat(),
-                'processed_data': json.dumps(processed_data)  # Serialize the complex object
+                'processed_data': json.dumps(processed_data),  # Serialize the complex object
+                'call_status': call_status
             }
             await store_in_pinecone(candidate_id, pinecone_metadata)
         
@@ -2064,6 +2093,7 @@ async def fetch_and_store_retell_transcript(call_id: str) -> dict:
             try:
                 logger.info(f"\n📧 Email Process Started for call {call_id}")
                 logger.info(f"Recipient: {email}")
+                logger.info(f"Call Status: {call_status}")
                 
                 # Check if email was already sent
                 logger.info("Checking Pinecone for previous email status...")
@@ -2076,7 +2106,7 @@ async def fetch_and_store_retell_transcript(call_id: str) -> dict:
                 
                 if not query_response.matches or not query_response.matches[0].metadata.get('email_sent'):
                     logger.info("📧 Sending email via InteractionAgent...")
-                    await interaction_agent.send_transcript_summary(email, processed_data)
+                    await interaction_agent.send_transcript_summary(email, processed_data, call_status)
                     
                     # Update Pinecone with email sent status
                     try:
@@ -2089,7 +2119,8 @@ async def fetch_and_store_retell_transcript(call_id: str) -> dict:
                             'status': 'completed',
                             'email_sent': True,
                             'email_sent_at': datetime.utcnow().isoformat(),
-                            'processed_data': json.dumps(processed_data)  # Serialize the complex object
+                            'processed_data': json.dumps(processed_data),  # Serialize the complex object
+                            'call_status': call_status
                         }
                         
                         call_status_index.upsert(vectors=[(
@@ -2108,6 +2139,7 @@ async def fetch_and_store_retell_transcript(call_id: str) -> dict:
                     if call_id in call_statuses:
                         call_statuses[call_id]['email_sent'] = True
                         call_statuses[call_id]['email_sent_at'] = datetime.now().isoformat()
+                        call_statuses[call_id]['call_status'] = call_status
                     
                     logger.info(f"✅ Email sent successfully to {email}")
                 else:
@@ -2122,7 +2154,8 @@ async def fetch_and_store_retell_transcript(call_id: str) -> dict:
             call_statuses[call_id].update({
                 'processed': True,
                 'processed_at': datetime.now().isoformat(),
-                'processed_data': processed_data
+                'processed_data': processed_data,
+                'call_status': call_status
             })
         
         return processed_data

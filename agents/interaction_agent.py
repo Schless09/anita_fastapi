@@ -260,34 +260,97 @@ class InteractionAgent:
                 'message': str(e)
             }
 
-    async def send_transcript_summary(self, email: str, processed_data: Dict[str, Any]) -> Dict[str, Any]:
+    async def send_missed_call_email(self, email: str, first_name: str = "") -> Dict[str, Any]:
+        """Send an email to a candidate when they miss a call or cut it short."""
+        try:
+            logger.info(f"Preparing missed call email for {email}")
+            
+            # Create the email message
+            message = Mail(
+                from_email=Email(self.sender_email),
+                to_emails=To(email),
+                subject="I missed you! Let's reschedule",
+                html_content=f"""
+                <p>Hi {first_name or 'there'},</p>
+                
+                <p>I tried to reach you today but wasn't able to connect. I'd love to have a conversation about potential opportunities that match your profile.</p>
+
+                <p>Would you be available for a brief call at a time that works better for you? Just reply to this email with your preferred time, and I'll be happy to schedule a new call.</p>
+
+                <p>Looking forward to speaking with you!</p>
+
+                <p>Best regards,<br>
+                <strong>Anita</strong><br>
+                <em>Your AI Career Co-Pilot</em></p>
+                """
+            )
+
+            logger.info("Creating SendGrid client...")
+            sg = SendGridAPIClient(self.sendgrid_api_key)
+            
+            logger.info("Sending missed call email...")
+            response = sg.send(message)
+            
+            logger.info(f"SendGrid response status code: {response.status_code}")
+            logger.info(f"SendGrid response headers: {response.headers}")
+            
+            return {
+                'status': 'success',
+                'recipient': email,
+                'subject': str(message.subject),
+                'response_code': response.status_code
+            }
+        except Exception as e:
+            logger.error(f"Error sending missed call email: {str(e)}")
+            logger.error(f"Error type: {type(e)}")
+            import traceback
+            logger.error(f"Traceback: {traceback.format_exc()}")
+            return {
+                'status': 'error',
+                'error': str(e),
+                'recipient': email
+            }
+
+    async def send_transcript_summary(self, email: str, processed_data: Dict[str, Any], call_status: str = "completed") -> Dict[str, Any]:
         """Send a summary email to a candidate with their transcript analysis."""
         try:
+            # Handle different call scenarios
+            if call_status == "missed" or call_status == "short":
+                return await self.send_missed_call_email(email, processed_data.get('first_name', ''))
+            
             logger.info(f"Preparing transcript summary email for {email}")
             
-            # Create SendGrid client
-
+            # Get first name, defaulting to empty string if not found
+            first_name = processed_data.get('first_name', '')
+            logger.info(f"Using first name: {first_name}")
+            
+            # Check if we have sufficient key points data
+            key_points = processed_data.get('key_points', [])
+            has_sufficient_data = len(key_points) > 0
+            
             # Create the email message
             message = Mail(
                 from_email=Email(self.sender_email),
                 to_emails=To(email),
                 subject="Thanks for speaking with me!",
                 html_content=f"""
-                <p>Hi {processed_data.get('first_name', '')},</p>
+                <p>Hi{', ' + first_name if first_name else ' there'},</p>
                 
-                <p>Thank you for taking the time to speak with me today! I wanted to summarize the key points from our conversation:</p>
+                <p>Thank you for taking the time to speak with me today!</p>
 
-                <h3>Key Points from Our Conversation:</h3>
-                <ul>
-                    {"".join(f"<li>{point}</li>" for point in processed_data.get('key_points', []))}
-                </ul>
+                {
+                    f'''
+                    <h3>Key Points from Our Conversation:</h3>
+                    <ul>
+                        {"".join(f"<li>{point}</li>" for point in key_points)}
+                    </ul>
+                    '''
+                    if has_sufficient_data else
+                    '''
+                    <p>I didn't catch much from our conversation today. Let's have another call to better understand your background and preferences! Let me know what time works best for you.</p>
+                    '''
+                }
 
-                <h3>Your Experience Highlights:</h3>
-                <ul>
-                    {"".join(f"<li>{exp}</li>" for exp in processed_data.get('experience_highlights', []))}
-                </ul>
-
-                <h3>Next Steps:</h3>
                 <p>{processed_data.get('next_steps', 'I will be reviewing your profile and matching you with relevant opportunities. You will receive an email from me when I find a great match for your skills and preferences.')}</p>
 
                 <p>If you have any questions or would like to add anything to our conversation, feel free to reply to this email.</p>
@@ -307,11 +370,10 @@ class InteractionAgent:
             logger.info(f"SendGrid response status code: {response.status_code}")
             logger.info(f"SendGrid response headers: {response.headers}")
             
-            # Return a serializable response
             return {
                 'status': 'success',
                 'recipient': email,
-                'subject': str(message.subject),  # Convert Subject to string
+                'subject': str(message.subject),
                 'response_code': response.status_code
             }
         except Exception as e:
