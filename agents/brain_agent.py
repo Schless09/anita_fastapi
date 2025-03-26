@@ -6,11 +6,11 @@ from .vector_store import VectorStore
 from typing import Dict, Any, Optional
 
 class BrainAgent:
-    def __init__(self):
+    def __init__(self, vector_store: Optional[VectorStore] = None):
+        self.vector_store = vector_store or VectorStore()
         self.intake_agent = IntakeAgent()
-        self.matching_agent = IntakeMatchingAgent()
+        self.matching_agent = IntakeMatchingAgent(self.vector_store)
         self.interaction_agent = InteractionAgent()
-        self.vector_store = VectorStore()
         self.state = {}  # Initialize state dictionary
         self.candidate_profiles = {}  # Store candidate profiles with additional data
 
