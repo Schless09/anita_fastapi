@@ -1007,90 +1007,63 @@ async def process_candidate_resume(candidate_id: str, resume_text: str):
             }
         )
 
-async def process_transcript_with_openai(transcript: str) -> dict:
-    """Process a transcript with OpenAI to extract structured information."""
+async def process_transcript_with_openai(transcript: str, metadata: Dict[str, Any]) -> Dict[str, Any]:
+    """Process transcript with OpenAI to generate summary and analysis."""
     try:
-        # Create OpenAI client
-        client = AsyncOpenAI(api_key=OPENAI_API_KEY)
-        
-        # Format prompt for analysis
-        prompt = f"""
-        Please analyze this interview transcript and create a professional summary. Extract and present the following information in clear, grammatically correct English.
+        # Extract first name from metadata
+        candidate_name = metadata.get('name', '')
+        first_name = candidate_name.split()[0] if candidate_name else ''
 
-        Return the information in this exact JSON format:
-        {{
-            "key_points": [
-                "Current Role: [role details or 'Not discussed']",
-                "Experience: [years of experience or 'Not explicitly discussed']",
-                "Key Skills: [list of specific skills mentioned]",
-                "Career Goals: [detailed career objectives and aspirations]",
-                "Preferred Work Environment: [work environment preferences]"
-            ],
-            "experience_highlights": [
-                "Notable achievements and responsibilities",
-                "Technical expertise and project highlights",
-                "Leadership and collaboration examples"
-            ],
-            "next_steps": "Clear action items and follow-up plans"
-        }}
-
-        Write all content in a way that directly addresses the candidate using "you" and "your".
-        For example: "You mentioned having 5 years of experience" instead of "The candidate has 5 years of experience"
-
-        Make sure each point is complete, grammatically correct, and provides specific details from the conversation.
-        If certain information was not discussed, clearly state that it was not discussed rather than leaving it blank.
+        # Create the prompt with the transcript
+        prompt = f"""Please analyze this job interview transcript and provide a structured summary.
         
         Transcript:
         {transcript}
-        """
         
-        # Call OpenAI API
-        response = await client.chat.completions.create(
+        Please provide a summary in this format:
+        
+        Hi {first_name},
+        
+        Thank you for taking the time to speak with me today! I wanted to summarize the key points from our conversation:
+        
+        Key Points from Our Conversation:
+        - Current Role: [Details discussed about current position]
+        - Experience: [Years and types of experience discussed]
+        - Key Skills: [Main technical and soft skills highlighted]
+        - Career Goals: [Career objectives and aspirations discussed]
+        - Preferred Work Environment: [Work style and environment preferences]
+        
+        Your Experience Highlights:
+        - Notable achievements and responsibilities discussed
+        - Technical expertise and project highlights
+        - Leadership and collaboration examples
+        
+        Next Steps:
+        [Outline the next steps discussed or recommended actions]
+        """
+
+        # Get response from OpenAI
+        response = openai_client.chat.completions.create(
             model="gpt-4-turbo-preview",
             messages=[
-                {"role": "system", "content": "You are a professional career advisor writing personalized email summaries for candidates."},
+                {"role": "system", "content": "You are a professional recruiter summarizing a job interview."},
                 {"role": "user", "content": prompt}
             ],
             temperature=0.7,
-            max_tokens=1000,
-            response_format={"type": "json_object"}
+            max_tokens=1000
         )
-        
-        # Parse response
-        try:
-            result = json.loads(response.choices[0].message.content)
-            return result
-        except json.JSONDecodeError:
-            logger.error("Failed to parse OpenAI response as JSON")
-            return {
-                "key_points": [
-                    "Current Role: Not discussed",
-                    "Experience: Not explicitly discussed",
-                    "Key Skills: Not discussed",
-                    "Career Goals: Not discussed",
-                    "Preferred Work Environment: Not discussed"
-                ],
-                "experience_highlights": [
-                    "Unable to process conversation details"
-                ],
-                "next_steps": "I will review your profile and contact you with relevant opportunities."
-            }
-            
+
+        # Extract and return the summary
+        summary = response.choices[0].message.content
+
+        return {
+            "summary": summary,
+            "timestamp": datetime.now().isoformat()
+        }
+
     except Exception as e:
         logger.error(f"Error processing transcript with OpenAI: {str(e)}")
-        return {
-            "key_points": [
-                "Current Role: Not discussed",
-                "Experience: Not explicitly discussed",
-                "Key Skills: Not discussed",
-                "Career Goals: Not discussed",
-                "Preferred Work Environment: Not discussed"
-            ],
-            "experience_highlights": [
-                "Unable to process conversation details"
-            ],
-            "next_steps": "I will review your profile and contact you with relevant opportunities."
-        }
+        raise
 
 async def store_in_pinecone(candidate_id: str, processed_data: dict):
     """Store processed transcript data in Pinecone"""
@@ -1119,7 +1092,9 @@ async def add_transcript(transcript_data: TranscriptData):
     """
     try:
         # Process transcript with OpenAI
-        processed_data = await process_transcript_with_openai(transcript_data.transcript)
+        processed_data = await process_transcript_with_openai(transcript_data.transcript, {
+            "name": transcript_data.candidate_id.split('_')[1]
+        })
         
         # Update the candidate profile with both raw and processed transcript
         result = brain_agent.add_transcript_to_profile(
@@ -2043,7 +2018,10 @@ async def fetch_and_store_retell_transcript(call_id: str) -> dict:
             
         # Process with OpenAI
         logger.info(f"📝 Processing transcript with OpenAI for call {call_id}")
-        processed_data = await process_transcript_with_openai(transcript_data['transcript'])
+        processed_data = await process_transcript_with_openai(
+            transcript_data['transcript'],
+            transcript_data['metadata']  # Pass metadata to get candidate name
+        )
         
         # Store in Pinecone if we have a candidate ID
         candidate_id = transcript_data['metadata'].get('candidate_id')
