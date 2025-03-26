@@ -275,9 +275,14 @@ logger.info(f"Using jobs index: {jobs_index_name}")
 logger.info(f"Using candidates index: {candidates_index_name}")
 logger.info(f"Using call status index: {call_status_index_name}")
 
+# Initialize agents with the existing Pinecone instances
 interaction_agent = InteractionAgent()
-brain_agent = BrainAgent()
-vector_store = VectorStore()
+vector_store = VectorStore(init_openai=True, existing_indexes={
+    'jobs_index': job_index,
+    'candidates_index': candidates_index,
+    'call_status_index': call_status_index
+})
+brain_agent = BrainAgent(vector_store)
 
 # Add Retell AI configuration
 RETELL_API_KEY = os.getenv('RETELL_API_KEY')
@@ -944,7 +949,6 @@ async def process_candidate_resume(candidate_id: str, resume_text: str):
         processed_resume = await process_resume_text(resume_data)
         
         # Update candidate profile with processed data
-        vector_store = VectorStore(init_openai=True)
         vector_store.update_candidate_profile(
             candidate_id,
             {
@@ -958,7 +962,6 @@ async def process_candidate_resume(candidate_id: str, resume_text: str):
         
     except Exception as e:
         print(f"Error processing resume: {str(e)}")
-        vector_store = VectorStore(init_openai=True)
         vector_store.update_candidate_profile(
             candidate_id,
             {
@@ -1056,7 +1059,6 @@ async def process_transcript_with_openai(transcript: str) -> dict:
 async def store_in_pinecone(candidate_id: str, processed_data: dict):
     """Store processed transcript data in Pinecone"""
     try:
-        vector_store = VectorStore(init_openai=True)
         vector_store.update_candidate_profile(
             candidate_id,
             {
@@ -1173,9 +1175,6 @@ async def validate_retell_response(response_data: Dict[str, Any]) -> Dict[str, A
 async def sync_call_statuses():
     """Sync call statuses from Pinecone to memory on startup"""
     try:
-        logger.info("\n=== Syncing call statuses from Pinecone ===")
-        logger.info(f"Timestamp: {datetime.utcnow().isoformat()}")
-        
         try:
             query_response = call_status_index.query(
                 vector=[0] * 1536,  # Dummy vector since we're just getting metadata
@@ -1189,26 +1188,18 @@ async def sync_call_statuses():
                         call_id = match.id
                         metadata = match.metadata
                         call_statuses[call_id] = metadata
-                        logger.info(f"Synced call {call_id} with status: {metadata.get('status', 'unknown')}")
                     except Exception as match_error:
                         logger.error(f"Error processing match for call {match.id}: {str(match_error)}")
-                        logger.error(f"Match data: {match}")
                         continue
                 
-                logger.info(f"Successfully synced {len(call_statuses)} call statuses from Pinecone")
-            else:
-                logger.info("No call statuses found in Pinecone")
+            logger.info(f"Synced {len(call_statuses)} call statuses from Pinecone")
                 
         except Exception as query_error:
             logger.error(f"Error querying Pinecone: {str(query_error)}")
-            logger.error(f"Error type: {type(query_error)}")
-            logger.error(f"Error traceback: {traceback.format_exc()}")
             raise
             
     except Exception as e:
         logger.error(f"Critical error in sync_call_statuses: {str(e)}")
-        logger.error(f"Error type: {type(e)}")
-        logger.error(f"Error traceback: {traceback.format_exc()}")
         # Don't raise here as this is a startup function
 
 def sanitize_metadata(data: Dict[str, Any]) -> Dict[str, Any]:
@@ -2000,6 +1991,11 @@ async def fetch_retell_transcript(call_id: str) -> Optional[Dict]:
 async def fetch_and_store_retell_transcript(call_id: str) -> dict:
     """Fetch transcript from Retell and store in memory and Pinecone"""
     try:
+        # Check if we've already processed this call
+        if call_id in call_statuses and call_statuses[call_id].get('processed'):
+            logger.info(f"Call {call_id} already processed, skipping")
+            return call_statuses[call_id].get('processed_data', {})
+
         logger.info(f"\n{'='*50}")
         logger.info(f"🔄 Starting transcript processing for call {call_id}")
         logger.info(f"Timestamp: {datetime.now().isoformat()}")
@@ -2017,11 +2013,18 @@ async def fetch_and_store_retell_transcript(call_id: str) -> dict:
         candidate_id = transcript_data['metadata'].get('candidate_id')
         if candidate_id:
             logger.info(f"💾 Storing transcript in Pinecone for candidate {candidate_id}")
-            await store_in_pinecone(candidate_id, processed_data)
+            # Serialize processed_data for Pinecone metadata
+            pinecone_metadata = {
+                'candidate_id': candidate_id,
+                'call_id': call_id,
+                'processed_at': datetime.now().isoformat(),
+                'processed_data': json.dumps(processed_data)  # Serialize the complex object
+            }
+            await store_in_pinecone(candidate_id, pinecone_metadata)
         
-        # Send email if we have the address
+        # Send email if we have the address and haven't sent it yet
         email = transcript_data['metadata'].get('email')
-        if email:
+        if email and call_id in call_statuses and not call_statuses[call_id].get('email_sent'):
             try:
                 logger.info(f"\n📧 Email Process Started for call {call_id}")
                 logger.info(f"Recipient: {email}")
@@ -2035,46 +2038,57 @@ async def fetch_and_store_retell_transcript(call_id: str) -> dict:
                     include_metadata=True
                 )
                 
-                if query_response.matches and query_response.matches[0].metadata.get("email_sent"):
-                    logger.info(f"⚠️ Email was already sent for call {call_id}")
-                    logger.info(f"Previous send time: {query_response.matches[0].metadata.get('email_sent_at')}")
-                    return processed_data
-                
-                # Send email through interaction agent
-                logger.info(f"📧 Sending email via InteractionAgent...")
-                interaction_agent = InteractionAgent()
-                email_result = interaction_agent.send_transcript_summary(email, processed_data)
-                
-                if email_result.get("status") == "success":
-                    logger.info(f"✅ Email sent successfully to {email}")
+                if not query_response.matches or not query_response.matches[0].metadata.get('email_sent'):
+                    logger.info("📧 Sending email via InteractionAgent...")
+                    await interaction_agent.send_transcript_summary(email, processed_data)
+                    
                     # Update Pinecone with email sent status
-                    logger.info("Updating Pinecone with email sent status...")
-                    dummy_vector = [0.0] * 1536
-                    dummy_vector[0] = 1.0
-                    call_status_index.upsert(vectors=[(
-                        call_id,
-                        dummy_vector,
-                        {
-                            "call_id": call_id,
-                            "email_sent": True,
-                            "email_sent_at": datetime.now().isoformat(),
-                            "processed_data": processed_data
+                    try:
+                        # Create a vector with one non-zero value
+                        vector_values = [0.0] * 1536
+                        vector_values[0] = 1.0  # Set first value to 1.0
+                        
+                        # Serialize processed_data for Pinecone metadata
+                        pinecone_metadata = {
+                            'status': 'completed',
+                            'email_sent': True,
+                            'email_sent_at': datetime.utcnow().isoformat(),
+                            'processed_data': json.dumps(processed_data)  # Serialize the complex object
                         }
-                    )])
-                    logger.info("✅ Pinecone updated with email sent status")
+                        
+                        call_status_index.upsert(vectors=[(
+                            call_id,
+                            vector_values,
+                            pinecone_metadata
+                        )])
+                        logger.info("✅ Successfully updated Pinecone with email sent status")
+                    except Exception as e:
+                        logger.error(f"❌ Error updating Pinecone with email status: {str(e)}")
+                        logger.error(f"Error type: {type(e)}")
+                        logger.error(f"Stack trace: {traceback.format_exc()}")
+                        # Don't raise here as the email was sent successfully
+                    
+                    # Update local status
+                    if call_id in call_statuses:
+                        call_statuses[call_id]['email_sent'] = True
+                        call_statuses[call_id]['email_sent_at'] = datetime.now().isoformat()
+                    
+                    logger.info(f"✅ Email sent successfully to {email}")
                 else:
-                    logger.error(f"❌ Failed to send email: {email_result.get('error')}")
-                    logger.error(f"Error details: {email_result}")
+                    logger.info("Email already sent for this call")
             except Exception as e:
                 logger.error(f"❌ Error in email sending process: {str(e)}")
                 logger.error(f"Error type: {type(e)}")
                 logger.error(f"Stack trace: {traceback.format_exc()}")
-                raise
-        else:
-            logger.info("ℹ️ No email address found in transcript metadata, skipping email")
         
-        logger.info(f"✅ Successfully processed call {call_id}")
-        logger.info(f"{'='*50}\n")
+        # Update call status
+        if call_id in call_statuses:
+            call_statuses[call_id].update({
+                'processed': True,
+                'processed_at': datetime.now().isoformat(),
+                'processed_data': processed_data
+            })
+        
         return processed_data
         
     except Exception as e:
