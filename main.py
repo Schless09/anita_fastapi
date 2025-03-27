@@ -15,7 +15,7 @@ import openai
 from pydantic import ValidationError
 import json
 import base64
-from openai import OpenAI
+from openai import OpenAI, AsyncOpenAI
 import io
 import tempfile
 import requests
@@ -33,10 +33,12 @@ from urllib.parse import urlparse
 import uuid
 import logging
 import logging.handlers
-from openai import AsyncOpenAI
 from fastapi.responses import JSONResponse, Response
 import hmac
 import hashlib
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
+import email
 
 # Configure logging for serverless environment
 logging.basicConfig(
@@ -69,6 +71,20 @@ logger.info("=====================================\n")
 # Load environment variables
 load_dotenv()
 
+# Configure Retell
+RETELL_CONFIG = {
+    'api_key': os.getenv('RETELL_API_KEY'),
+    'phone_number': os.getenv('RETELL_FROM_NUMBER', '+16506486990'),
+    'webhook_url': os.getenv('RETELL_WEBHOOK_URL', 'https://85ac-2601-645-8000-fe70-4981-3c72-e8ef-490f.ngrok-free.app/webhook/retell')
+}
+
+# Configure SendGrid
+SENDGRID_CONFIG = {
+    'api_key': os.getenv('SENDGRID_API_KEY'),
+    'sender_email': os.getenv('SENDGRID_SENDER_EMAIL', 'anita@anita.ai'),
+    'webhook_url': os.getenv('SENDGRID_WEBHOOK_URL', 'https://85ac-2601-645-8000-fe70-4981-3c72-e8ef-490f.ngrok-free.app/email/webhook')
+}
+
 # Initialize FastAPI app
 app = FastAPI(
     title="Anita AI Recruitment API",
@@ -87,6 +103,89 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Initialize Slack client
+SLACK_APP_ID = os.getenv('SLACK_APP_ID')
+SLACK_CLIENT_ID = os.getenv('SLACK_CLIENT_ID')
+SLACK_CLIENT_SECRET = os.getenv('SLACK_CLIENT_SECRET')
+SLACK_SIGNING_SECRET = os.getenv('SLACK_SIGNING_SECRET')
+SLACK_BOT_TOKEN = os.getenv('SLACK_BOT_TOKEN')
+SLACK_CHANNEL_ID = "C08KAN8AYJJ"  # Updated channel ID
+
+def verify_slack_request(request_body: bytes, timestamp: str, signature: str) -> bool:
+    """Verify that the request came from Slack."""
+    if not SLACK_SIGNING_SECRET:
+        logger.error("Slack signing secret not configured")
+        return False
+
+    # Create basestring by concatenating version, timestamp, and body
+    basestring = f"v0:{timestamp}:{request_body.decode()}"
+    
+    # Create signature using HMAC SHA256
+    my_signature = 'v0=' + hmac.new(
+        SLACK_SIGNING_SECRET.encode(),
+        basestring.encode(),
+        hashlib.sha256
+    ).hexdigest()
+    
+    # Compare signatures using constant time comparison
+    return hmac.compare_digest(my_signature, signature)
+
+async def send_slack_notification(message: str) -> bool:
+    """
+    Send a notification to Slack using the simplified approach.
+    Returns True if successful, False otherwise.
+    """
+    if not SLACK_BOT_TOKEN:
+        logger.error("❌ Slack notification failed: Missing SLACK_BOT_TOKEN")
+        return False
+
+    url = "https://slack.com/api/chat.postMessage"
+    headers = {
+        "Authorization": f"Bearer {SLACK_BOT_TOKEN}",
+        "Content-Type": "application/json"
+    }
+    data = {
+        "channel": SLACK_CHANNEL_ID,
+        "text": message,
+        "blocks": [
+            {
+                "type": "section",
+                "text": {
+                    "type": "mrkdwn",
+                    "text": f"📧 *New Message*\n\n{message}"
+                }
+            }
+        ]
+    }
+
+    try:
+        async with httpx.AsyncClient() as client:
+            logger.info(f"🔔 Sending Slack notification...")
+            logger.info(f"🎯 Target Channel: {SLACK_CHANNEL_ID}")
+            logger.info(f"🔑 Using token starting with: {SLACK_BOT_TOKEN[:20]}...")
+            
+            response = await client.post(url, headers=headers, json=data)
+            response_data = response.json()
+            
+            if response.status_code == 200 and response_data.get('ok'):
+                logger.info("✅ Slack notification sent successfully")
+                return True
+            else:
+                error = response_data.get('error', 'Unknown error')
+                logger.error(f"❌ Slack API error: {error}")
+                logger.error(f"📝 Full response: {response_data}")
+                if error == 'invalid_auth':
+                    logger.error("🔐 Authentication failed. Please check your Bot User OAuth Token")
+                elif error == 'channel_not_found':
+                    logger.error(f"📢 Channel {SLACK_CHANNEL_ID} not found. Make sure the bot is invited to the channel")
+                return False
+
+    except Exception as e:
+        logger.error(f"❌ Failed to send Slack notification: {str(e)}")
+        logger.error(f"💥 Error type: {type(e)}")
+        logger.error(f"📜 Stack trace: {traceback.format_exc()}")
+        return False
 
 @app.get("/")
 async def root():
@@ -525,47 +624,119 @@ class TechnicalAssessmentType(str, Enum):
     ML_DESIGN = "ML design"
 
 class JobSubmission(BaseModel):
-    raw_text: str
+    """Pydantic model for job submission data."""
+    # Company Information
+    company_name: str
+    company_url: str
+    company_stage: Union[str, List[str]]
+    most_recent_funding_round_amount: str
+    total_funding_amount: str
+    investors: List[str]
+    team_size: str
+    founding_year: str
+    company_mission: str
+    target_market: List[str]
+    industry_vertical: str
+    company_vision: str
+    company_growth_story: str
+    company_culture: Union[str, Dict[str, str]]
+    scaling_plans: str
+    mission_and_impact: str
+    tech_innovation: str
+    
+    # Job Details
+    job_title: str
+    job_url: str
+    positions_available: str
+    hiring_urgency: Union[str, List[str]]
+    seniority_level: Union[str, List[str]]
+    work_arrangement: Union[str, List[str]]
+    city: List[str]
+    state: List[str]
+    visa_sponsorship: str
+    work_authorization: str
+    salary_range: str
+    equity_range: str
+    reporting_structure: str
+    team_composition: str
+    role_status: str
+    
+    # Technical Requirements
+    role_category: Union[str, List[str]]
+    tech_stack_must_haves: List[str]
+    tech_stack_nice_to_haves: List[str]
+    tech_stack_tags: List[str]
+    tech_breadth_requirement: Union[str, List[str]]
+    minimum_years_of_experience: str
+    domain_expertise: List[str]
+    ai_ml_experience: str
+    infrastructure_experience: List[str]
+    system_design_level: str
+    coding_proficiency_required: Union[str, List[str]]
+    coding_languages_versions: List[str]
+    version_control_experience: List[str]
+    ci_cd_tools: List[str]
+    collaborative_tools: List[str]
+    
+    # Candidate Requirements
+    leadership_requirement: Union[str, List[str]]
+    education_requirement: str
+    advanced_degree_preference: str
+    papers_publications_preferred: str
+    prior_startup_experience: Union[str, List[str]]
+    advancement_history_required: bool
+    independent_work_capacity: str
+    skills_must_have: List[str]
+    skills_preferred: List[str]
+    
+    # Product Information
+    product_details: str
+    product_development_stage: Union[str, List[str]]
+    technical_challenges: List[str]
+    key_responsibilities: List[str]
+    scope_of_impact: List[str]
+    expected_deliverables: List[str]
+    product_development_methodology: List[str]
+    
+    # Company Environment
+    stage_of_codebase: str
+    growth_trajectory: str
+    founder_background: str
+    funding_stability: str
+    expected_hours: str
+    
+    # Candidate Fit
+    ideal_companies: List[str]
+    deal_breakers: List[str]
+    disqualifying_traits: List[str]
+    culture_fit_indicators: List[str]
+    startup_mindset_requirements: List[str]
+    autonomy_level_required: str
+    growth_mindset_indicators: List[str]
+    ideal_candidate_profile: str
+    
+    # Interview Process
+    interview_process_tags: List[str]
+    technical_assessment_type: List[str]
+    interview_focus_areas: List[str]
+    time_to_hire: str
+    decision_makers: List[str]
+    
+    # Recruiter Information
+    recruiter_pitch_points: List[str]
 
-    @validator('raw_text')
-    def clean_text(cls, v):
-        print(f"\n=== Validating input text ===")
-        print(f"Input value type: {type(v)}")
-        print(f"Input value length: {len(str(v)) if v else 0}")
-        print(f"First 100 chars: {str(v)[:100] if v else 'None'}")
-        
-        if not v:
-            print("Validation Error: Empty input")
-            raise ValueError("Text cannot be empty")
-        
-        # Convert to string if not already
-        v = str(v)
-        
-        # Handle escaped characters first
-        v = v.replace("\\'", "'")  # Replace escaped single quotes
-        v = v.replace('\\"', '"')  # Replace escaped double quotes
-        v = v.replace('\\\\', '\\')  # Handle escaped backslashes
-        v = v.replace('\\n', '\n')  # Handle escaped newlines
-        v = v.replace('\\t', '\t')  # Handle escaped tabs
-        v = v.replace('\\r', '\r')  # Handle escaped carriage returns
-        
-        # Remove any BOM characters
-        v = v.replace('\ufeff', '')
-        
-        # Remove null bytes and other problematic control characters
-        # Keep newlines, tabs, and carriage returns
-        v = ''.join(char for char in v if ord(char) >= 32 or char in '\n\r\t')
-        
-        # Normalize newlines
-        v = v.replace('\r\n', '\n').replace('\r', '\n')
-        
-        # Strip whitespace from start and end
-        v = v.strip()
-        
-        print(f"Cleaned value length: {len(v)}")
-        print(f"First 100 chars after cleaning: {v[:100]}")
-        print("=== Validation complete ===\n")
-        
+    @validator('company_stage', 'hiring_urgency', 'seniority_level', 'work_arrangement',
+              'role_category', 'tech_breadth_requirement', 'coding_proficiency_required',
+              'leadership_requirement', 'prior_startup_experience', 'product_development_stage')
+    def convert_to_list(cls, v):
+        if isinstance(v, str):
+            return [v]
+        return v
+
+    @validator('company_culture')
+    def convert_to_dict(cls, v):
+        if isinstance(v, str):
+            return {"work_environment": v}
         return v
 
 class MatchResponse(BaseModel):
@@ -1008,7 +1179,7 @@ async def process_candidate_resume(candidate_id: str, resume_text: str):
         )
 
 async def process_transcript_with_openai(transcript: str, metadata: Dict[str, Any]) -> Dict[str, Any]:
-    """Process transcript with OpenAI to generate summary and analysis."""
+    """Process transcript with OpenAI to generate summary and extract structured data."""
     try:
         # Extract first name from metadata
         candidate_name = metadata.get('name', '')
@@ -1020,46 +1191,75 @@ async def process_transcript_with_openai(transcript: str, metadata: Dict[str, An
         Transcript:
         {transcript}
         
-        Please provide a summary in this format:
+        Please extract and provide the following information in a structured format:
         
+        1. Key Information (required for matching):
+        - Skills: List all technical and soft skills mentioned
+        - Years of Experience: Total years of relevant experience
+        - Preferred Work Environment: Remote/Hybrid/On-site preferences
+        - Preferred Locations: List of cities/regions they're interested in
+        - Minimum Salary: Expected or minimum salary requirement
+        - Work Authorization: Current work authorization status
+        
+        2. Additional Information:
+        - Current Role: Details about current position
+        - Career Goals: Career objectives and aspirations
+        - Notable Projects: Key projects or achievements
+        - Leadership Experience: Any leadership or management experience
+        - Education: Educational background
+        - Industry Preferences: Preferred industries or company types
+        
+        3. Summary for Email:
         Hi {first_name},
         
-        Thank you for taking the time to speak with me today! I wanted to summarize the key points from our conversation:
+        Thank you for taking the time to speak with me today! Here are the key points from our conversation:
         
-        Key Points from Our Conversation:
-        - Current Role: [Details discussed about current position]
-        - Experience: [Years and types of experience discussed]
-        - Key Skills: [Main technical and soft skills highlighted]
-        - Career Goals: [Career objectives and aspirations discussed]
-        - Preferred Work Environment: [Work style and environment preferences]
+        [List 3-5 key points from the conversation]
         
-        Your Experience Highlights:
-        - Notable achievements and responsibilities discussed
-        - Technical expertise and project highlights
-        - Leadership and collaboration examples
+        [Include any specific next steps or action items discussed]
         
-        Next Steps:
-        [Outline the next steps discussed or recommended actions]
+        Please provide the response in JSON format with these exact keys:
+        {{
+            "skills": [],
+            "years_of_experience": "",
+            "preferred_work_environment": "",
+            "preferred_locations": [],
+            "minimum_salary": "",
+            "work_authorization": "",
+            "current_role": "",
+            "career_goals": "",
+            "notable_projects": "",
+            "leadership_experience": "",
+            "education": "",
+            "industry_preferences": "",
+            "key_points": [],
+            "next_steps": "",
+            "email_summary": ""
+        }}
         """
 
         # Get response from OpenAI
         response = openai_client.chat.completions.create(
             model="gpt-4-turbo-preview",
             messages=[
-                {"role": "system", "content": "You are a professional recruiter summarizing a job interview."},
+                {"role": "system", "content": "You are a professional recruiter analyzing a job interview. Extract all required information accurately and format it as specified."},
                 {"role": "user", "content": prompt}
             ],
             temperature=0.7,
-            max_tokens=1000
+            max_tokens=1500,
+            response_format={ "type": "json_object" }
         )
 
-        # Extract and return the summary
-        summary = response.choices[0].message.content
-
-        return {
-            "summary": summary,
-            "timestamp": datetime.now().isoformat()
-        }
+        # Parse the JSON response
+        try:
+            processed_data = json.loads(response.choices[0].message.content)
+            # Add first name to processed data
+            processed_data['first_name'] = first_name
+            processed_data['timestamp'] = datetime.now().isoformat()
+            return processed_data
+        except json.JSONDecodeError as e:
+            logger.error(f"Error parsing OpenAI response as JSON: {str(e)}")
+            raise
 
     except Exception as e:
         logger.error(f"Error processing transcript with OpenAI: {str(e)}")
@@ -1973,54 +2173,78 @@ async def process_job_in_background(job_id: str, file_content: bytes, filename: 
         }
         raise
 
-async def fetch_retell_transcript(call_id: str) -> Optional[Dict]:
+async def fetch_retell_transcript(call_id: str) -> dict:
     """Fetch transcript from Retell API."""
     try:
-        logger.info(f"🔄 Fetching transcript for call {call_id}")
+        # First get call data to check status
+        call_data = await fetch_retell_call_data(call_id)
+        logger.info(f"📞 Call metadata: {call_data.get('metadata', {})}")
         
-        # Get call data from Retell
-        call_data = await get_retell_call(call_id)
-        if not call_data:
-            raise Exception(f"Could not fetch call data for {call_id}")
+        # Check if call was answered but hung up immediately
+        if call_data.get('status') == 'ended' and not call_data.get('transcript'):
+            logger.info(f"📞 Call {call_id} was answered but hung up immediately")
+            return {
+                'call_id': call_id,
+                'status': 'ended',
+                'metadata': call_data.get('metadata', {}),
+                'transcript': None,
+                'duration': call_data.get('duration', 0)
+            }
+        
+        # If call was unanswered, return early
+        if call_data.get('status') == 'unanswered':
+            logger.info(f"📞 Call {call_id} was unanswered")
+            return {
+                'call_id': call_id,
+                'status': 'unanswered',
+                'metadata': call_data.get('metadata', {}),
+                'transcript': None,
+                'duration': 0
+            }
+        
+        # Get transcript
+        async with httpx.AsyncClient() as client:
+            response = await client.get(
+                f"{RETELL_API_BASE}/phone-call/{call_id}/transcript",
+                headers={"Authorization": f"Bearer {RETELL_API_KEY}"}
+            )
             
-        # Extract transcript and metadata
-        transcript = call_data.get("transcript", "")
-        metadata = call_data.get("metadata", {})
-        
-        # Log metadata for debugging
-        logger.info(f"📞 Call metadata: {metadata}")
-        
-        # If no transcript, check if it was an unanswered call
-        if not transcript:
-            call_status = call_data.get("call_status", "").lower()
-            disconnection_reason = call_data.get("disconnection_reason", "").lower()
-            
-            # Check for various unanswered call scenarios
-            if (call_status in ["no_answer", "busy", "failed", "error"] or 
-                disconnection_reason in ["dial_no_answer", "busy", "failed"]):
-                logger.info(f"Call {call_id} was not answered (status: {call_status}, reason: {disconnection_reason})")
+            if response.status_code == 404:
+                logger.warning(f"⚠️ No transcript available for call {call_id}")
                 return {
-                    'transcript': "",
-                    'metadata': metadata,  # Pass through the full metadata
-                    'call_status': call_status,
-                    'duration_ms': call_data.get('duration_ms', 0),
-                    'unanswered': True,
-                    'disconnection_reason': disconnection_reason
+                    'call_id': call_id,
+                    'status': call_data.get('status', 'unknown'),
+                    'metadata': call_data.get('metadata', {}),
+                    'transcript': None,
+                    'duration': call_data.get('duration', 0)
                 }
-            else:
-                logger.error(f"❌ No transcript available and call status ({call_status}) not recognized as unanswered")
-                raise Exception(f"No transcript available for call {call_id}")
+            
+            if response.status_code != 200:
+                raise Exception(f"Failed to fetch transcript: {response.text}")
             
         return {
-            'transcript': transcript,
-            'metadata': metadata,  # Pass through the full metadata
-            'call_status': call_data.get('call_status'),
-            'duration_ms': call_data.get('duration_ms')
+                'call_id': call_id,
+                'status': call_data.get('status', 'unknown'),
+                'metadata': call_data.get('metadata', {}),
+                'transcript': response.json(),
+                'duration': call_data.get('duration', 0)
         }
         
     except Exception as e:
         logger.error(f"❌ Error fetching transcript: {str(e)}")
         raise
+
+def has_sufficient_data(processed_data: Dict[str, Any]) -> bool:
+    """Check if we have sufficient data from the call to proceed with matchmaking."""
+    required_fields = [
+        'skills',
+        'years_of_experience',
+        'preferred_work_environment',
+        'preferred_locations',
+        'minimum_salary',
+        'work_authorization'
+    ]
+    return all(processed_data.get(field) for field in required_fields)
 
 async def fetch_and_store_retell_transcript(call_id: str) -> dict:
     """Fetch transcript from Retell and store in memory and Pinecone"""
@@ -2042,29 +2266,111 @@ async def fetch_and_store_retell_transcript(call_id: str) -> dict:
         # Determine call status based on transcript and call data
         call_status = "completed"  # default status
         transcript = transcript_data['transcript']
-        duration_ms = transcript_data.get('duration_ms', 0)
+        duration_ms = transcript_data.get('duration', 0)
         
         # Check if call was unanswered
         if transcript_data.get('unanswered', False):
             call_status = "missed"
             logger.info(f"Call {call_id} was not answered")
+            # Send missed call email using InteractionAgent
+            candidate_email = transcript_data['metadata'].get('email')
+            candidate_name = transcript_data['metadata'].get('name', '')  # Get full name from metadata
+            candidate_id = transcript_data['metadata'].get('candidate_id')
+            if candidate_email and candidate_id:  # Only require email and candidate_id
+                await interaction_agent.send_missed_call_email(candidate_email, candidate_name, candidate_id)
         # Check if call was missed (no transcript or very short duration)
         elif not transcript or duration_ms < 1000:  # Less than 1 second
             call_status = "missed"
             logger.info(f"Call {call_id} was missed (no transcript or very short duration)")
+            # Send missed call email using InteractionAgent
+            candidate_email = transcript_data['metadata'].get('email')
+            candidate_name = transcript_data['metadata'].get('name', '')  # Get full name from metadata
+            candidate_id = transcript_data['metadata'].get('candidate_id')
+            if candidate_email and candidate_id:  # Only require email and candidate_id
+                await interaction_agent.send_missed_call_email(candidate_email, candidate_name, candidate_id)
         # Check if call was cut short (short duration or minimal transcript)
         elif duration_ms < 30000 or len(transcript.split()) < 50:  # Less than 30 seconds or less than 50 words
             call_status = "short"
             logger.info(f"Call {call_id} was cut short (short duration or minimal transcript)")
+            # Send missed call email for short calls too using InteractionAgent
+            candidate_email = transcript_data['metadata'].get('email')
+            candidate_name = transcript_data['metadata'].get('name', '')  # Get full name from metadata
+            candidate_id = transcript_data['metadata'].get('candidate_id')
+            if candidate_email and candidate_id:  # Only require email and candidate_id
+                await interaction_agent.send_missed_call_email(candidate_email, candidate_name, candidate_id)
         
         # Process with OpenAI only if we have a completed call
         processed_data = {}
         if call_status == "completed":
             logger.info(f"📝 Processing transcript with OpenAI for call {call_id}")
+            
+            # Get candidate ID from metadata
+            candidate_id = transcript_data['metadata'].get('candidate_id')
+            resume_data = ''
+            
+            if candidate_id:
+                # Get resume data from vector store
+                try:
+                    logger.info(f"🔍 Fetching resume data for candidate {candidate_id}")
+                    candidate_query = candidates_index.query(
+                        vector=[0] * 1536,
+                        filter={"id": candidate_id},
+                        top_k=1,
+                        include_metadata=True
+                    )
+                    
+                    if candidate_query.matches:
+                        resume_data = candidate_query.matches[0].metadata.get('resume_text', '')
+                        logger.info(f"✅ Found resume data for candidate {candidate_id}")
+                    else:
+                        logger.warning(f"⚠️ No resume data found for candidate {candidate_id}")
+                except Exception as e:
+                    logger.error(f"❌ Error fetching resume data: {str(e)}")
+            
+            # Combine transcript and resume data
+            combined_text = f"""
+            Call Transcript:
+            {transcript}
+            
+            Resume Information:
+            {resume_data}
+            """
+            
             processed_data = await process_transcript_with_openai(
-                transcript_data['transcript'],
+                combined_text,
                 transcript_data['metadata']  # Pass metadata to get candidate name
             )
+
+            # Check if we have sufficient data for matchmaking
+            if has_sufficient_data(processed_data):
+                logger.info("✅ Sufficient data gathered from call and resume, proceeding with matchmaking")
+                try:
+                    # Create candidate data for matching
+                    candidate_data = {
+                        'id': candidate_id,
+                        'skills': processed_data.get('skills', []),
+                        'years_of_experience': processed_data.get('years_of_experience'),
+                        'preferred_work_environment': processed_data.get('preferred_work_environment'),
+                        'preferred_locations': processed_data.get('preferred_locations'),
+                        'minimum_salary': processed_data.get('minimum_salary'),
+                        'work_authorization': processed_data.get('work_authorization'),
+                        'email': transcript_data['metadata'].get('email')
+                    }
+                    
+                    # Trigger matchmaking through brain agent
+                    match_result = brain_agent.handle_candidate_submission(candidate_data)
+                    
+                    if match_result.get('status') == 'success':
+                        logger.info(f"✅ Successfully matched candidate {candidate_id}")
+                        # Add match results to processed data
+                        processed_data['match_results'] = match_result.get('match_details')
+                    else:
+                        logger.warning(f"⚠️ No immediate matches found for candidate {candidate_id}")
+                except Exception as e:
+                    logger.error(f"❌ Error in matchmaking process: {str(e)}")
+                    # Don't raise here as we still want to proceed with email sending
+            else:
+                logger.info("⚠️ Insufficient data from call and resume for matchmaking")
         else:
             # For missed or short calls, create minimal processed data
             processed_data = {
@@ -2073,10 +2379,10 @@ async def fetch_and_store_retell_transcript(call_id: str) -> dict:
                 'timestamp': datetime.now().isoformat()
             }
         
-        # Store in Pinecone if we have a candidate ID
+        # Store call status in Pinecone if we have a candidate ID
         candidate_id = transcript_data['metadata'].get('candidate_id')
         if candidate_id:
-            logger.info(f"💾 Storing transcript in Pinecone for candidate {candidate_id}")
+            logger.info(f"💾 Storing call status in Pinecone for candidate {candidate_id}")
             # Serialize processed_data for Pinecone metadata
             pinecone_metadata = {
                 'candidate_id': candidate_id,
@@ -2188,118 +2494,387 @@ async def get_retell_call(call_id: str) -> Optional[Dict]:
 
 @app.post("/jobs/submit")
 async def submit_job(
-    file: UploadFile = File(...),
+    job_data: JobSubmission,
     background_tasks: BackgroundTasks = BackgroundTasks()
-):
-    """
-    Submit a job posting by uploading a text file.
-    The file content will be processed using OpenAI and stored in Pinecone.
-    """
+) -> Dict[str, Any]:
+    """Submit a job posting for processing."""
     try:
-        print(f"\n=== Processing job submission at {datetime.utcnow().isoformat()} ===")
-        
-        # Validate file type
-        if not file.filename.lower().endswith(('.txt', '.md')):
-            raise HTTPException(
-                status_code=400,
-                detail="File must be a text file (.txt or .md)"
-            )
-        
-        # Read the file content
-        content = await file.read()
-        try:
-            raw_text = content.decode('utf-8')
-        except UnicodeDecodeError:
-            raise HTTPException(
-                status_code=400,
-                detail="File must be UTF-8 encoded text"
-            )
-        
         # Generate a unique job ID
-        job_id = f"job_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}"
-        print(f"Generated job ID: {job_id}")
+        job_id = str(uuid.uuid4())
         
         # Update job status
         job_statuses[job_id] = {
             "status": JobStatus.PROCESSING,
-            "progress": 0,
-            "message": "Starting job analysis"
+            "message": "Processing job submission",
+            "timestamp": datetime.utcnow().isoformat(),
+            "job_id": job_id
         }
         
-        try:
-            # Process job text with OpenAI
-            print("Processing with OpenAI...")
-            response = openai_client.chat.completions.create(
-                model="gpt-4-turbo-preview",
-                messages=[
-                    {"role": "system", "content": JOB_ANALYSIS_PROMPT},
-                    {"role": "user", "content": raw_text}
-                ],
-                temperature=0.3,
-                response_format={"type": "json_object"}
-            )
-            
-            # Parse the OpenAI response
-            try:
-                processed_data = json.loads(response.choices[0].message.content)
-                print("Successfully processed job text with OpenAI")
-            except json.JSONDecodeError as e:
-                print(f"Error parsing OpenAI response: {e}")
-                print(f"Raw response: {response.choices[0].message.content}")
-                raise HTTPException(
-                    status_code=500,
-                    detail="Failed to parse job analysis response"
-                )
-            
-            # Update job status
-            job_statuses[job_id] = {
-                "status": JobStatus.PROCESSING,
-                "progress": 50,
-                "message": "Storing job in database"
-            }
-            
-            # Store in vector database
-            vector_store = VectorStore(init_openai=True)
-            store_result = vector_store.store_job(job_id, processed_data)
-            
-            if store_result.get("status") == "error":
-                raise Exception(store_result.get("message", "Unknown error storing job"))
-            
-            # Update final status
-            job_statuses[job_id] = {
-                "status": JobStatus.COMPLETED,
-                "progress": 100,
-                "message": "Job processed and stored successfully",
-                "job_id": job_id,
-                "processed_data": processed_data
-            }
-            
-            return {
-                "status": "success",
-                "message": "Job processed and stored successfully",
-                "job_id": job_id,
-                "processed_data": processed_data
-            }
-            
-        except Exception as e:
-            print(f"Error processing job submission: {str(e)}")
+        # Initialize vector store
+        vector_store = VectorStore(init_openai=True)
+        
+        # Store job data in vector database
+        store_result = vector_store.store_job(job_id, job_data.model_dump())
+        
+        if store_result.get("status") == "error":
+            # Update job status to failed
             job_statuses[job_id] = {
                 "status": JobStatus.FAILED,
-                "progress": 0,
-                "message": f"Error: {str(e)}"
+                "message": f"Failed to store job: {store_result.get('message')}",
+                "timestamp": datetime.utcnow().isoformat(),
+                "job_id": job_id
             }
             raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"Failed to store job: {store_result.get('message')}"
+            )
+        
+        # Update job status to completed
+        job_statuses[job_id] = {
+            "status": JobStatus.COMPLETED,
+            "message": "Job stored successfully",
+            "timestamp": datetime.utcnow().isoformat(),
+            "job_id": job_id,
+            "data": job_data.model_dump()
+        }
+        
+        return {
+            "status": "success",
+            "job_id": job_id,
+            "message": "Job submitted successfully",
+            "data": job_data.model_dump()
+        }
+        
+    except ValidationError as e:
+        logger.error(f"Validation error: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Invalid job data: {str(e)}"
+        )
+    except HTTPException as e:
+        # Re-raise HTTP exceptions without modification
+        raise
+    except Exception as e:
+        logger.error(f"Error submitting job: {str(e)}")
+        logger.error(f"Error type: {type(e)}")
+        logger.error(f"Stack trace: {traceback.format_exc()}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Error submitting job: {str(e)}"
+        )
+
+class InboundEmailData(BaseModel):
+    headers: Dict[str, str]
+    text: str
+    html: Optional[str]
+    from_email: str
+    subject: str
+    to: str
+    envelope: Dict[str, Any]
+    attachments: Optional[List[Dict[str, Any]]] = []
+    
+async def process_candidate_email(email_data: InboundEmailData) -> Dict[str, Any]:
+    """Process an inbound email and extract candidate information."""
+    try:
+        logger.info("Processing inbound email...")
+        
+        # Extract basic information from email
+        from_email = email_data.from_email
+        subject = email_data.subject
+        body_text = email_data.text
+        body_html = email_data.html
+        
+        # Parse email body for candidate information
+        candidate_info = {
+            "email": from_email,
+            "subject": subject,
+            "body_text": body_text,
+            "body_html": body_html
+        }
+        
+        # Process attachments if any
+        if email_data.attachments:
+            logger.info(f"Found {len(email_data.attachments)} attachments")
+            for attachment in email_data.attachments:
+                # Process each attachment
+                attachment_info = process_email_attachment(attachment)
+                if attachment_info:
+                    candidate_info.update(attachment_info)
+        
+        return {
+            "status": "success",
+            "message": "Email processed successfully",
+            "data": candidate_info
+        }
+        
+    except Exception as e:
+        logger.error(f"Error processing email: {str(e)}")
+        logger.error(traceback.format_exc())
+        return {
+            "status": "error",
+            "message": f"Error processing email: {str(e)}"
+        }
+
+@app.post("/email/webhook")
+async def handle_sendgrid_webhook(request: Request):
+    """Handle incoming webhook from SendGrid for email processing."""
+    try:
+        # Get raw request body
+        body = await request.body()
+        
+        # Parse email data
+        email_data = json.loads(body)
+        
+        # Convert to Pydantic model
+        inbound_email = InboundEmailData(
+            headers=email_data.get('headers', {}),
+            text=email_data.get('text', ''),
+            html=email_data.get('html', ''),
+            from_email=email_data.get('from', ''),
+            subject=email_data.get('subject', ''),
+            to=email_data.get('to', ''),
+            envelope=email_data.get('envelope', {}),
+            attachments=email_data.get('attachments', [])
+        )
+        
+        # Process the email
+        result = await process_candidate_email(inbound_email)
+        
+        if result['status'] == 'error':
+            logger.error(f"Failed to process email: {result['message']}")
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=result['message']
+            )
+        
+        return result
+        
+    except json.JSONDecodeError as e:
+        logger.error(f"Invalid JSON in webhook payload: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid JSON payload"
+        )
+    except ValidationError as e:
+        logger.error(f"Invalid email data format: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Invalid email data format: {str(e)}"
+        )
+    except Exception as e:
+        logger.error(f"Error processing webhook: {str(e)}")
+        logger.error(traceback.format_exc())
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Error processing webhook: {str(e)}"
+        )
+
+async def get_embedding(text: str) -> List[float]:
+    """Get embedding vector for text using OpenAI's API."""
+    try:
+        # Ensure text is a string and not empty
+        if not isinstance(text, str) or not text.strip():
+            raise ValueError("Text must be a non-empty string")
+            
+        # Truncate text if too long (OpenAI has token limits)
+        max_tokens = 8000  # Conservative limit
+        text = text[:max_tokens]
+        
+        response = await openai_client.embeddings.create(
+            model="text-embedding-ada-002",
+            input=text
+        )
+        
+        return response.data[0].embedding
+        
+    except Exception as e:
+        logger.error(f"Error getting embedding: {str(e)}")
+        # Return a zero vector as fallback
+        return [0.0] * 1536
+
+@app.get("/test-slack")
+async def test_slack_notification():
+    """Test endpoint to verify Slack notifications are working."""
+    message = (
+        "🧪 *Test Notification*\n\n"
+        "This is a test message from Recruitcha's email processing system.\n"
+        "• Timestamp: {}\n"
+        "• Environment: Development\n"
+        "• Status: Testing"
+    ).format(datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
+    
+    success = await send_slack_notification(message)
+    
+    if success:
+        return {"status": "success", "message": "Slack notification sent successfully"}
+    else:
+        raise HTTPException(status_code=500, detail="Failed to send Slack notification")
+
+@app.get("/calls/initiate/{candidate_id}")
+async def initiate_call(candidate_id: str):
+    """Initiate a Retell AI call for a candidate."""
+    try:
+        # Get candidate's phone number from vector store
+        try:
+            # Query using metadata filter instead of vector ID
+            candidate_query = candidates_index.query(
+                vector=[0] * 1536,  # Dummy vector for metadata-only query
+                filter={"candidate_id": candidate_id},
+                top_k=1,
+                include_metadata=True
+            )
+            
+            if not candidate_query.matches:
+                raise HTTPException(
+                    status_code=404,
+                    detail=f"Candidate {candidate_id} not found"
+                )
+            
+            candidate_metadata = candidate_query.matches[0].metadata
+            phone_number = candidate_metadata.get('phone_number')
+            
+            if not phone_number:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"No phone number found for candidate {candidate_id}"
+                )
+            
+            # Prepare call data
+            call_data = {
+                "from_number": RETELL_FROM_NUMBER,
+                "to_number": phone_number,
+                "metadata": {
+                    "candidate_id": candidate_id,
+                    "name": candidate_metadata.get('name', ''),
+                    "email": candidate_metadata.get('email', '')
+                }
+            }
+            
+            # Make request to Retell API
+            headers = {
+                "Authorization": f"Bearer {RETELL_API_KEY}",
+                "Content-Type": "application/json"
+            }
+            
+            async with httpx.AsyncClient() as client:
+                response = await client.post(
+                    f"{RETELL_API_BASE}/create-phone-call",
+                    json=call_data,
+                    headers=headers
+                )
+                
+                if response.status_code != 201:
+                    raise HTTPException(
+                        status_code=response.status_code,
+                        detail=f"Failed to initiate call: {response.text}"
+                    )
+                
+                call_response = response.json()
+                logger.info(f"✅ Successfully initiated call for candidate {candidate_id}")
+                
+                return {
+                    "status": "success",
+                    "message": "Call initiated successfully",
+                    "call_id": call_response.get('call_id')
+                }
+                
+        except Exception as e:
+            logger.error(f"❌ Error initiating call: {str(e)}")
+            raise HTTPException(
                 status_code=500,
-                detail=f"Failed to process job submission: {str(e)}"
+                detail=f"Failed to initiate call: {str(e)}"
             )
             
     except Exception as e:
-        print(f"Error in job submission endpoint: {str(e)}")
+        logger.error(f"❌ Error in initiate_call endpoint: {str(e)}")
         raise HTTPException(
             status_code=500,
-            detail=f"Error processing job submission: {str(e)}"
+            detail=str(e)
         )
-    finally:
-        print("=== Job submission processing complete ===\n")
+
+async def fetch_retell_call_data(call_id: str) -> Dict[str, Any]:
+    """Fetch call data from Retell API."""
+    try:
+        logger.info(f"🔄 Fetching call data for {call_id}")
+        async with httpx.AsyncClient() as client:
+            response = await client.get(
+                f"{RETELL_API_BASE}/get-call/{call_id}",
+                headers={"Authorization": f"Bearer {RETELL_API_KEY}"}
+            )
+            
+            if response.status_code == 404:
+                logger.warning(f"⚠️ Call {call_id} not found")
+                return {}
+            
+            if response.status_code != 200:
+                raise Exception(f"Failed to fetch call data: {response.text}")
+            
+            return response.json()
+            
+    except Exception as e:
+        logger.error(f"❌ Error fetching call data: {str(e)}")
+        raise
+
+async def process_email_attachment(attachment: Dict[str, Any]) -> Dict[str, Any]:
+    """Process an email attachment and extract relevant information."""
+    try:
+        if not attachment:
+            return {}
+
+        # Get attachment details
+        filename = attachment.get('filename', '')
+        content_type = attachment.get('content-type', '')
+        content = attachment.get('content', '')
+
+        # Process PDF attachments (likely resumes)
+        if filename.lower().endswith('.pdf'):
+            try:
+                # Decode base64 content
+                pdf_content = base64.b64decode(content)
+                
+                # Create a temporary file
+                with tempfile.NamedTemporaryFile(suffix='.pdf', delete=False) as temp_file:
+                    temp_file.write(pdf_content)
+                    temp_file.flush()
+                    
+                    # Read PDF with PyPDF2
+                    pdf_reader = PdfReader(temp_file.name)
+                    text_content = []
+                    
+                    # Extract text from all pages
+                    for page in pdf_reader.pages:
+                        text_content.append(page.extract_text())
+                    
+                    # Clean up temp file
+                    os.unlink(temp_file.name)
+                    
+                    return {
+                        "attachment_type": "resume",
+                        "filename": filename,
+                        "content_type": content_type,
+                        "text_content": "\n".join(text_content)
+                    }
+                    
+            except Exception as pdf_error:
+                logger.error(f"Error processing PDF attachment: {str(pdf_error)}")
+                return {
+                    "attachment_type": "error",
+                    "filename": filename,
+                    "error": str(pdf_error)
+                }
+        
+        # Process other attachment types if needed
+        return {
+            "attachment_type": "unknown",
+            "filename": filename,
+            "content_type": content_type
+        }
+        
+    except Exception as e:
+        logger.error(f"Error processing attachment: {str(e)}")
+        return {
+            "attachment_type": "error",
+            "error": str(e)
+        }
 
 app = app
