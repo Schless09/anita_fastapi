@@ -71,6 +71,20 @@ logger.info("=====================================\n")
 # Load environment variables
 load_dotenv()
 
+# Configure Retell
+RETELL_CONFIG = {
+    'api_key': os.getenv('RETELL_API_KEY'),
+    'phone_number': os.getenv('RETELL_FROM_NUMBER', '+16506486990'),
+    'webhook_url': os.getenv('RETELL_WEBHOOK_URL', 'https://85ac-2601-645-8000-fe70-4981-3c72-e8ef-490f.ngrok-free.app/webhook/retell')
+}
+
+# Configure SendGrid
+SENDGRID_CONFIG = {
+    'api_key': os.getenv('SENDGRID_API_KEY'),
+    'sender_email': os.getenv('SENDGRID_SENDER_EMAIL', 'anita@anita.ai'),
+    'webhook_url': os.getenv('SENDGRID_WEBHOOK_URL', 'https://85ac-2601-645-8000-fe70-4981-3c72-e8ef-490f.ngrok-free.app/email/webhook')
+}
+
 # Initialize FastAPI app
 app = FastAPI(
     title="Anita AI Recruitment API",
@@ -2087,51 +2101,63 @@ async def process_job_in_background(job_id: str, file_content: bytes, filename: 
         }
         raise
 
-async def fetch_retell_transcript(call_id: str) -> Optional[Dict]:
+async def fetch_retell_transcript(call_id: str) -> dict:
     """Fetch transcript from Retell API."""
     try:
-        logger.info(f"🔄 Fetching transcript for call {call_id}")
+        # First get call data to check status
+        call_data = await fetch_retell_call_data(call_id)
+        logger.info(f"📞 Call metadata: {call_data.get('metadata', {})}")
         
-        # Get call data from Retell
-        call_data = await get_retell_call(call_id)
-        if not call_data:
-            raise Exception(f"Could not fetch call data for {call_id}")
+        # Check if call was answered but hung up immediately
+        if call_data.get('status') == 'ended' and not call_data.get('transcript'):
+            logger.info(f"📞 Call {call_id} was answered but hung up immediately")
+            return {
+                'call_id': call_id,
+                'status': 'ended',
+                'metadata': call_data.get('metadata', {}),
+                'transcript': None,
+                'duration': call_data.get('duration', 0)
+            }
+        
+        # If call was unanswered, return early
+        if call_data.get('status') == 'unanswered':
+            logger.info(f"📞 Call {call_id} was unanswered")
+            return {
+                'call_id': call_id,
+                'status': 'unanswered',
+                'metadata': call_data.get('metadata', {}),
+                'transcript': None,
+                'duration': 0
+            }
+        
+        # Get transcript
+        async with httpx.AsyncClient() as client:
+            response = await client.get(
+                f"{RETELL_API_BASE}/phone-call/{call_id}/transcript",
+                headers={"Authorization": f"Bearer {RETELL_API_KEY}"}
+            )
             
-        # Extract transcript and metadata
-        transcript = call_data.get("transcript", "")
-        metadata = call_data.get("metadata", {})
-        
-        # Log metadata for debugging
-        logger.info(f"📞 Call metadata: {metadata}")
-        
-        # If no transcript, check if it was an unanswered call
-        if not transcript:
-            call_status = call_data.get("call_status", "").lower()
-            disconnection_reason = call_data.get("disconnection_reason", "").lower()
-            
-            # Check for various unanswered call scenarios
-            if (call_status in ["no_answer", "busy", "failed", "error"] or 
-                disconnection_reason in ["dial_no_answer", "busy", "failed"]):
-                logger.info(f"Call {call_id} was not answered (status: {call_status}, reason: {disconnection_reason})")
+            if response.status_code == 404:
+                logger.warning(f"⚠️ No transcript available for call {call_id}")
                 return {
-                    'transcript': "",
-                    'metadata': metadata,  # Pass through the full metadata
-                    'call_status': call_status,
-                    'duration_ms': call_data.get('duration_ms', 0),
-                    'unanswered': True,
-                    'disconnection_reason': disconnection_reason
+                    'call_id': call_id,
+                    'status': call_data.get('status', 'unknown'),
+                    'metadata': call_data.get('metadata', {}),
+                    'transcript': None,
+                    'duration': call_data.get('duration', 0)
                 }
-            else:
-                logger.error(f"❌ No transcript available and call status ({call_status}) not recognized as unanswered")
-                raise Exception(f"No transcript available for call {call_id}")
             
-        return {
-            'transcript': transcript,
-            'metadata': metadata,  # Pass through the full metadata
-            'call_status': call_data.get('call_status'),
-            'duration_ms': call_data.get('duration_ms')
-        }
-        
+            if response.status_code != 200:
+                raise Exception(f"Failed to fetch transcript: {response.text}")
+            
+            return {
+                'call_id': call_id,
+                'status': call_data.get('status', 'unknown'),
+                'metadata': call_data.get('metadata', {}),
+                'transcript': response.json(),
+                'duration': call_data.get('duration', 0)
+            }
+            
     except Exception as e:
         logger.error(f"❌ Error fetching transcript: {str(e)}")
         raise
@@ -2168,7 +2194,7 @@ async def fetch_and_store_retell_transcript(call_id: str) -> dict:
         # Determine call status based on transcript and call data
         call_status = "completed"  # default status
         transcript = transcript_data['transcript']
-        duration_ms = transcript_data.get('duration_ms', 0)
+        duration_ms = transcript_data.get('duration', 0)
         
         # Check if call was unanswered
         if transcript_data.get('unanswered', False):
@@ -2176,27 +2202,30 @@ async def fetch_and_store_retell_transcript(call_id: str) -> dict:
             logger.info(f"Call {call_id} was not answered")
             # Send missed call email using InteractionAgent
             candidate_email = transcript_data['metadata'].get('email')
-            candidate_name = transcript_data['metadata'].get('name', '').split()[0]
-            if candidate_email and candidate_name:
-                await interaction_agent.send_missed_call_email(candidate_email, candidate_name)
+            candidate_name = transcript_data['metadata'].get('name', '')  # Get full name from metadata
+            candidate_id = transcript_data['metadata'].get('candidate_id')
+            if candidate_email and candidate_id:  # Only require email and candidate_id
+                await interaction_agent.send_missed_call_email(candidate_email, candidate_name, candidate_id)
         # Check if call was missed (no transcript or very short duration)
         elif not transcript or duration_ms < 1000:  # Less than 1 second
             call_status = "missed"
             logger.info(f"Call {call_id} was missed (no transcript or very short duration)")
             # Send missed call email using InteractionAgent
             candidate_email = transcript_data['metadata'].get('email')
-            candidate_name = transcript_data['metadata'].get('name', '').split()[0]
-            if candidate_email and candidate_name:
-                await interaction_agent.send_missed_call_email(candidate_email, candidate_name)
+            candidate_name = transcript_data['metadata'].get('name', '')  # Get full name from metadata
+            candidate_id = transcript_data['metadata'].get('candidate_id')
+            if candidate_email and candidate_id:  # Only require email and candidate_id
+                await interaction_agent.send_missed_call_email(candidate_email, candidate_name, candidate_id)
         # Check if call was cut short (short duration or minimal transcript)
         elif duration_ms < 30000 or len(transcript.split()) < 50:  # Less than 30 seconds or less than 50 words
             call_status = "short"
             logger.info(f"Call {call_id} was cut short (short duration or minimal transcript)")
             # Send missed call email for short calls too using InteractionAgent
             candidate_email = transcript_data['metadata'].get('email')
-            candidate_name = transcript_data['metadata'].get('name', '').split()[0]
-            if candidate_email and candidate_name:
-                await interaction_agent.send_missed_call_email(candidate_email, candidate_name)
+            candidate_name = transcript_data['metadata'].get('name', '')  # Get full name from metadata
+            candidate_id = transcript_data['metadata'].get('candidate_id')
+            if candidate_email and candidate_id:  # Only require email and candidate_id
+                await interaction_agent.send_missed_call_email(candidate_email, candidate_name, candidate_id)
         
         # Process with OpenAI only if we have a completed call
         processed_data = {}
@@ -2786,5 +2815,110 @@ async def test_slack_notification():
         return {"status": "success", "message": "Slack notification sent successfully"}
     else:
         raise HTTPException(status_code=500, detail="Failed to send Slack notification")
+
+@app.get("/calls/initiate/{candidate_id}")
+async def initiate_call(candidate_id: str):
+    """Initiate a Retell AI call for a candidate."""
+    try:
+        # Get candidate's phone number from vector store
+        try:
+            # Query using metadata filter instead of vector ID
+            candidate_query = candidates_index.query(
+                vector=[0] * 1536,  # Dummy vector for metadata-only query
+                filter={"candidate_id": candidate_id},
+                top_k=1,
+                include_metadata=True
+            )
+            
+            if not candidate_query.matches:
+                raise HTTPException(
+                    status_code=404,
+                    detail=f"Candidate {candidate_id} not found"
+                )
+            
+            candidate_metadata = candidate_query.matches[0].metadata
+            phone_number = candidate_metadata.get('phone_number')
+            
+            if not phone_number:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"No phone number found for candidate {candidate_id}"
+                )
+            
+            # Prepare call data
+            call_data = {
+                "from_number": RETELL_FROM_NUMBER,
+                "to_number": phone_number,
+                "metadata": {
+                    "candidate_id": candidate_id,
+                    "name": candidate_metadata.get('name', ''),
+                    "email": candidate_metadata.get('email', '')
+                }
+            }
+            
+            # Make request to Retell API
+            headers = {
+                "Authorization": f"Bearer {RETELL_API_KEY}",
+                "Content-Type": "application/json"
+            }
+            
+            async with httpx.AsyncClient() as client:
+                response = await client.post(
+                    f"{RETELL_API_BASE}/create-phone-call",
+                    json=call_data,
+                    headers=headers
+                )
+                
+                if response.status_code != 201:
+                    raise HTTPException(
+                        status_code=response.status_code,
+                        detail=f"Failed to initiate call: {response.text}"
+                    )
+                
+                call_response = response.json()
+                logger.info(f"✅ Successfully initiated call for candidate {candidate_id}")
+                
+                return {
+                    "status": "success",
+                    "message": "Call initiated successfully",
+                    "call_id": call_response.get('call_id')
+                }
+                
+        except Exception as e:
+            logger.error(f"❌ Error initiating call: {str(e)}")
+            raise HTTPException(
+                status_code=500,
+                detail=f"Failed to initiate call: {str(e)}"
+            )
+            
+    except Exception as e:
+        logger.error(f"❌ Error in initiate_call endpoint: {str(e)}")
+        raise HTTPException(
+            status_code=500,
+            detail=str(e)
+        )
+
+async def fetch_retell_call_data(call_id: str) -> Dict[str, Any]:
+    """Fetch call data from Retell API."""
+    try:
+        logger.info(f"🔄 Fetching call data for {call_id}")
+        async with httpx.AsyncClient() as client:
+            response = await client.get(
+                f"{RETELL_API_BASE}/get-call/{call_id}",
+                headers={"Authorization": f"Bearer {RETELL_API_KEY}"}
+            )
+            
+            if response.status_code == 404:
+                logger.warning(f"⚠️ Call {call_id} not found")
+                return {}
+            
+            if response.status_code != 200:
+                raise Exception(f"Failed to fetch call data: {response.text}")
+            
+            return response.json()
+            
+    except Exception as e:
+        logger.error(f"❌ Error fetching call data: {str(e)}")
+        raise
 
 app = app
