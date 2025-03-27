@@ -4,6 +4,11 @@ from .intake_matching_agent import IntakeMatchingAgent
 from .interaction_agent import InteractionAgent
 from .vector_store import VectorStore
 from typing import Dict, Any, Optional
+import logging
+
+# Configure logger
+logger = logging.getLogger(__name__)
+logger.setLevel(logging.INFO)
 
 class BrainAgent:
     def __init__(self, vector_store: Optional[VectorStore] = None):
@@ -17,10 +22,13 @@ class BrainAgent:
     def handle_candidate_submission(self, candidate_data: Dict[str, Any]) -> Dict[str, Any]:
         """Handles new candidate submissions with enhanced matching."""
         candidate_id = candidate_data.get('id', 'default_id')
+        logger.info(f"\n🎯 Starting matchmaking process for candidate {candidate_id}")
+        
         self.state[candidate_id] = 'screening'
         
         # Initialize or update candidate profile
         if candidate_id not in self.candidate_profiles:
+            logger.info(f"📝 Creating new profile for candidate {candidate_id}")
             self.candidate_profiles[candidate_id] = {
                 'basic_info': candidate_data,
                 'transcript': None,
@@ -32,24 +40,39 @@ class BrainAgent:
             }
         
         # Store candidate in vector database with enhanced metadata
+        logger.info(f"💾 Storing candidate data in vector database...")
         vector_result = self.vector_store.store_candidate(candidate_id, candidate_data)
         self.candidate_profiles[candidate_id]['vector_id'] = candidate_id
         
+        # Screening phase
+        logger.info(f"🔍 Screening candidate {candidate_id}...")
         screening_result = self.intake_agent.screen_candidate(candidate_data)
+        
         if screening_result:
+            logger.info(f"✅ Candidate {candidate_id} passed screening")
             self.state[candidate_id] = 'matching'
             self.candidate_profiles[candidate_id]['screening_result'] = screening_result
             
+            # Matching phase
+            logger.info(f"🤝 Starting job matching for candidate {candidate_id}...")
             match_result = self.matching_agent.match_candidate(screening_result)
+            
             if match_result:
+                logger.info(f"🎉 Found a match for candidate {candidate_id}!")
+                logger.info(f"📊 Match Score: {match_result.get('match_score', 0):.2f}")
+                logger.info(f"💼 Job Title: {match_result.get('job_details', {}).get('job_title', 'N/A')}")
+                logger.info(f"🏢 Company: {match_result.get('job_details', {}).get('company_name', 'N/A')}")
+                
                 self.state[candidate_id] = 'interaction'
                 self.candidate_profiles[candidate_id]['match_result'] = match_result
                 self.candidate_profiles[candidate_id]['dealbreakers'] = match_result.get('dealbreakers')
                 self.candidate_profiles[candidate_id]['match_reason'] = match_result.get('match_reason')
                 
-                # Include enhanced matching information in the interaction
+                # Interaction phase
+                logger.info(f"📧 Sending job opportunity email to candidate {candidate_id}...")
                 self.interaction_agent.contact_candidate(match_result)
                 self.state[candidate_id] = 'completed'
+                logger.info(f"✨ Matchmaking process completed for candidate {candidate_id}")
                 
                 return {
                     'status': 'success',
@@ -63,8 +86,11 @@ class BrainAgent:
                     }
                 }
             else:
+                logger.info(f"⚠️ No immediate matches found for candidate {candidate_id}")
                 self.state[candidate_id] = 'store_for_future'
                 store_result = self.store_for_future_opportunities(candidate_data)
+                logger.info(f"💾 Stored candidate {candidate_id} for future opportunities")
+                
                 return {
                     'status': 'success',
                     'message': 'No immediate matches found',
@@ -72,6 +98,7 @@ class BrainAgent:
                     'store_result': store_result
                 }
         else:
+            logger.warning(f"❌ Candidate {candidate_id} did not pass screening")
             self.state[candidate_id] = 'screening_failed'
             return {
                 'status': 'error',

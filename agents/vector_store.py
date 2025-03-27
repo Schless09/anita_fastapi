@@ -698,23 +698,19 @@ class VectorStore:
                 }]
             )
             
-            # Add a small delay to allow for indexing
-            time.sleep(1)
+            # Add a longer initial delay to allow for indexing
+            time.sleep(2)
             
             # Verify the job was stored by querying it
             max_retries = 3
-            retry_delay = 1
+            retry_delay = 2  # Start with a longer delay
             
             for attempt in range(max_retries):
                 try:
-                    # Query the job by ID
-                    query_response = self.jobs_index.query(
-                        id=job_id,
-                        top_k=1,
-                        include_metadata=True
-                    )
+                    # Query the job by ID using fetch instead of query
+                    fetch_response = self.jobs_index.fetch(ids=[job_id])
                     
-                    if query_response.matches and query_response.matches[0].id == job_id:
+                    if job_id in fetch_response.vectors:
                         logger.info(f"Successfully verified job storage for ID: {job_id}")
                         return {"status": "success", "job_id": job_id}
                     
@@ -735,4 +731,4 @@ class VectorStore:
             
         except Exception as e:
             logger.error(f"Error storing job {job_id}: {str(e)}")
-            raise 
+            return {"status": "error", "message": str(e)} 

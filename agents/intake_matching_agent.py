@@ -1,6 +1,11 @@
 # agents/intake_matching_agent.py
 from .vector_store import VectorStore
 from typing import Dict, Any, Optional, List
+import logging
+
+# Configure logger
+logger = logging.getLogger(__name__)
+logger.setLevel(logging.INFO)
 
 class IntakeMatchingAgent:
     def __init__(self, vector_store: Optional[VectorStore] = None):
@@ -14,13 +19,34 @@ class IntakeMatchingAgent:
         """
         # Store/update candidate in vector database
         candidate_id = candidate_data.get('id', 'default_id')
+        logger.info(f"\n🔍 Starting job matching process for candidate {candidate_id}")
+        
+        # Store candidate in vector database
+        logger.info(f"💾 Storing candidate data in vector database...")
         self.vector_store.store_candidate(candidate_id, candidate_data)
         
         # Find matching jobs with enhanced matching
+        logger.info(f"🔎 Searching for matching jobs...")
         matches = self.vector_store.find_similar_jobs(candidate_id)
         
         if matches['status'] == 'success' and matches['matches']:
             best_match = matches['matches'][0]  # First match is highest scoring
+            match_score = best_match['score']
+            job_title = best_match['metadata'].get('job_title', 'N/A')
+            company = best_match['metadata'].get('company_name', 'N/A')
+            
+            logger.info(f"🎯 Found {len(matches['matches'])} potential matches")
+            logger.info(f"⭐ Best match: {job_title} at {company}")
+            logger.info(f"📊 Match score: {match_score:.2f}")
+            
+            # Log dealbreakers
+            dealbreakers = best_match.get('dealbreakers', {})
+            if dealbreakers:
+                logger.info("✅ Dealbreakers check:")
+                for key, value in dealbreakers.items():
+                    status = "✅" if value else "❌"
+                    logger.info(f"  {status} {key.replace('_', ' ').title()}")
+            
             return {
                 'candidate_id': candidate_id,
                 'job_id': best_match['job_id'],
@@ -31,7 +57,9 @@ class IntakeMatchingAgent:
                 'phone_number': candidate_data.get('phone_number'),
                 'email': candidate_data.get('email')
             }
-        return None
+        else:
+            logger.warning(f"⚠️ No matches found for candidate {candidate_id}")
+            return None
 
     def fetch_open_positions(self) -> List[Dict[str, Any]]:
         """Fetch all open positions from the jobs index"""
