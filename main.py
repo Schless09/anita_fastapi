@@ -624,47 +624,119 @@ class TechnicalAssessmentType(str, Enum):
     ML_DESIGN = "ML design"
 
 class JobSubmission(BaseModel):
-    raw_text: str
+    """Pydantic model for job submission data."""
+    # Company Information
+    company_name: str
+    company_url: str
+    company_stage: Union[str, List[str]]
+    most_recent_funding_round_amount: str
+    total_funding_amount: str
+    investors: List[str]
+    team_size: str
+    founding_year: str
+    company_mission: str
+    target_market: List[str]
+    industry_vertical: str
+    company_vision: str
+    company_growth_story: str
+    company_culture: Union[str, Dict[str, str]]
+    scaling_plans: str
+    mission_and_impact: str
+    tech_innovation: str
+    
+    # Job Details
+    job_title: str
+    job_url: str
+    positions_available: str
+    hiring_urgency: Union[str, List[str]]
+    seniority_level: Union[str, List[str]]
+    work_arrangement: Union[str, List[str]]
+    city: List[str]
+    state: List[str]
+    visa_sponsorship: str
+    work_authorization: str
+    salary_range: str
+    equity_range: str
+    reporting_structure: str
+    team_composition: str
+    role_status: str
+    
+    # Technical Requirements
+    role_category: Union[str, List[str]]
+    tech_stack_must_haves: List[str]
+    tech_stack_nice_to_haves: List[str]
+    tech_stack_tags: List[str]
+    tech_breadth_requirement: Union[str, List[str]]
+    minimum_years_of_experience: str
+    domain_expertise: List[str]
+    ai_ml_experience: str
+    infrastructure_experience: List[str]
+    system_design_level: str
+    coding_proficiency_required: Union[str, List[str]]
+    coding_languages_versions: List[str]
+    version_control_experience: List[str]
+    ci_cd_tools: List[str]
+    collaborative_tools: List[str]
+    
+    # Candidate Requirements
+    leadership_requirement: Union[str, List[str]]
+    education_requirement: str
+    advanced_degree_preference: str
+    papers_publications_preferred: str
+    prior_startup_experience: Union[str, List[str]]
+    advancement_history_required: bool
+    independent_work_capacity: str
+    skills_must_have: List[str]
+    skills_preferred: List[str]
+    
+    # Product Information
+    product_details: str
+    product_development_stage: Union[str, List[str]]
+    technical_challenges: List[str]
+    key_responsibilities: List[str]
+    scope_of_impact: List[str]
+    expected_deliverables: List[str]
+    product_development_methodology: List[str]
+    
+    # Company Environment
+    stage_of_codebase: str
+    growth_trajectory: str
+    founder_background: str
+    funding_stability: str
+    expected_hours: str
+    
+    # Candidate Fit
+    ideal_companies: List[str]
+    deal_breakers: List[str]
+    disqualifying_traits: List[str]
+    culture_fit_indicators: List[str]
+    startup_mindset_requirements: List[str]
+    autonomy_level_required: str
+    growth_mindset_indicators: List[str]
+    ideal_candidate_profile: str
+    
+    # Interview Process
+    interview_process_tags: List[str]
+    technical_assessment_type: List[str]
+    interview_focus_areas: List[str]
+    time_to_hire: str
+    decision_makers: List[str]
+    
+    # Recruiter Information
+    recruiter_pitch_points: List[str]
 
-    @validator('raw_text')
-    def clean_text(cls, v):
-        print(f"\n=== Validating input text ===")
-        print(f"Input value type: {type(v)}")
-        print(f"Input value length: {len(str(v)) if v else 0}")
-        print(f"First 100 chars: {str(v)[:100] if v else 'None'}")
-        
-        if not v:
-            print("Validation Error: Empty input")
-            raise ValueError("Text cannot be empty")
-        
-        # Convert to string if not already
-        v = str(v)
-        
-        # Handle escaped characters first
-        v = v.replace("\\'", "'")  # Replace escaped single quotes
-        v = v.replace('\\"', '"')  # Replace escaped double quotes
-        v = v.replace('\\\\', '\\')  # Handle escaped backslashes
-        v = v.replace('\\n', '\n')  # Handle escaped newlines
-        v = v.replace('\\t', '\t')  # Handle escaped tabs
-        v = v.replace('\\r', '\r')  # Handle escaped carriage returns
-        
-        # Remove any BOM characters
-        v = v.replace('\ufeff', '')
-        
-        # Remove null bytes and other problematic control characters
-        # Keep newlines, tabs, and carriage returns
-        v = ''.join(char for char in v if ord(char) >= 32 or char in '\n\r\t')
-        
-        # Normalize newlines
-        v = v.replace('\r\n', '\n').replace('\r', '\n')
-        
-        # Strip whitespace from start and end
-        v = v.strip()
-        
-        print(f"Cleaned value length: {len(v)}")
-        print(f"First 100 chars after cleaning: {v[:100]}")
-        print("=== Validation complete ===\n")
-        
+    @validator('company_stage', 'hiring_urgency', 'seniority_level', 'work_arrangement',
+              'role_category', 'tech_breadth_requirement', 'coding_proficiency_required',
+              'leadership_requirement', 'prior_startup_experience', 'product_development_stage')
+    def convert_to_list(cls, v):
+        if isinstance(v, str):
+            return [v]
+        return v
+
+    @validator('company_culture')
+    def convert_to_dict(cls, v):
+        if isinstance(v, str):
+            return {"work_environment": v}
         return v
 
 class MatchResponse(BaseModel):
@@ -2150,14 +2222,14 @@ async def fetch_retell_transcript(call_id: str) -> dict:
             if response.status_code != 200:
                 raise Exception(f"Failed to fetch transcript: {response.text}")
             
-            return {
+        return {
                 'call_id': call_id,
                 'status': call_data.get('status', 'unknown'),
                 'metadata': call_data.get('metadata', {}),
                 'transcript': response.json(),
                 'duration': call_data.get('duration', 0)
-            }
-            
+        }
+        
     except Exception as e:
         logger.error(f"❌ Error fetching transcript: {str(e)}")
         raise
@@ -2272,7 +2344,6 @@ async def fetch_and_store_retell_transcript(call_id: str) -> dict:
             # Check if we have sufficient data for matchmaking
             if has_sufficient_data(processed_data):
                 logger.info("✅ Sufficient data gathered from call and resume, proceeding with matchmaking")
-                
                 try:
                     # Create candidate data for matching
                     candidate_data = {
@@ -2423,119 +2494,74 @@ async def get_retell_call(call_id: str) -> Optional[Dict]:
 
 @app.post("/jobs/submit")
 async def submit_job(
-    file: UploadFile = File(...),
+    job_data: JobSubmission,
     background_tasks: BackgroundTasks = BackgroundTasks()
-):
-    """
-    Submit a job posting by uploading a text file.
-    The file content will be processed using OpenAI and stored in Pinecone.
-    """
+) -> Dict[str, Any]:
+    """Submit a job posting for processing."""
     try:
-        print(f"\n=== Processing job submission at {datetime.utcnow().isoformat()} ===")
-        
-        # Validate file type
-        if not file.filename.lower().endswith(('.txt', '.md')):
-            raise HTTPException(
-                status_code=400,
-                detail="File must be a text file (.txt or .md)"
-            )
-        
-        # Read the file content
-        content = await file.read()
-        try:
-            raw_text = content.decode('utf-8')
-        except UnicodeDecodeError:
-            raise HTTPException(
-                status_code=400,
-                detail="File must be UTF-8 encoded text"
-            )
-        
         # Generate a unique job ID
-        job_id = f"job_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}"
-        print(f"Generated job ID: {job_id}")
+        job_id = str(uuid.uuid4())
         
         # Update job status
         job_statuses[job_id] = {
             "status": JobStatus.PROCESSING,
-            "progress": 0,
-            "message": "Starting job analysis"
+            "message": "Processing job submission",
+            "timestamp": datetime.utcnow().isoformat(),
+            "job_id": job_id
         }
         
-        try:
-            # Process job text with OpenAI
-            print("Processing with OpenAI...")
-            response = openai_client.chat.completions.create(
-                model="gpt-4-turbo-preview",
-                messages=[
-                    {"role": "system", "content": JOB_ANALYSIS_PROMPT},
-                    {"role": "user", "content": raw_text}
-                ],
-                temperature=0.3,
-                response_format={"type": "json_object"}
-            )
-            
-            # Parse the OpenAI response
-            try:
-                processed_data = json.loads(response.choices[0].message.content)
-                print("Successfully processed job text with OpenAI")
-            except json.JSONDecodeError as e:
-                print(f"Error parsing OpenAI response: {e}")
-                print(f"Raw response: {response.choices[0].message.content}")
-                raise HTTPException(
-                    status_code=500,
-                    detail="Failed to parse job analysis response"
-                )
-            
-            # Update job status
-            job_statuses[job_id] = {
-                "status": JobStatus.PROCESSING,
-                "progress": 50,
-                "message": "Storing job in database"
-            }
-            
-            # Store in vector database
-            vector_store = VectorStore(init_openai=True)
-            store_result = vector_store.store_job(job_id, processed_data)
-            
-            if store_result.get("status") == "error":
-                raise Exception(store_result.get("message", "Unknown error storing job"))
-            
-            # Update final status
-            job_statuses[job_id] = {
-                "status": JobStatus.COMPLETED,
-                "progress": 100,
-                "message": "Job processed and stored successfully",
-                "job_id": job_id,
-                "processed_data": processed_data
-            }
-            
-            return {
-                "status": "success",
-                "message": "Job processed and stored successfully",
-                "job_id": job_id,
-                "processed_data": processed_data
-            }
-            
-        except Exception as e:
-            print(f"Error processing job submission: {str(e)}")
+        # Initialize vector store
+        vector_store = VectorStore(init_openai=True)
+        
+        # Store job data in vector database
+        store_result = vector_store.store_job(job_id, job_data.model_dump())
+        
+        if store_result.get("status") == "error":
+            # Update job status to failed
             job_statuses[job_id] = {
                 "status": JobStatus.FAILED,
-                "progress": 0,
-                "message": f"Error: {str(e)}"
+                "message": f"Failed to store job: {store_result.get('message')}",
+                "timestamp": datetime.utcnow().isoformat(),
+                "job_id": job_id
             }
             raise HTTPException(
-                status_code=500,
-                detail=f"Failed to process job submission: {str(e)}"
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"Failed to store job: {store_result.get('message')}"
             )
-            
-    except Exception as e:
-        print(f"Error in job submission endpoint: {str(e)}")
+        
+        # Update job status to completed
+        job_statuses[job_id] = {
+            "status": JobStatus.COMPLETED,
+            "message": "Job stored successfully",
+            "timestamp": datetime.utcnow().isoformat(),
+            "job_id": job_id,
+            "data": job_data.model_dump()
+        }
+        
+        return {
+            "status": "success",
+            "job_id": job_id,
+            "message": "Job submitted successfully",
+            "data": job_data.model_dump()
+        }
+        
+    except ValidationError as e:
+        logger.error(f"Validation error: {str(e)}")
         raise HTTPException(
-            status_code=500,
-            detail=f"Error processing job submission: {str(e)}"
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Invalid job data: {str(e)}"
         )
-    finally:
-        print("=== Job submission processing complete ===\n")
+    except HTTPException as e:
+        # Re-raise HTTP exceptions without modification
+        raise
+    except Exception as e:
+        logger.error(f"Error submitting job: {str(e)}")
+        logger.error(f"Error type: {type(e)}")
+        logger.error(f"Stack trace: {traceback.format_exc()}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Error submitting job: {str(e)}"
+        )
 
 class InboundEmailData(BaseModel):
     headers: Dict[str, str]
@@ -2548,232 +2574,100 @@ class InboundEmailData(BaseModel):
     attachments: Optional[List[Dict[str, Any]]] = []
     
 async def process_candidate_email(email_data: InboundEmailData) -> Dict[str, Any]:
-    """Process an incoming email from a candidate."""
+    """Process an inbound email and extract candidate information."""
     try:
-        logger.info(f"🔍 Processing email from: {email_data.from_email}")
+        logger.info("Processing inbound email...")
         
-        # Extract candidate email from the 'from' field
-        candidate_email = email_data.from_email
+        # Extract basic information from email
+        from_email = email_data.from_email
+        subject = email_data.subject
+        body_text = email_data.text
+        body_html = email_data.html
         
-        # Search for candidate in Pinecone by email
-        logger.info("🔎 Searching for candidate in database...")
-        candidate_query = {
-            'filter': {
-                'email': candidate_email
-            }
+        # Parse email body for candidate information
+        candidate_info = {
+            "email": from_email,
+            "subject": subject,
+            "body_text": body_text,
+            "body_html": body_html
         }
         
-        results = candidates_index.query(
-            vector=[0] * 1536,  # Dummy vector for query
-            filter=candidate_query['filter'],
-            top_k=1,
-            include_metadata=True
-        )
+        # Process attachments if any
+        if email_data.attachments:
+            logger.info(f"Found {len(email_data.attachments)} attachments")
+            for attachment in email_data.attachments:
+                # Process each attachment
+                attachment_info = process_email_attachment(attachment)
+                if attachment_info:
+                    candidate_info.update(attachment_info)
         
-        if not results.matches:
-            logger.error(f"❓ No candidate found for email: {candidate_email}")
-            return {
-                'status': 'error',
-                'message': 'Candidate not found'
-            }
-            
-        candidate_id = results.matches[0].id
-        candidate_metadata = results.matches[0].metadata
-        logger.info(f"✅ Found candidate: {candidate_metadata.get('name', 'Unknown')}")
-        
-        # Process the email content with OpenAI for internal analysis
-        logger.info("🤖 Analyzing email content with AI...")
-        analysis_prompt = f"""Analyze this email from a candidate and help understand their question or concern:
-
-        Email Subject: {email_data.subject}
-        Email Content: {email_data.text}
-        
-        Please provide:
-        1. The main question or concern
-        2. Any specific job roles mentioned
-        3. Any new preferences or requirements mentioned
-        4. Suggested response approach
-        
-        Format the response as JSON with these keys:
-        {{
-            "main_question": string,
-            "mentioned_jobs": list[string],
-            "new_preferences": dict,
-            "response_approach": string,
-            "requires_human_review": boolean
-        }}
-        """
-        
-        response = openai_client.chat.completions.create(
-            model="gpt-4-turbo-preview",
-            messages=[
-                {"role": "system", "content": "You are an AI assistant helping to analyze candidate emails."},
-                {"role": "user", "content": analysis_prompt}
-            ],
-            temperature=0.7,
-            max_tokens=1000,
-            response_format={ "type": "json_object" }
-        )
-        
-        analysis = json.loads(response.choices[0].message.content)
-        logger.info(f"📊 Analysis complete:")
-        logger.info(f"❓ Main question: {analysis['main_question']}")
-        logger.info(f"💼 Jobs mentioned: {', '.join(analysis['mentioned_jobs']) if analysis['mentioned_jobs'] else 'None'}")
-        logger.info(f"👀 Requires human review: {'Yes' if analysis['requires_human_review'] else 'No'}")
-        
-        # Update candidate profile with new preferences
-        if analysis['new_preferences']:
-            logger.info("📝 Updating candidate preferences...")
-            updated_metadata = candidate_metadata.copy()
-            updated_metadata['preferences'] = {
-                **updated_metadata.get('preferences', {}),
-                **analysis['new_preferences']
-            }
-            updated_metadata['last_interaction'] = datetime.now().isoformat()
-            updated_metadata['interaction_history'] = updated_metadata.get('interaction_history', []) + [{
-                'type': 'email_reply',
-                'timestamp': datetime.now().isoformat(),
-                'content': email_data.text,
-                'analysis': analysis
-            }]
-            
-            # Store vector of email content for future reference
-            logger.info("🔤 Generating email content embedding...")
-            email_embedding = await get_embedding(email_data.text)
-            
-            # Update candidate in Pinecone
-            logger.info("💾 Updating candidate profile in database...")
-            candidates_index.upsert(vectors=[(
-                candidate_id,
-                email_embedding,
-                updated_metadata
-            )])
-        
-        # Generate and send response
-        if not analysis['requires_human_review']:
-            logger.info("✍️ Generating AI response...")
-            # Get candidate's first name
-            candidate_name = candidate_metadata.get('name', '').split()[0]
-            
-            response_prompt = f"""You are Anita, an AI Career Co-Pilot having a friendly email conversation with {candidate_name}. Write a natural, helpful response to their email.
-
-            Context:
-            - Their email: {email_data.text}
-            - Their question/concern: {analysis['main_question']}
-            - Jobs they mentioned: {', '.join(analysis['mentioned_jobs']) if analysis['mentioned_jobs'] else 'None'}
-            - Previous interactions: {json.dumps(updated_metadata.get('interaction_history', [])[-3:], indent=2)}
-
-            Guidelines:
-            1. Write in a warm, professional tone
-            2. Address them by first name
-            3. Directly answer their specific question/concern
-            4. If they mentioned specific jobs, provide relevant details
-            5. Ask follow-up questions to better understand their needs
-            6. Keep the response concise but helpful
-            7. Sign as "Anita" without mentioning you're an AI
-            8. Don't use any JSON formatting - write a natural email
-
-            Write your response now:"""
-            
-            response = openai_client.chat.completions.create(
-                model="gpt-4-turbo-preview",
-                messages=[
-                    {"role": "system", "content": "You are Anita, writing a friendly and professional email response to a candidate."},
-                    {"role": "user", "content": response_prompt}
-                ],
-                temperature=0.7,
-                max_tokens=1000
-            )
-            
-            reply_content = response.choices[0].message.content
-            logger.info("📧 Sending email response...")
-            
-            # Send email reply
-            await interaction_agent.send_email(
-                to_email=candidate_email,
-                subject=f"Re: {email_data.subject}",
-                content=reply_content
-            )
-            logger.info("✅ Email sent successfully!")
-        else:
-            # Send Slack notification for human review
-            logger.info("👥 Preparing notification for human review...")
-            candidate_name = candidate_metadata.get('name', 'Unknown')
-            slack_message = f"""🔍 *Human Review Needed for Candidate Email*
-
-*From:* {candidate_name} ({candidate_email})
-*Subject:* {email_data.subject}
-*Question/Concern:* {analysis['main_question']}
-
-*Email Content:*
-{email_data.text}
-
-*Analysis:*
-• Jobs Mentioned: {', '.join(analysis['mentioned_jobs']) if analysis['mentioned_jobs'] else 'None'}
-• New Preferences: {json.dumps(analysis['new_preferences'], indent=2) if analysis['new_preferences'] else 'None'}
-• Suggested Approach: {analysis['response_approach']}
-
-Please review and respond to this email as soon as possible."""
-            
-            await send_slack_notification(slack_message)
-            logger.info("✅ Slack notification sent!")
-            
         return {
-            'status': 'success',
-            'candidate_id': candidate_id,
-            'requires_human_review': analysis['requires_human_review'],
-            'analysis': analysis
+            "status": "success",
+            "message": "Email processed successfully",
+            "data": candidate_info
         }
         
     except Exception as e:
-        logger.error(f"❌ Error processing candidate email: {str(e)}")
-        logger.error(f"💥 Error type: {type(e)}")
-        logger.error(f"📜 Stack trace: {traceback.format_exc()}")
+        logger.error(f"Error processing email: {str(e)}")
+        logger.error(traceback.format_exc())
         return {
-            'status': 'error',
-            'message': str(e)
+            "status": "error",
+            "message": f"Error processing email: {str(e)}"
         }
 
 @app.post("/email/webhook")
 async def handle_sendgrid_webhook(request: Request):
-    """Handle incoming emails from SendGrid's Inbound Parse webhook."""
-    logger.info("📨 Received webhook from SendGrid")
-    
+    """Handle incoming webhook from SendGrid for email processing."""
     try:
-        # Log the raw request data
+        # Get raw request body
         body = await request.body()
-        form = await request.form()
-        logger.info(f"📝 Received form data keys: {form.keys()}")
         
-        # Log headers for debugging
-        headers = dict(request.headers)
-        logger.info(f"🔍 Request headers: {headers}")
+        # Parse email data
+        email_data = json.loads(body)
         
-        # Extract email data
-        email_data = {
-            "to": form.get("to", ""),
-            "from": form.get("from", ""),
-            "subject": form.get("subject", ""),
-            "text": form.get("text", ""),
-            "html": form.get("html", ""),
-        }
-        logger.info(f"📧 Processed email data: {email_data}")
-        
-        # Notify Slack for debugging
-        await send_slack_notification(
-            f"*New Email Received*\n"
-            f"From: {email_data['from']}\n"
-            f"Subject: {email_data['subject']}\n"
-            f"Content: {email_data['text'][:200]}..."
+        # Convert to Pydantic model
+        inbound_email = InboundEmailData(
+            headers=email_data.get('headers', {}),
+            text=email_data.get('text', ''),
+            html=email_data.get('html', ''),
+            from_email=email_data.get('from', ''),
+            subject=email_data.get('subject', ''),
+            to=email_data.get('to', ''),
+            envelope=email_data.get('envelope', {}),
+            attachments=email_data.get('attachments', [])
         )
         
-        return {"status": "success", "message": "Email processed successfully"}
+        # Process the email
+        result = await process_candidate_email(inbound_email)
         
+        if result['status'] == 'error':
+            logger.error(f"Failed to process email: {result['message']}")
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=result['message']
+            )
+        
+        return result
+        
+    except json.JSONDecodeError as e:
+        logger.error(f"Invalid JSON in webhook payload: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid JSON payload"
+        )
+    except ValidationError as e:
+        logger.error(f"Invalid email data format: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Invalid email data format: {str(e)}"
+        )
     except Exception as e:
-        logger.error(f"❌ Error processing webhook: {str(e)}")
-        logger.error(f"💥 Error type: {type(e)}")
-        logger.error(f"📜 Stack trace: {traceback.format_exc()}")
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.error(f"Error processing webhook: {str(e)}")
+        logger.error(traceback.format_exc())
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Error processing webhook: {str(e)}"
+        )
 
 async def get_embedding(text: str) -> List[float]:
     """Get embedding vector for text using OpenAI's API."""
@@ -2920,5 +2814,67 @@ async def fetch_retell_call_data(call_id: str) -> Dict[str, Any]:
     except Exception as e:
         logger.error(f"❌ Error fetching call data: {str(e)}")
         raise
+
+async def process_email_attachment(attachment: Dict[str, Any]) -> Dict[str, Any]:
+    """Process an email attachment and extract relevant information."""
+    try:
+        if not attachment:
+            return {}
+
+        # Get attachment details
+        filename = attachment.get('filename', '')
+        content_type = attachment.get('content-type', '')
+        content = attachment.get('content', '')
+
+        # Process PDF attachments (likely resumes)
+        if filename.lower().endswith('.pdf'):
+            try:
+                # Decode base64 content
+                pdf_content = base64.b64decode(content)
+                
+                # Create a temporary file
+                with tempfile.NamedTemporaryFile(suffix='.pdf', delete=False) as temp_file:
+                    temp_file.write(pdf_content)
+                    temp_file.flush()
+                    
+                    # Read PDF with PyPDF2
+                    pdf_reader = PdfReader(temp_file.name)
+                    text_content = []
+                    
+                    # Extract text from all pages
+                    for page in pdf_reader.pages:
+                        text_content.append(page.extract_text())
+                    
+                    # Clean up temp file
+                    os.unlink(temp_file.name)
+                    
+                    return {
+                        "attachment_type": "resume",
+                        "filename": filename,
+                        "content_type": content_type,
+                        "text_content": "\n".join(text_content)
+                    }
+                    
+            except Exception as pdf_error:
+                logger.error(f"Error processing PDF attachment: {str(pdf_error)}")
+                return {
+                    "attachment_type": "error",
+                    "filename": filename,
+                    "error": str(pdf_error)
+                }
+        
+        # Process other attachment types if needed
+        return {
+            "attachment_type": "unknown",
+            "filename": filename,
+            "content_type": content_type
+        }
+        
+    except Exception as e:
+        logger.error(f"Error processing attachment: {str(e)}")
+        return {
+            "attachment_type": "error",
+            "error": str(e)
+        }
 
 app = app
