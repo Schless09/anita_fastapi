@@ -1132,8 +1132,8 @@ async def process_transcript_with_openai(transcript: str, metadata: Dict[str, An
         
         [Include any specific next steps or action items discussed]
         
-        Please provide the response in JSON format with these keys:
-        {
+        Please provide the response in JSON format with these exact keys:
+        {{
             "skills": [],
             "years_of_experience": "",
             "preferred_work_environment": "",
@@ -1149,7 +1149,7 @@ async def process_transcript_with_openai(transcript: str, metadata: Dict[str, An
             "key_points": [],
             "next_steps": "",
             "email_summary": ""
-        }
+        }}
         """
 
         # Get response from OpenAI
@@ -2174,58 +2174,103 @@ async def fetch_and_store_retell_transcript(call_id: str) -> dict:
         if transcript_data.get('unanswered', False):
             call_status = "missed"
             logger.info(f"Call {call_id} was not answered")
+            # Send missed call email using InteractionAgent
+            candidate_email = transcript_data['metadata'].get('email')
+            candidate_name = transcript_data['metadata'].get('name', '').split()[0]
+            if candidate_email and candidate_name:
+                await interaction_agent.send_missed_call_email(candidate_email, candidate_name)
         # Check if call was missed (no transcript or very short duration)
         elif not transcript or duration_ms < 1000:  # Less than 1 second
             call_status = "missed"
             logger.info(f"Call {call_id} was missed (no transcript or very short duration)")
+            # Send missed call email using InteractionAgent
+            candidate_email = transcript_data['metadata'].get('email')
+            candidate_name = transcript_data['metadata'].get('name', '').split()[0]
+            if candidate_email and candidate_name:
+                await interaction_agent.send_missed_call_email(candidate_email, candidate_name)
         # Check if call was cut short (short duration or minimal transcript)
         elif duration_ms < 30000 or len(transcript.split()) < 50:  # Less than 30 seconds or less than 50 words
             call_status = "short"
             logger.info(f"Call {call_id} was cut short (short duration or minimal transcript)")
+            # Send missed call email for short calls too using InteractionAgent
+            candidate_email = transcript_data['metadata'].get('email')
+            candidate_name = transcript_data['metadata'].get('name', '').split()[0]
+            if candidate_email and candidate_name:
+                await interaction_agent.send_missed_call_email(candidate_email, candidate_name)
         
         # Process with OpenAI only if we have a completed call
         processed_data = {}
         if call_status == "completed":
             logger.info(f"📝 Processing transcript with OpenAI for call {call_id}")
+            
+            # Get candidate ID from metadata
+            candidate_id = transcript_data['metadata'].get('candidate_id')
+            resume_data = ''
+            
+            if candidate_id:
+                # Get resume data from vector store
+                try:
+                    logger.info(f"🔍 Fetching resume data for candidate {candidate_id}")
+                    candidate_query = candidates_index.query(
+                        vector=[0] * 1536,
+                        filter={"id": candidate_id},
+                        top_k=1,
+                        include_metadata=True
+                    )
+                    
+                    if candidate_query.matches:
+                        resume_data = candidate_query.matches[0].metadata.get('resume_text', '')
+                        logger.info(f"✅ Found resume data for candidate {candidate_id}")
+                    else:
+                        logger.warning(f"⚠️ No resume data found for candidate {candidate_id}")
+                except Exception as e:
+                    logger.error(f"❌ Error fetching resume data: {str(e)}")
+            
+            # Combine transcript and resume data
+            combined_text = f"""
+            Call Transcript:
+            {transcript}
+            
+            Resume Information:
+            {resume_data}
+            """
+            
             processed_data = await process_transcript_with_openai(
-                transcript_data['transcript'],
+                combined_text,
                 transcript_data['metadata']  # Pass metadata to get candidate name
             )
 
             # Check if we have sufficient data for matchmaking
             if has_sufficient_data(processed_data):
-                logger.info("✅ Sufficient data gathered from call, proceeding with matchmaking")
+                logger.info("✅ Sufficient data gathered from call and resume, proceeding with matchmaking")
                 
-                # Get candidate ID from metadata
-                candidate_id = transcript_data['metadata'].get('candidate_id')
-                if candidate_id:
-                    try:
-                        # Create candidate data for matching
-                        candidate_data = {
-                            'id': candidate_id,
-                            'skills': processed_data.get('skills', []),
-                            'years_of_experience': processed_data.get('years_of_experience'),
-                            'preferred_work_environment': processed_data.get('preferred_work_environment'),
-                            'preferred_locations': processed_data.get('preferred_locations'),
-                            'minimum_salary': processed_data.get('minimum_salary'),
-                            'work_authorization': processed_data.get('work_authorization'),
-                            'email': transcript_data['metadata'].get('email')
-                        }
-                        
-                        # Trigger matchmaking through brain agent
-                        match_result = brain_agent.handle_candidate_submission(candidate_data)
-                        
-                        if match_result.get('status') == 'success':
-                            logger.info(f"✅ Successfully matched candidate {candidate_id}")
-                            # Add match results to processed data
-                            processed_data['match_results'] = match_result.get('match_details')
-                        else:
-                            logger.warning(f"⚠️ No immediate matches found for candidate {candidate_id}")
-                    except Exception as e:
-                        logger.error(f"❌ Error in matchmaking process: {str(e)}")
-                        # Don't raise here as we still want to proceed with email sending
+                try:
+                    # Create candidate data for matching
+                    candidate_data = {
+                        'id': candidate_id,
+                        'skills': processed_data.get('skills', []),
+                        'years_of_experience': processed_data.get('years_of_experience'),
+                        'preferred_work_environment': processed_data.get('preferred_work_environment'),
+                        'preferred_locations': processed_data.get('preferred_locations'),
+                        'minimum_salary': processed_data.get('minimum_salary'),
+                        'work_authorization': processed_data.get('work_authorization'),
+                        'email': transcript_data['metadata'].get('email')
+                    }
+                    
+                    # Trigger matchmaking through brain agent
+                    match_result = brain_agent.handle_candidate_submission(candidate_data)
+                    
+                    if match_result.get('status') == 'success':
+                        logger.info(f"✅ Successfully matched candidate {candidate_id}")
+                        # Add match results to processed data
+                        processed_data['match_results'] = match_result.get('match_details')
+                    else:
+                        logger.warning(f"⚠️ No immediate matches found for candidate {candidate_id}")
+                except Exception as e:
+                    logger.error(f"❌ Error in matchmaking process: {str(e)}")
+                    # Don't raise here as we still want to proceed with email sending
             else:
-                logger.info("⚠️ Insufficient data from call for matchmaking")
+                logger.info("⚠️ Insufficient data from call and resume for matchmaking")
         else:
             # For missed or short calls, create minimal processed data
             processed_data = {
@@ -2234,10 +2279,10 @@ async def fetch_and_store_retell_transcript(call_id: str) -> dict:
                 'timestamp': datetime.now().isoformat()
             }
         
-        # Store in Pinecone if we have a candidate ID
+        # Store call status in Pinecone if we have a candidate ID
         candidate_id = transcript_data['metadata'].get('candidate_id')
         if candidate_id:
-            logger.info(f"💾 Storing transcript in Pinecone for candidate {candidate_id}")
+            logger.info(f"💾 Storing call status in Pinecone for candidate {candidate_id}")
             # Serialize processed_data for Pinecone metadata
             pinecone_metadata = {
                 'candidate_id': candidate_id,
