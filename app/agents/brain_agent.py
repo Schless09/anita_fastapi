@@ -49,25 +49,27 @@ class BrainAgent:
         self.pinecone_service = PineconeService()
         self.matching_service = MatchingService()
         
-        # Initialize tools
+        # Initialize tools - ensure vector_store is only created once
+        if not vector_store:
+            logger.warning("⚠️ BrainAgent creating new VectorStoreTool - should be passed from FastAPI")
         self.vector_store = vector_store or VectorStoreTool()
         self.email_tool = EmailTool()
-        self.matching_tool = MatchingTool()
+        self.matching_tool = MatchingTool(vector_store=self.vector_store)
         self.pdf_processor = PDFProcessor()
         self.resume_parser = ResumeParser()
         
-        # Initialize chains
+        # Initialize chains with the shared vector_store
         self.candidate_processing_chain = CandidateProcessingChain()
         self.job_matching_chain = JobMatchingChain()
         self.interview_scheduling_chain = InterviewSchedulingChain()
         self.follow_up_chain = FollowUpChain()
         
-        # Initialize agents
-        self.candidate_intake_agent = CandidateIntakeAgent()
-        self.job_matching_agent = JobMatchingAgent()
-        self.farming_matching_agent = FarmingMatchingAgent()
-        self.interview_agent = InterviewAgent()
-        self.follow_up_agent = FollowUpAgent()
+        # Initialize agents with the shared vector_store
+        self.candidate_intake_agent = CandidateIntakeAgent(vector_store=self.vector_store)
+        self.job_matching_agent = JobMatchingAgent(vector_store=self.vector_store)
+        self.farming_matching_agent = FarmingMatchingAgent(vector_store=self.vector_store)
+        self.interview_agent = InterviewAgent(vector_store=self.vector_store)
+        self.follow_up_agent = FollowUpAgent(vector_store=self.vector_store)
         
         # Initialize state management
         self.state = {

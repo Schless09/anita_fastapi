@@ -1,24 +1,37 @@
-from pydantic import BaseModel, EmailStr, HttpUrl, Field, AnyHttpUrl
+from pydantic import BaseModel, EmailStr, HttpUrl, Field, AnyHttpUrl, validator
 from typing import List, Optional, Dict, Any, Annotated
 from datetime import datetime
 from fastapi import UploadFile, File
 
 class CandidateBase(BaseModel):
-    first_name: str = Field(..., description="Candidate's first name")
-    last_name: str = Field(..., description="Candidate's last name")
+    name: str = Field(..., description="Candidate's full name")
     email: EmailStr = Field(..., description="Candidate's email address")
-    phone: str = Field(..., description="Candidate's phone number")
-    linkedin_url: Optional[AnyHttpUrl] = Field(None, description="Candidate's LinkedIn profile URL")
+    phone_number: str = Field(..., description="Candidate's phone number in E.164 format")
+    linkedin: Optional[HttpUrl] = Field(None, description="Candidate's LinkedIn profile URL")
+
+    @validator('phone_number')
+    def validate_phone(cls, v):
+        # Remove any non-digit characters
+        cleaned = ''.join(filter(str.isdigit, v))
+        # Add +1 prefix if not present
+        if not cleaned.startswith('1'):
+            cleaned = '1' + cleaned
+        return f"+{cleaned}"
 
 class CandidateCreate(CandidateBase):
-    resume: Optional[UploadFile] = Field(None, description="Candidate's resume in PDF format (max 5MB)")
+    resume: UploadFile = Field(..., description="Candidate's resume in PDF format")
+
+    @validator('resume')
+    def validate_resume(cls, v):
+        if not v.content_type == 'application/pdf':
+            raise ValueError('Resume must be a PDF file')
+        return v
 
 class CandidateUpdate(BaseModel):
-    first_name: Optional[str] = None
-    last_name: Optional[str] = None
+    name: Optional[str] = None
     email: Optional[EmailStr] = None
-    phone: Optional[str] = None
-    linkedin_url: Optional[AnyHttpUrl] = None
+    phone_number: Optional[str] = None
+    linkedin: Optional[HttpUrl] = None
     resume_url: Optional[HttpUrl] = None
 
 class CandidateResponse(CandidateBase):

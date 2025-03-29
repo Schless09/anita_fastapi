@@ -185,26 +185,26 @@ sendgrid = get_sendgrid_client()
 # Initialize tools
 pdf_processor = PDFProcessor()
 resume_parser = ResumeParser()
-logger.info("🔄 Reusing shared VectorStoreTool instance for MatchingTool")
+logger.info("🔄 Reusing shared VectorStoreTool instance for all agents and tools")
 matching_tool = MatchingTool(vector_store=vector_store)
 email_tool = EmailTool()
 
-# Initialize chains
+# Initialize chains (these should be updated to accept vector_store, but for now we're focusing on agents)
 candidate_processing_chain = CandidateProcessingChain()
 job_matching_chain = JobMatchingChain()
 interview_scheduling_chain = InterviewSchedulingChain()
 follow_up_chain = FollowUpChain()
 
-# Initialize agents with emoji identifiers
-candidate_intake_agent = CandidateIntakeAgent()
+# Initialize agents with emoji identifiers, passing the shared vector_store
+candidate_intake_agent = CandidateIntakeAgent(vector_store=vector_store)
 candidate_intake_agent.emoji = "👤"  # Person emoji for candidate intake
-job_matching_agent = JobMatchingAgent()
+job_matching_agent = JobMatchingAgent(vector_store=vector_store)
 job_matching_agent.emoji = "🔍"  # Magnifying glass for job matching
-farming_matching_agent = FarmingMatchingAgent()
+farming_matching_agent = FarmingMatchingAgent(vector_store=vector_store)
 farming_matching_agent.emoji = "🌾"  # Wheat for farming
-interview_agent = InterviewAgent()
+interview_agent = InterviewAgent(vector_store=vector_store)
 interview_agent.emoji = "🎯"  # Target for interview
-follow_up_agent = FollowUpAgent()
+follow_up_agent = FollowUpAgent(vector_store=vector_store)
 follow_up_agent.emoji = "📧"  # Envelope for follow-up
 
 # Log agent initialization
@@ -307,25 +307,54 @@ logger.info(f"Using candidates index: {settings.pinecone_candidates_index}")
 # Candidate submission endpoint
 @app.post("/candidates/", response_model=CandidateResponse)
 async def create_candidate(
-    candidate: CandidateCreate,
     background_tasks: BackgroundTasks,
-    brain_agent: BrainAgent = Depends(get_brain_agent)
+    brain_agent: BrainAgent = Depends(get_brain_agent),
+    name: str = Form(...),
+    email: str = Form(...),
+    phone_number: str = Form(...),
+    resume: UploadFile = File(...),
+    linkedin: Optional[str] = Form(None)
 ):
     """Create a new candidate and process their profile."""
     try:
-        logger.info(f"👤 Processing new candidate submission: {candidate.email}")
+        logger.info(f"👤 Processing new candidate submission: {email}")
+        
+        # Validate file is PDF
+        if not resume.content_type == 'application/pdf':
+            raise HTTPException(
+                status_code=400,
+                detail="Resume must be a PDF file"
+            )
+            
+        # Read resume content
+        resume_content = await resume.read()
+        
+        # Create candidate data object
+        candidate_data = {
+            "name": name,
+            "email": email,
+            "phone_number": phone_number,
+            "linkedin": linkedin,
+            "resume": resume,
+            "resume_content": resume_content,
+            "resume_filename": resume.filename
+        }
         
         # Process candidate in background
         background_tasks.add_task(
             brain_agent.process_candidate,
-            candidate=candidate
+            candidate=CandidateCreate(**candidate_data)
         )
         
         return {
             "id": "pending",  # Will be updated after processing
-            "email": candidate.email,
+            "name": name,
+            "email": email,
+            "phone_number": phone_number,
+            "linkedin": linkedin,
             "status": "processing",
-            "created_at": datetime.utcnow().isoformat()
+            "created_at": datetime.utcnow(),
+            "updated_at": datetime.utcnow()
         }
         
     except Exception as e:

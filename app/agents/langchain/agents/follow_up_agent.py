@@ -10,15 +10,16 @@ class FollowUpAgent(BaseAgent):
         self,
         model_name: str = "gpt-4-turbo-preview",
         temperature: float = 0.7,
-        memory: Optional[Any] = None
+        memory: Optional[Any] = None,
+        vector_store: Optional[VectorStoreTool] = None
     ):
         super().__init__(model_name, temperature, memory)
         
         # Initialize tools
         self.tools = [
-            VectorStoreTool(),
+            vector_store or VectorStoreTool(),  # Use provided vector_store or create a new one
             EmailTool(),
-            MatchingTool()
+            MatchingTool(vector_store=vector_store)  # Pass vector_store to MatchingTool
         ]
         
         # Initialize conversation history

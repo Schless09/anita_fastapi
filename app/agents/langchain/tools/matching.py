@@ -4,6 +4,9 @@ from langchain_openai import ChatOpenAI
 from .vector_store import VectorStoreTool
 from pydantic import Field
 from .base import parse_llm_json_response
+import logging
+
+logger = logging.getLogger(__name__)
 
 class MatchingTool(BaseTool):
     """Tool for handling job-candidate matching operations."""
@@ -33,7 +36,12 @@ class MatchingTool(BaseTool):
         )
         
         # Initialize vector store
-        self.vector_store = vector_store or VectorStoreTool()
+        if vector_store:
+            logger.info("MatchingTool using provided VectorStoreTool instance")
+            self.vector_store = vector_store
+        else:
+            logger.warning("⚠️ MatchingTool creating new VectorStoreTool - this should be avoided!")
+            self.vector_store = VectorStoreTool()
 
     def _run(self, operation: str, **kwargs) -> Dict[str, Any]:
         """Run matching operations."""
