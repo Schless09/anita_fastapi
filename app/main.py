@@ -13,6 +13,7 @@ from enum import Enum
 import openai
 import traceback
 import json
+from contextlib import asynccontextmanager
 
 from app.config import (
     get_settings,
@@ -134,10 +135,31 @@ except Exception as e:
 
 # Initialize FastAPI app
 logger.info("Initializing FastAPI application...")
+
+# Remove legacy agent initialization since we're using the new LangChain agents
+logger.info("Using LangChain agents for processing...")
+
+# Replace deprecated on_event handlers with lifespan context manager
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """
+    Lifespan event handler for FastAPI application.
+    This replaces the deprecated on_event("startup") and on_event("shutdown") handlers.
+    """
+    # Startup operations
+    try:
+        logger.info("Application startup complete")
+        yield
+    # Shutdown operations
+    finally:
+        logger.info("Application shutdown complete")
+
+# Update app definition to use lifespan
 app = FastAPI(
     title="Anita AI Recruitment API",
     description="API for AI-driven recruitment with enhanced candidate-job matching",
-    version="2.0.0"
+    version="2.0.0",
+    lifespan=lifespan
 )
 
 # Mount static files
@@ -281,27 +303,6 @@ logger.info("Using configured Pinecone instance...")
 # Remove duplicate index initialization since we already have it from the config
 logger.info(f"Using jobs index: {settings.pinecone_jobs_index}")
 logger.info(f"Using candidates index: {settings.pinecone_candidates_index}")
-
-# Remove legacy agent initialization since we're using the new LangChain agents
-logger.info("Using LangChain agents for processing...")
-
-@app.on_event("startup")
-async def startup_event():
-    """Initialize services on startup"""
-    try:
-        logger.info("Application startup complete")
-    except Exception as e:
-        logger.error(f"Startup error: {str(e)}")
-        raise
-
-@app.on_event("shutdown")
-async def shutdown_event():
-    """Clean up on shutdown"""
-    try:
-        logger.info("Application shutdown complete")
-    except Exception as e:
-        logger.error(f"Shutdown error: {str(e)}")
-        raise
 
 # Candidate submission endpoint
 @app.post("/candidates/", response_model=CandidateResponse)
