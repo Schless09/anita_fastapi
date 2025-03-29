@@ -1,6 +1,5 @@
 from typing import Optional, Dict, Any
-from langchain_openai import ChatOpenAI
-from langchain_community.embeddings import OpenAIEmbeddings
+from langchain_openai import ChatOpenAI, OpenAIEmbeddings
 from pinecone import Pinecone
 from sendgrid import SendGridAPIClient
 # from google.oauth2.credentials import Credentials

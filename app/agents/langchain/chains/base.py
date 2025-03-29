@@ -1,5 +1,5 @@
 from typing import Any, Dict, List, Optional
-from langchain.chains import LLMChain
+from langchain.schema.runnable import RunnableSequence
 from langchain_openai import ChatOpenAI
 from langchain.prompts import PromptTemplate
 from langchain.tools import BaseTool
@@ -18,7 +18,7 @@ class BaseChain:
         
         # Initialize tools and chains
         self.tools: List[BaseTool] = []
-        self.chains: Dict[str, LLMChain] = {}
+        self.chains: Dict[str, RunnableSequence] = {}
         
         # Initialize the chain
         self._initialize_chain()
@@ -46,9 +46,6 @@ class BaseChain:
             template=template
         )
     
-    def _create_chain(self, prompt: PromptTemplate) -> LLMChain:
+    def _create_chain(self, prompt: PromptTemplate) -> RunnableSequence:
         """Create a chain with the given prompt."""
-        return LLMChain(
-            llm=self.llm,
-            prompt=prompt
-        ) 
+        return prompt | self.llm 

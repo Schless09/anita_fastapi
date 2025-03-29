@@ -1,5 +1,5 @@
 from typing import Any, Dict, List, Optional
-from langchain.chains import LLMChain
+from langchain.schema.runnable import RunnableSequence
 from langchain.prompts import PromptTemplate
 from langchain_openai import ChatOpenAI
 from ..tools.vector_store import VectorStoreTool
@@ -54,10 +54,7 @@ class JobMatchingChain:
             6. Growth opportunities"""
         )
         
-        self.job_analysis_chain = LLMChain(
-            llm=self.llm,
-            prompt=job_analysis_prompt
-        )
+        self.job_analysis_chain = job_analysis_prompt | self.llm
         
         # Match analysis chain
         match_analysis_prompt = PromptTemplate(
@@ -81,10 +78,7 @@ class JobMatchingChain:
             5. Recommendations for next steps"""
         )
         
-        self.match_analysis_chain = LLMChain(
-            llm=self.llm,
-            prompt=match_analysis_prompt
-        )
+        self.match_analysis_chain = match_analysis_prompt | self.llm
 
     async def find_matches(
         self,
@@ -110,9 +104,9 @@ class JobMatchingChain:
             job_data = job_result["results"][0]
             
             # Step 2: Analyze job
-            job_analysis = await self.job_analysis_chain.arun(
-                job_data=job_data["content"]
-            )
+            job_analysis = await self.job_analysis_chain.ainvoke({
+                "job_data": job_data["content"]
+            })
             
             # Step 3: Find matching candidates
             matches_result = await self.matching_tool._arun(
@@ -141,11 +135,11 @@ class JobMatchingChain:
                 candidate_data = candidate_result["results"][0]
                 
                 # Analyze match
-                match_analysis = await self.match_analysis_chain.arun(
-                    job_analysis=job_analysis,
-                    candidate_analysis=candidate_data["content"],
-                    match_score=match["score"]
-                )
+                match_analysis = await self.match_analysis_chain.ainvoke({
+                    "job_analysis": job_analysis,
+                    "candidate_analysis": candidate_data["content"],
+                    "match_score": match["score"]
+                })
                 
                 detailed_matches.append({
                     "candidate_id": match["candidate_id"],

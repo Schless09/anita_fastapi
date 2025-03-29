@@ -1,7 +1,7 @@
 from typing import Any, Dict, List, Optional
-from langchain.chains import LLMChain
 from langchain.prompts import PromptTemplate
 from langchain_openai import ChatOpenAI
+from langchain.schema.runnable import RunnableSequence
 from ..tools.document_processing import PDFProcessor, ResumeParser
 from ..tools.vector_store import VectorStoreTool
 from ..tools.communication import EmailTool
@@ -56,10 +56,7 @@ class CandidateProcessingChain:
             6. Areas for improvement"""
         )
         
-        self.resume_analysis_chain = LLMChain(
-            llm=self.llm,
-            prompt=resume_analysis_prompt
-        )
+        self.resume_analysis_chain = resume_analysis_prompt | self.llm
         
         # Profile creation chain
         profile_creation_prompt = PromptTemplate(
@@ -81,10 +78,7 @@ class CandidateProcessingChain:
             6. Additional qualifications"""
         )
         
-        self.profile_creation_chain = LLMChain(
-            llm=self.llm,
-            prompt=profile_creation_prompt
-        )
+        self.profile_creation_chain = profile_creation_prompt | self.llm
 
     async def process_candidate(
         self,
@@ -105,14 +99,13 @@ class CandidateProcessingChain:
                 return parse_result
             
             # Step 3: Analyze resume
-            analysis_result = await self.resume_analysis_chain.arun(
-                resume_text=pdf_result["text_content"]
+            analysis_result = await self.resume_analysis_chain.ainvoke(
+                {"resume_text": pdf_result["text_content"]}
             )
             
             # Step 4: Create profile
-            profile_result = await self.profile_creation_chain.arun(
-                parsed_data=parse_result["parsed_data"],
-                analysis=analysis_result
+            profile_result = await self.profile_creation_chain.ainvoke(
+                {"parsed_data": parse_result["parsed_data"], "analysis": analysis_result}
             )
             
             # Step 5: Store in vector store

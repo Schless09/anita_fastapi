@@ -1,40 +1,101 @@
-# Anita FastAPI - AI-Powered Recruitment Platform
+# Anita - AI-Powered Recruitment System
 
-An intelligent recruitment platform built with FastAPI that automates candidate communication and job matching using AI. The system features advanced email monitoring, smart response generation, and seamless candidate-job matching.
+Anita is a sophisticated recruitment system built with FastAPI and LangChain that automates and enhances the recruitment process using AI. The system handles candidate intake, job matching, interview scheduling, and follow-up communications.
 
-## Features
+## System Architecture
 
-### Email Communication System
+### Core Components
 
-- **Automated Email Monitoring**: Continuously monitors and processes incoming candidate emails
-- **Smart Response Generation**: Automatically answers candidate questions about job details
-- **Thread Tracking**: Maintains conversation context through email thread tracking
-- **Human Fallback**: Forwards complex queries to human support when needed
+1. **Agents**
 
-### Candidate Management
+   - `CandidateIntakeAgent`: Processes candidate submissions and initial screening
+   - `JobMatchingAgent`: Matches candidates to jobs using semantic search
+   - `FarmingMatchingAgent`: Proactively matches candidates to new jobs
+   - `InterviewAgent`: Manages interview scheduling and feedback
+   - `FollowUpAgent`: Handles follow-up communications
 
-- **Profile Processing**: Extracts and structures candidate information from conversations
-- **Intelligent Matching**: Matches candidates with suitable job positions
-- **Preference Tracking**: Maintains candidate preferences for better job recommendations
-- **Asynchronous Resume Processing**: Background processing of candidate resumes with detailed error tracking
-- **Enhanced Logging**: Comprehensive logging system for better debugging and monitoring
+2. **Tools**
 
-### Job Management
+   - `PDFProcessor`: Extracts text from PDF resumes
+   - `ResumeParser`: Parses resume text into structured data
+   - `VectorStoreTool`: Manages vector storage for jobs and candidates
+   - `MatchingTool`: Handles job-candidate matching logic
+   - `EmailTool`: Manages email communications
+   - `CalendarTool`: Handles calendar operations
 
-- **Structured Job Data**: Maintains detailed job information including requirements, benefits, and tech stack
-- **Vector Search**: Enables semantic search for matching candidates with positions
-- **Real-time Updates**: Keeps job information current for accurate candidate communications
+3. **Chains**
+   - `CandidateProcessingChain`: Orchestrates candidate intake process
+   - `JobMatchingChain`: Orchestrates job matching process
+   - `InterviewSchedulingChain`: Orchestrates interview scheduling
+   - `FollowUpChain`: Orchestrates follow-up communications
 
-## Technical Stack
+### Data Flow
 
-- **Backend Framework**: FastAPI
-- **Email Service**: SendGrid (both outbound and inbound parsing)
-- **Vector Store**: Pinecone for semantic search
-- **AI Integration**: OpenAI GPT-4 for natural language processing
-- **Data Processing**: Python with advanced regex for email parsing
-- **Asynchronous Processing**: FastAPI Background Tasks for non-blocking operations
+1. **Candidate Intake**
+
+   - PDF resume upload
+   - Text extraction and parsing
+   - Profile creation and vector storage
+   - Confirmation email
+
+2. **Job Matching**
+
+   - Job posting analysis
+   - Semantic matching with candidates
+   - Match scoring and ranking
+   - Notification emails
+
+3. **Interview Process**
+
+   - Interview scheduling
+   - Calendar management
+   - Material preparation
+   - Feedback processing
+
+4. **Follow-up Management**
+   - Response tracking
+   - Automated follow-ups
+   - Status updates
+   - Reporting
 
 ## Setup
+
+### Prerequisites
+
+- Python 3.8+
+- FastAPI
+- LangChain
+- OpenAI API key
+- Pinecone API key
+- SendGrid API key
+- Google Calendar API credentials
+- Supabase account
+
+### Environment Variables
+
+```env
+# OpenAI
+OPENAI_API_KEY=your_openai_api_key
+
+# Pinecone
+PINECONE_API_KEY=your_pinecone_api_key
+PINECONE_ENVIRONMENT=your_pinecone_environment
+PINECONE_JOBS_INDEX=your_jobs_index_name
+PINECONE_CANDIDATES_INDEX=your_candidates_index_name
+
+# SendGrid
+SENDGRID_API_KEY=your_sendgrid_api_key
+SENDGRID_SENDER_EMAIL=your_sender_email
+
+# Google Calendar
+GOOGLE_CALENDAR_CREDENTIALS=path_to_credentials.json
+
+# Supabase
+SUPABASE_URL=your_supabase_url
+SUPABASE_KEY=your_supabase_key
+```
+
+### Installation
 
 1. Clone the repository:
 
@@ -43,110 +104,146 @@ git clone https://github.com/yourusername/anita_fastapi.git
 cd anita_fastapi
 ```
 
-2. Install dependencies:
+2. Create and activate a virtual environment:
+
+```bash
+python -m venv venv
+source venv/bin/activate  # On Windows: venv\Scripts\activate
+```
+
+3. Install dependencies:
 
 ```bash
 pip install -r requirements.txt
 ```
 
-3. Set up environment variables:
+4. Set up environment variables:
 
 ```bash
 cp .env.example .env
-# Edit .env with your configuration:
-# - SENDGRID_API_KEY
-# - SENDER_EMAIL
-# - OPENAI_API_KEY
-# - SENDGRID_INBOUND_HOSTNAME
-# - RETELL_API_KEY
-# - RETELL_AGENT_ID
-# - RETELL_FROM_NUMBER
+# Edit .env with your API keys and credentials
 ```
 
-4. Configure SendGrid:
+## Usage
 
-- Set up SendGrid Inbound Parse webhook
-- Configure domain authentication
-- Set up email forwarding
-
-5. Start the server:
+### Starting the Server
 
 ```bash
-uvicorn main:app --reload --log-level debug
+uvicorn main:app --reload
 ```
 
-## API Endpoints
+The API will be available at `http://localhost:8000`
 
-### Email Handling
+### API Endpoints
 
-- `POST /email/webhook`: Handles incoming emails from SendGrid
-- `POST /test-email`: Sends a test email to verify setup
+1. **Candidate Management**
 
-### Call Management
+   - `POST /api/candidates`: Submit a new candidate
+   - `GET /api/candidates/{id}`: Get candidate details
+   - `PUT /api/candidates/{id}`: Update candidate status
 
-- `/makeCall` - Trigger a new call with Retell AI
-- `/webhook` - Handle Retell AI webhook events
-- `/cleanup` - Clean up completed calls and process transcripts
-- `/transcript/{call_id}` - Get transcript for a specific call
-- `/status/{call_id}` - Get status for a specific call
+2. **Job Management**
 
-### Candidate Management
+   - `POST /api/jobs`: Create a new job posting
+   - `GET /api/jobs/{id}`: Get job details
+   - `GET /api/jobs/{id}/matches`: Get matching candidates
 
-- `POST /candidates`: Submit a new candidate profile
-- `GET /candidates/{candidate_id}/profile`: Get candidate profile
-- `POST /candidates/match-jobs`: Find matching jobs for a candidate
-- `POST /candidate/retell-transcript`: Process and store call transcripts
-- `POST /api/makeCall`: Initiate AI-powered candidate calls
-- `/candidates` - Get all candidate profiles
-- `/candidates/{candidate_id}` - Get a specific candidate profile
-- `/candidates/{candidate_id}/transcript` - Get transcript for a specific candidate
+3. **Interview Management**
 
-### Job Management
+   - `POST /api/interviews`: Schedule an interview
+   - `POST /api/interviews/{id}/feedback`: Submit interview feedback
+   - `GET /api/interviews/{id}`: Get interview details
 
-- `POST /jobs/submit`: Submit new job posting
-- `GET /jobs/open-positions`: List all open positions
-- `POST /jobs/match-candidates`: Find matching candidates for a job
-- `GET /jobs/most-recent`: Get the most recent job posting
-- `GET /jobs/{job_id}`: Get a specific job posting
-- `GET /jobs/{job_id}/status`: Get the status of a job posting
+4. **Follow-up Management**
+   - `POST /api/follow-ups`: Send a follow-up message
+   - `GET /api/follow-ups/report`: Get follow-up activity report
 
-### System Management
+### Example Usage
 
-- `POST /webhook/retell`: Handle Retell AI call status updates
+1. **Submit a Candidate**
+
+```python
+import requests
+
+response = requests.post(
+    "http://localhost:8000/api/candidates",
+    files={"resume": open("path/to/resume.pdf", "rb")},
+    data={
+        "email": "candidate@example.com",
+        "name": "John Doe"
+    }
+)
+```
+
+2. **Create a Job Posting**
+
+```python
+response = requests.post(
+    "http://localhost:8000/api/jobs",
+    json={
+        "title": "Senior Software Engineer",
+        "company": "Tech Corp",
+        "description": "Looking for an experienced software engineer...",
+        "requirements": ["Python", "FastAPI", "LangChain"]
+    }
+)
+```
+
+3. **Schedule an Interview**
+
+```python
+response = requests.post(
+    "http://localhost:8000/api/interviews",
+    json={
+        "candidate_id": "candidate_123",
+        "job_id": "job_456",
+        "preferred_times": ["2024-03-20T10:00:00Z", "2024-03-20T14:00:00Z"],
+        "duration_minutes": 60
+    }
+)
+```
 
 ## Development
 
-### Branch Strategy
+### Project Structure
 
-- `main`: Production-ready code
-- `feature/*`: New feature development
-- `bugfix/*`: Bug fixes
-- `release/*`: Release preparation
+```
+anita_fastapi/
+├── agents/
+│   └── langchain/
+│       ├── agents/
+│       ├── chains/
+│       └── tools/
+├── services/
+│   ├── candidate.py
+│   ├── job.py
+│   ├── matching.py
+│   └── openai.py
+├── main.py
+├── requirements.txt
+└── README.md
+```
+
+### Adding New Features
+
+1. Create new agent/tool/chain in the appropriate directory
+2. Update the main FastAPI application to include new endpoints
+3. Add necessary tests
+4. Update documentation
 
 ### Testing
 
-Run tests with:
-
 ```bash
-pytest
+pytest tests/
 ```
-
-### Debugging
-
-The system includes comprehensive logging for debugging:
-
-- Background task processing logs
-- API endpoint request/response logs
-- Error tracking with full stack traces
-- Process status monitoring
 
 ## Contributing
 
 1. Fork the repository
-2. Create your feature branch (`git checkout -b feature/amazing-feature`)
-3. Commit your changes (`git commit -m 'Add some amazing feature'`)
-4. Push to the branch (`git push origin feature/amazing-feature`)
-5. Open a Pull Request
+2. Create a feature branch
+3. Commit your changes
+4. Push to the branch
+5. Create a Pull Request
 
 ## License
 

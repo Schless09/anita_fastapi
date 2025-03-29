@@ -1,6 +1,6 @@
 from typing import Any, Dict, List, Optional
 from datetime import datetime, timedelta
-from langchain.chains import LLMChain
+from langchain.schema.runnable import RunnableSequence
 from langchain.prompts import PromptTemplate
 from langchain_openai import ChatOpenAI
 from ..tools.vector_store import VectorStoreTool
@@ -58,10 +58,7 @@ class FollowUpChain:
             6. Follow-up recommendations"""
         )
         
-        self.response_analysis_chain = LLMChain(
-            llm=self.llm,
-            prompt=response_analysis_prompt
-        )
+        self.response_analysis_chain = response_analysis_prompt | self.llm
         
         # Follow-up generation chain
         follow_up_generation_prompt = PromptTemplate(
@@ -83,10 +80,7 @@ class FollowUpChain:
             6. Next steps"""
         )
         
-        self.follow_up_generation_chain = LLMChain(
-            llm=self.llm,
-            prompt=follow_up_generation_prompt
-        )
+        self.follow_up_generation_chain = follow_up_generation_prompt | self.llm
 
     async def check_pending_follow_ups(
         self,
@@ -152,10 +146,10 @@ class FollowUpChain:
             )
             
             # Step 3: Generate follow-up message
-            follow_up_result = await self.follow_up_generation_chain.arun(
-                analysis=str(context),
-                history=str(history_result.get("results", []))
-            )
+            follow_up_result = await self.follow_up_generation_chain.ainvoke({
+                "analysis": str(context),
+                "history": str(history_result.get("results", []))
+            })
             
             # Step 4: Send follow-up email
             email_result = await self.email_tool._arun(
@@ -213,10 +207,10 @@ class FollowUpChain:
             candidate_data = candidate_result["results"][0]
             
             # Step 2: Analyze response
-            analysis_result = await self.response_analysis_chain.arun(
-                response=str(response),
-                context=str(candidate_data)
-            )
+            analysis_result = await self.response_analysis_chain.ainvoke({
+                "response": str(response),
+                "context": str(candidate_data)
+            })
             
             # Step 3: Update candidate status
             update_result = await self.vector_store._arun(
@@ -248,7 +242,6 @@ The Recruitment Team"""
                 "analysis": analysis_result,
                 "status_updated": update_result.get("success"),
                 "next_actions": next_actions,
-                "acknowledgment_sent": email_result.get("success") if next_actions else False
             }
             
         except Exception as e:

@@ -1,6 +1,7 @@
 # agents/brain_agent.py
 from typing import Dict, Any, Optional, List
 from datetime import datetime, timedelta
+from langchain_openai import ChatOpenAI
 from app.agents.langchain.agents.candidate_intake_agent import CandidateIntakeAgent
 from app.agents.langchain.agents.job_matching_agent import JobMatchingAgent
 from app.agents.langchain.agents.farming_matching_agent import FarmingMatchingAgent
@@ -116,14 +117,22 @@ class BrainAgent:
 
     async def handle_candidate_submission(self, candidate_data: Dict[str, Any]) -> Dict[str, Any]:
         """Handle a new candidate submission."""
-        process_id = f"candidate_{candidate_data.get('id', datetime.utcnow().isoformat())}"
+        # Convert Pydantic model to dict if needed
+        if hasattr(candidate_data, "model_dump"):
+            candidate_dict = candidate_data.model_dump()
+        elif hasattr(candidate_data, "dict"):
+            candidate_dict = candidate_data.dict()
+        else:
+            candidate_dict = candidate_data
+            
+        process_id = f"candidate_{candidate_dict.get('id', datetime.utcnow().isoformat())}"
         self._start_transaction(process_id, "candidate_submission")
         
         try:
             logger.info(f"Processing candidate submission: {process_id}")
             self._update_transaction(process_id, "intake", "in_progress")
             
-            result = await self.candidate_intake_agent.process_candidate(candidate_data)
+            result = await self.candidate_intake_agent.process_candidate(candidate_dict)
             
             if result["status"] == "success":
                 self._update_transaction(process_id, "intake", "completed", result)
@@ -304,3 +313,30 @@ class BrainAgent:
             "status": "error",
             "error": f"Process {process_id} not found"
         }
+
+    async def check_call_status(self, candidate_id: str, call_id: str) -> Dict[str, Any]:
+        """Check the status of a call for a candidate."""
+        try:
+            logger.info(f"Checking call status for candidate {candidate_id}, call {call_id}")
+            
+            # Use the retell service to check the call status
+            status = await self.retell_service.get_call_status(call_id)
+            
+            # Store the status check as a transaction
+            process_id = f"call_status_{call_id}_{datetime.utcnow().isoformat()}"
+            self._start_transaction(process_id, "call_status_check")
+            self._update_transaction(process_id, "status_check", "completed", {"status": status})
+            self._end_transaction(process_id, "completed")
+            
+            return {
+                "status": "success",
+                "call_status": status,
+                "candidate_id": candidate_id
+            }
+            
+        except Exception as e:
+            logger.error(f"Error checking call status for candidate {candidate_id}: {str(e)}")
+            return {
+                "status": "error",
+                "error": str(e)
+            }

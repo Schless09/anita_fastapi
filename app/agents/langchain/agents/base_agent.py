@@ -58,7 +58,7 @@ class BaseAgent:
         """Run the agent with the given input."""
         if not self.agent_executor:
             raise ValueError("Agent not initialized. Call _initialize_agent first.")
-        return await self.agent_executor.arun(input_text)
+        return await self.agent_executor.ainvoke({"input": input_text})
 
     def _log_start(self, action: str, **kwargs):
         """Log the start of an action with the agent's emoji."""

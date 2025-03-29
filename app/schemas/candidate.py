@@ -1,5 +1,5 @@
 from pydantic import BaseModel, EmailStr, HttpUrl, Field, AnyHttpUrl, validator
-from typing import List, Optional, Dict, Any, Annotated
+from typing import List, Optional, Dict, Any, Annotated, Union
 from datetime import datetime
 from fastapi import UploadFile, File
 
@@ -19,13 +19,11 @@ class CandidateBase(BaseModel):
         return f"+{cleaned}"
 
 class CandidateCreate(CandidateBase):
-    resume: UploadFile = Field(..., description="Candidate's resume in PDF format")
-
-    @validator('resume')
-    def validate_resume(cls, v):
-        if not v.content_type == 'application/pdf':
-            raise ValueError('Resume must be a PDF file')
-        return v
+    resume_content: Optional[bytes] = Field(None, description="Binary content of the candidate's resume")
+    resume_filename: Optional[str] = Field(None, description="Filename of the uploaded resume")
+    
+    class Config:
+        arbitrary_types_allowed = True
 
 class CandidateUpdate(BaseModel):
     name: Optional[str] = None

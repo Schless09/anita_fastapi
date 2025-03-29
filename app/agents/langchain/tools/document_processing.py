@@ -1,4 +1,4 @@
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Union
 from langchain.tools import BaseTool
 from langchain_openai import ChatOpenAI
 from PyPDF2 import PdfReader
@@ -14,7 +14,7 @@ class PDFProcessor(BaseTool):
     """Tool for processing PDF documents."""
     
     name = "pdf_processor"
-    description = "Processes PDF documents to extract text content"
+    description = "Processes PDF documents to extract text content. Can accept either a file path string or binary data."
     # Define fields that will be set in __init__
     llm: ChatOpenAI = Field(default=None)
     
@@ -32,11 +32,37 @@ class PDFProcessor(BaseTool):
             temperature=0.3
         )
 
-    def _run(self, file_path: str) -> Dict[str, Any]:
-        """Process a PDF file and extract its text content."""
+    def _run(self, file_input: Union[str, bytes]) -> Dict[str, Any]:
+        """Process a PDF file and extract its text content.
+        
+        Args:
+            file_input: Either a file path (str) or PDF binary content (bytes)
+        """
         try:
-            # Read PDF file
-            reader = PdfReader(file_path)
+            # Check if input is a file path or binary content
+            if isinstance(file_input, str):
+                # It's a file path
+                logger.info(f"Processing PDF from file path: {file_input}")
+                try:
+                    reader = PdfReader(file_input)
+                except FileNotFoundError as e:
+                    logger.error(f"File not found: {file_input}")
+                    return {
+                        "status": "error",
+                        "error": f"File not found: {str(e)}"
+                    }
+            else:
+                # It's binary content
+                logger.info("Processing PDF from binary content")
+                try:
+                    pdf_stream = io.BytesIO(file_input)
+                    reader = PdfReader(pdf_stream)
+                except Exception as e:
+                    logger.error(f"Error reading PDF from binary content: {str(e)}")
+                    return {
+                        "status": "error",
+                        "error": f"Invalid PDF content: {str(e)}"
+                    }
             
             # Extract text from each page
             text_content = []
@@ -59,9 +85,9 @@ class PDFProcessor(BaseTool):
                 "error": str(e)
             }
 
-    async def _arun(self, file_path: str) -> Dict[str, Any]:
+    async def _arun(self, file_input: Union[str, bytes]) -> Dict[str, Any]:
         """Async version of PDF processing."""
-        return self._run(file_path)
+        return self._run(file_input)
 
 class ResumeParser(BaseTool):
     """Tool for parsing resume content."""

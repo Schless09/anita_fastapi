@@ -3,7 +3,7 @@ from langchain.tools import BaseTool
 from langchain_openai import ChatOpenAI, OpenAIEmbeddings
 from langchain_community.vectorstores import Pinecone
 from langchain.docstore.document import Document
-from langchain.chains import LLMChain
+from langchain.schema.runnable import RunnableSequence
 from pinecone import Pinecone as PineconeClient
 import os
 import logging

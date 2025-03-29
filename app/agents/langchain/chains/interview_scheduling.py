@@ -1,6 +1,6 @@
 from typing import Any, Dict, List, Optional
 from datetime import datetime, timedelta
-from langchain.chains import LLMChain
+from langchain.schema.runnable import RunnableSequence
 from langchain.prompts import PromptTemplate
 from langchain_openai import ChatOpenAI
 from ..tools.vector_store import VectorStoreTool
@@ -48,10 +48,7 @@ class InterviewSchedulingChain:
             6. Success criteria"""
         )
         
-        self.interview_prep_chain = LLMChain(
-            llm=self.llm,
-            prompt=interview_prep_prompt
-        )
+        self.interview_prep_chain = interview_prep_prompt | self.llm
         
         # Interview feedback chain
         feedback_analysis_prompt = PromptTemplate(
@@ -73,10 +70,7 @@ class InterviewSchedulingChain:
             6. Next steps recommendation"""
         )
         
-        self.feedback_analysis_chain = LLMChain(
-            llm=self.llm,
-            prompt=feedback_analysis_prompt
-        )
+        self.feedback_analysis_chain = feedback_analysis_prompt | self.llm
 
     async def schedule_interview(
         self,
@@ -116,10 +110,10 @@ class InterviewSchedulingChain:
             job_data = job_result["results"][0]
             
             # Step 2: Prepare interview materials
-            prep_result = await self.interview_prep_chain.arun(
-                job_data=job_data["content"],
-                candidate_data=candidate_data["content"]
-            )
+            prep_result = await self.interview_prep_chain.ainvoke({
+                "job_data": job_data["content"],
+                "candidate_data": candidate_data["content"]
+            })
             
             # Note: Calendar functionality temporarily disabled
             selected_slot = preferred_times[0]
@@ -181,10 +175,10 @@ The Recruitment Team"""
             interview_data = interview_result["results"][0]
             
             # Step 2: Analyze feedback
-            analysis_result = await self.feedback_analysis_chain.arun(
-                feedback=str(feedback),
-                preparation=interview_data.get("preparation_materials", "")
-            )
+            analysis_result = await self.feedback_analysis_chain.ainvoke({
+                "feedback": str(feedback),
+                "preparation": interview_data.get("preparation_materials", "")
+            })
             
             # Step 3: Store feedback and analysis
             store_result = await self.vector_store._arun(

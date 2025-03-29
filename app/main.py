@@ -335,15 +335,15 @@ async def create_candidate(
             "email": email,
             "phone_number": phone_number,
             "linkedin": linkedin,
-            "resume": resume,
             "resume_content": resume_content,
             "resume_filename": resume.filename
         }
         
         # Process candidate in background
+        candidate_create = CandidateCreate(**candidate_data)
         background_tasks.add_task(
-            brain_agent.process_candidate,
-            candidate=CandidateCreate(**candidate_data)
+            brain_agent.handle_candidate_submission,
+            candidate_data=candidate_create
         )
         
         return {
@@ -376,7 +376,7 @@ async def match_candidates(
     try:
         logger.info(f"🔍 Matching candidates for job: {job_id}")
         
-        matches = await brain_agent.match_candidates_to_job(
+        matches = await brain_agent.handle_job_matching(
             job_id=job_id,
             top_k=request.top_k
         )
