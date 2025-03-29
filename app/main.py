@@ -189,11 +189,11 @@ logger.info("🔄 Reusing shared VectorStoreTool instance for all agents and too
 matching_tool = MatchingTool(vector_store=vector_store)
 email_tool = EmailTool()
 
-# Initialize chains (these should be updated to accept vector_store, but for now we're focusing on agents)
-candidate_processing_chain = CandidateProcessingChain()
-job_matching_chain = JobMatchingChain()
+# Initialize chains with the shared vector_store
+candidate_processing_chain = CandidateProcessingChain(vector_store=vector_store)
+job_matching_chain = JobMatchingChain(vector_store=vector_store)
 interview_scheduling_chain = InterviewSchedulingChain()
-follow_up_chain = FollowUpChain()
+follow_up_chain = FollowUpChain(vector_store=vector_store)
 
 # Initialize agents with emoji identifiers, passing the shared vector_store
 candidate_intake_agent = CandidateIntakeAgent(vector_store=vector_store)

@@ -59,10 +59,10 @@ class BrainAgent:
         self.resume_parser = ResumeParser()
         
         # Initialize chains with the shared vector_store
-        self.candidate_processing_chain = CandidateProcessingChain()
-        self.job_matching_chain = JobMatchingChain()
+        self.candidate_processing_chain = CandidateProcessingChain(vector_store=self.vector_store)
+        self.job_matching_chain = JobMatchingChain(vector_store=self.vector_store)
         self.interview_scheduling_chain = InterviewSchedulingChain()
-        self.follow_up_chain = FollowUpChain()
+        self.follow_up_chain = FollowUpChain(vector_store=self.vector_store)
         
         # Initialize agents with the shared vector_store
         self.candidate_intake_agent = CandidateIntakeAgent(vector_store=self.vector_store)

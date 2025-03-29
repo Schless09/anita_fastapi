@@ -6,12 +6,16 @@ from langchain_openai import ChatOpenAI
 from ..tools.vector_store import VectorStoreTool
 from ..tools.communication import EmailTool
 from ..tools.matching import MatchingTool
+import logging
+
+logger = logging.getLogger(__name__)
 
 class FollowUpChain:
     def __init__(
         self,
         model_name: str = "gpt-4-turbo-preview",
-        temperature: float = 0.7
+        temperature: float = 0.7,
+        vector_store: Optional[VectorStoreTool] = None
     ):
         self.llm = ChatOpenAI(
             model_name=model_name,
@@ -19,9 +23,15 @@ class FollowUpChain:
         )
         
         # Initialize tools
-        self.vector_store = VectorStoreTool()
+        if vector_store:
+            logger.info("FollowUpChain using provided VectorStoreTool instance")
+            self.vector_store = vector_store
+        else:
+            logger.warning("⚠️ FollowUpChain creating new VectorStoreTool - this should be avoided!")
+            self.vector_store = VectorStoreTool()
+            
         self.email_tool = EmailTool()
-        self.matching_tool = MatchingTool()
+        self.matching_tool = MatchingTool(vector_store=self.vector_store)
         
         # Initialize chains
         self._initialize_chains()

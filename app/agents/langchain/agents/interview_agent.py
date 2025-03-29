@@ -12,9 +12,11 @@ class InterviewAgent(BaseAgent):
     def __init__(
         self,
         model_name: str = "gpt-4-turbo-preview",
-        temperature: float = 0.7
+        temperature: float = 0.7,
+        memory: Optional[Any] = None,
+        vector_store: Optional[VectorStoreTool] = None
     ):
-        super().__init__(model_name, temperature)
+        super().__init__(model_name, temperature, memory)
         
         self.llm = ChatOpenAI(
             model_name=model_name,
@@ -24,8 +26,8 @@ class InterviewAgent(BaseAgent):
         # Initialize tools
         self.tools = [
             EmailTool(),
-            VectorStoreTool(),
-            MatchingTool()
+            vector_store or VectorStoreTool(),  # Use provided vector_store or create a new one
+            MatchingTool(vector_store=vector_store)  # Pass vector_store to MatchingTool
         ]
         
         # Initialize agent with system message

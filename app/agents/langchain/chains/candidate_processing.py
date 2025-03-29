@@ -5,12 +5,16 @@ from langchain_openai import ChatOpenAI
 from ..tools.document_processing import PDFProcessor, ResumeParser
 from ..tools.vector_store import VectorStoreTool
 from ..tools.communication import EmailTool
+import logging
+
+logger = logging.getLogger(__name__)
 
 class CandidateProcessingChain:
     def __init__(
         self,
         model_name: str = "gpt-4-turbo-preview",
-        temperature: float = 0.7
+        temperature: float = 0.7,
+        vector_store: Optional[VectorStoreTool] = None
     ):
         self.llm = ChatOpenAI(
             model_name=model_name,
@@ -20,7 +24,14 @@ class CandidateProcessingChain:
         # Initialize tools
         self.pdf_processor = PDFProcessor()
         self.resume_parser = ResumeParser()
-        self.vector_store = VectorStoreTool()
+        
+        if vector_store:
+            logger.info("CandidateProcessingChain using provided VectorStoreTool instance")
+            self.vector_store = vector_store
+        else:
+            logger.warning("⚠️ CandidateProcessingChain creating new VectorStoreTool - this should be avoided!")
+            self.vector_store = VectorStoreTool()
+            
         self.email_tool = EmailTool()
         
         # Initialize chains
