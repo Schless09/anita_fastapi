@@ -32,11 +32,12 @@ class CandidateService:
     async def process_candidate_submission(self, candidate_data: Dict[str, Any]) -> Dict[str, Any]:
         """
         Process a new candidate submission from the frontend.
-        Initial quick processing to trigger Retell call, store resume for later processing.
+        Store basic candidate info in Supabase.
+        Note: Retell call scheduling is now handled directly in the endpoint.
         """
         try:
-            # 1. Create candidate in Supabase with basic info
-            candidate_id = str(uuid.uuid4())
+            # 1. Get candidate ID from data or generate new one
+            candidate_id = candidate_data.get('id', str(uuid.uuid4()))
             
             # Handle linkedin_url
             linkedin_url = candidate_data.get('linkedin_url')
@@ -105,17 +106,7 @@ class CandidateService:
             response = await self.supabase.table('candidates_dev').insert(mapped_data).execute()
             created_candidate = response.data[0]
 
-            # Trigger Retell call with quick extracted info
-            await self.retell.schedule_call(
-                candidate_id=candidate_id,
-                dynamic_variables={
-                    'first_name': candidate_data.get('first_name', ''),
-                    'email': candidate_data.get('email', ''),
-                    'current_company': current_company,
-                    'current_title': current_role,
-                    'phone': candidate_data.get('phone', '')
-                }
-            )
+            # Note: Retell call scheduling is now handled in the endpoint
 
             return {
                 'id': candidate_id,
@@ -397,20 +388,63 @@ class CandidateService:
 
     async def update_candidate_profile(self, candidate_id: str, update_data: Dict[str, Any]) -> Dict[str, Any]:
         """
-        Update a candidate's profile in Supabase.
+        Update a candidate's profile in Supabase with new data.
+        
+        Args:
+            candidate_id: The unique ID of the candidate to update
+            update_data: Dictionary of fields to update
+            
+        Returns:
+            The updated candidate data
         """
         try:
-            logger.info(f"Updating candidate profile for {candidate_id}")
+            logger.info(f"Updating candidate {candidate_id} in Supabase")
+            
+            # Check if candidate exists
+            check_response = await self.supabase.table('candidates_dev').select('*').eq('id', candidate_id).execute()
+            if not check_response.data:
+                logger.error(f"Candidate {candidate_id} not found in Supabase")
+                raise ValueError(f"Candidate {candidate_id} not found")
+            
+            # Add updated_at timestamp
+            if 'updated_at' not in update_data:
+                update_data['updated_at'] = datetime.utcnow().isoformat()
+            
+            # If updating profile_json, merge with existing rather than replacing
+            existing_candidate = check_response.data[0]
+            if 'profile_json' in update_data and existing_candidate.get('profile_json'):
+                # Merge profile_json instead of replacing
+                existing_profile = existing_candidate['profile_json']
+                update_profile = update_data['profile_json']
+                
+                # Deep merge the dictionaries
+                merged_profile = self._deep_merge(existing_profile, update_profile)
+                update_data['profile_json'] = merged_profile
             
             # Update candidate in database
             response = await self.supabase.table('candidates_dev').update(update_data).eq('id', candidate_id).execute()
+            updated_candidate = response.data[0] if response.data else None
             
-            if not response.data:
-                raise Exception(f"No candidate found with ID {candidate_id}")
+            if not updated_candidate:
+                logger.error(f"Failed to update candidate {candidate_id}")
+                raise Exception(f"Failed to update candidate {candidate_id}")
                 
             logger.info(f"Successfully updated candidate {candidate_id}")
-            return response.data[0]
+            return updated_candidate
             
         except Exception as e:
             logger.error(f"Error updating candidate profile: {str(e)}")
-            raise Exception(f"Error updating candidate profile: {str(e)}") 
+            raise
+    
+    def _deep_merge(self, dict1: Dict, dict2: Dict) -> Dict:
+        """
+        Deep merge two dictionaries. If keys exist in both, dict2 values take precedence.
+        For nested dictionaries, they are recursively merged.
+        """
+        result = dict1.copy()
+        for key, value in dict2.items():
+            if key in result and isinstance(result[key], dict) and isinstance(value, dict):
+                result[key] = self._deep_merge(result[key], value)
+            else:
+                result[key] = value
+        return result 

@@ -120,7 +120,9 @@ async def initialize_chains(vector_store, services):
         'job_matching': JobMatchingChain(
             vector_store=vector_store
         ),
-        'interview_scheduling': InterviewSchedulingChain(),
+        'interview_scheduling': InterviewSchedulingChain(
+            vector_store=vector_store
+        ),
         'follow_up': FollowUpChain(vector_store=vector_store)
     }
     
@@ -405,7 +407,63 @@ async def create_candidate(
         # Generate candidate ID upfront
         candidate_id = str(uuid.uuid4())
         
-        # Create candidate data object
+        # Create candidate service
+        candidate_service = CandidateService()
+        
+        # Extract first name and last name
+        first_name = name.split(' ')[0] if ' ' in name else name
+        last_name = ' '.join(name.split(' ')[1:]) if ' ' in name else ''
+        
+        # Quick extract of current role/company from resume
+        current_role = "current role"
+        current_company = "current company"
+        try:
+            # Initialize OpenAI service
+            openai_service = OpenAIService()
+            
+            # Extract text from PDF
+            pdf_processor = PDFProcessor()
+            pdf_result = await pdf_processor._arun(resume_content)
+            if pdf_result["status"] == "success":
+                text = pdf_result["text_content"]
+                quick_info = await openai_service.quick_extract_current_position(text)
+                current_role = quick_info.get('current_role', 'current role')
+                current_company = quick_info.get('current_company', 'current company')
+        except Exception as e:
+            logger.warning(f"⚠️ Error in quick resume extraction: {str(e)}")
+        
+        # Prepare data for Supabase
+        submission_data = {
+            'id': candidate_id,
+            'email': email,
+            'first_name': first_name,
+            'last_name': last_name,
+            'phone': phone_number,
+            'linkedin_url': linkedin,
+            'resume_content': resume_content,
+            'resume_filename': resume.filename
+        }
+        
+        # Store in Supabase
+        stored_candidate = await candidate_service.process_candidate_submission(submission_data)
+        logger.info(f"✅ Candidate {candidate_id} stored in Supabase")
+        
+        # Schedule Retell call immediately
+        logger.info(f"📞 Scheduling Retell call for candidate {candidate_id}")
+        retell_service = RetellService()
+        call_result = await retell_service.schedule_call(
+            candidate_id=candidate_id,
+            dynamic_variables={
+                'first_name': first_name,
+                'email': email,
+                'current_company': current_company,
+                'current_title': current_role,
+                'phone': phone_number
+            }
+        )
+        logger.info(f"✅ Retell call scheduled for candidate {candidate_id}: {call_result.get('call_id', 'unknown')}")
+        
+        # Create candidate data object for background processing
         candidate_data = {
             "id": candidate_id,
             "name": name,
@@ -430,6 +488,7 @@ async def create_candidate(
             "phone_number": phone_number,
             "linkedin": linkedin,
             "status": "processing",
+            "call_id": call_result.get("call_id"),
             "created_at": datetime.utcnow(),
             "updated_at": datetime.utcnow()
         }

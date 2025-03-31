@@ -11,7 +11,8 @@ class InterviewSchedulingChain:
     def __init__(
         self,
         model_name: str = "gpt-4-turbo-preview",
-        temperature: float = 0.7
+        temperature: float = 0.7,
+        vector_store: Optional[VectorStoreTool] = None
     ):
         self.llm = ChatOpenAI(
             model_name=model_name,
@@ -19,9 +20,15 @@ class InterviewSchedulingChain:
         )
         
         # Initialize tools
-        self.vector_store = VectorStoreTool()
+        if vector_store:
+            self.vector_store = vector_store
+            self.matching_tool = MatchingTool(vector_store=vector_store)
+        else:
+            # This should be avoided!
+            self.vector_store = VectorStoreTool()
+            self.matching_tool = MatchingTool(vector_store=self.vector_store)
+        
         self.email_tool = EmailTool()
-        self.matching_tool = MatchingTool()
         
         # Initialize chains
         self._initialize_chains()

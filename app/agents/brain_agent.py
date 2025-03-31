@@ -88,11 +88,19 @@ class BrainAgent:
     async def handle_candidate_submission(self, candidate_data: CandidateCreate) -> Dict[str, Any]:
         """
         Handle a new candidate submission by coordinating between agents.
+        Note: Supabase storage and Retell call scheduling are already done in the endpoint.
+        This method focuses on processing the resume and updating the profile.
         """
+        # Generate a unique process ID for tracking this transaction
+        process_id = f"candidate_submission_{datetime.utcnow().isoformat()}_{candidate_data.id}"
+        
         try:
-            logger.info(f"Processing candidate submission for {candidate_data.email}")
+            logger.info(f"\n=== 🔄 Starting background processing for candidate (ID: {process_id}) ===")
+            logger.info(f"Candidate: {candidate_data.email} (ID: {candidate_data.id})")
             
-            # Process candidate with intake agent
+            # Step 1: Process candidate with intake agent
+            logger.info(f"\nStep 1: 👤 Processing candidate with CandidateIntakeAgent")
+            logger.info("----------------------------------------")
             profile = await self.candidate_intake_agent.process_candidate(
                 resume_content=candidate_data.resume_content,
                 candidate_email=candidate_data.email,
@@ -103,38 +111,86 @@ class BrainAgent:
                     "linkedin": candidate_data.linkedin
                 }
             )
+            
+            if profile["status"] != "success":
+                logger.error(f"❌ Error processing candidate: {profile}")
+                return {
+                    "id": candidate_data.id,
+                    "status": "processing_failed",
+                    "error": profile.get("error", "Unknown error"),
+                    "timestamp": datetime.utcnow().isoformat()
+                }
+                
             logger.info(f"✅ Candidate profile created for {candidate_data.email}")
             
-            # Find job matches
-            matches = await self.job_matching_agent.find_matches(profile)
-            logger.info(f"Found {len(matches)} potential job matches")
+            # Step 2: Update Supabase with processed candidate data
+            logger.info(f"\nStep 2: 📊 Updating Supabase with processed data")
+            logger.info("----------------------------------------")
             
-            if matches:
-                # Schedule interview if matches found
-                interview = await self.interview_agent.schedule_interview(
-                    candidate_id=profile['id'],
-                    job_matches=matches
-                )
-                logger.info(f"Interview scheduled for candidate {profile['id']}")
+            # Create candidate service
+            candidate_service = CandidateService()
+            
+            # Prepare update data
+            update_data = {
+                "profile_json": profile["profile"],
+                "resume_processed": True,
+                "status": "resume_processed", 
+                "updated_at": datetime.utcnow().isoformat()
+            }
+            
+            # Update in Supabase
+            updated_candidate = await candidate_service.update_candidate_profile(
+                candidate_id=candidate_data.id,
+                update_data=update_data
+            )
+            logger.info(f"✅ Candidate {candidate_data.id} updated in Supabase with processed resume data")
+            
+            # Step 3: Find job matches
+            logger.info(f"\nStep 3: 🔍 Finding job matches with JobMatchingAgent")
+            logger.info("----------------------------------------")
+            matches = await self.job_matching_agent.find_matches(profile)
+            matches_count = len(matches) if isinstance(matches, list) else 0
+            logger.info(f"Found {matches_count} potential job matches")
+            
+            # Step 4: Update Supabase with job matches
+            if matches_count > 0:
+                logger.info(f"\nStep 4: 💾 Storing job matches in Supabase")
+                logger.info("----------------------------------------")
                 
-                # Set up follow-up communication
-                await self.follow_up_agent.setup_follow_up(
-                    candidate_id=profile['id'],
-                    interview_id=interview['id']
+                # Prepare job matches data
+                job_matches_data = {
+                    "job_matches": matches,
+                    "has_matches": True,
+                    "matches_count": matches_count,
+                    "status": "matches_found",
+                    "updated_at": datetime.utcnow().isoformat()
+                }
+                
+                # Update in Supabase
+                await candidate_service.update_candidate_profile(
+                    candidate_id=candidate_data.id,
+                    update_data=job_matches_data
                 )
-                logger.info(f"Follow-up communication set for candidate {profile['id']}")
+                logger.info(f"✅ Job matches stored for candidate {candidate_data.id}")
+            
+            logger.info(f"\n=== ✅ Background processing complete (ID: {process_id}) ===")
             
             return {
-                "id": profile['id'],
+                "id": candidate_data.id,
                 "status": "processing_complete",
-                "matches": len(matches) if matches else 0,
-                "interview_scheduled": bool(matches),
+                "matches": matches_count,
                 "timestamp": datetime.utcnow().isoformat()
             }
             
         except Exception as e:
-            logger.error(f"Error processing candidate {candidate_data.email}: {str(e)}")
-            raise
+            logger.error(f"❌ Error processing candidate {candidate_data.email}: {str(e)}")
+            logger.error(f"❌ Full traceback: {traceback.format_exc()}")
+            return {
+                "id": candidate_data.id,
+                "status": "error",
+                "error": str(e),
+                "timestamp": datetime.utcnow().isoformat()
+            }
 
     async def handle_job_matching(self, job_id: str, top_k: int = 5) -> Dict[str, Any]:
         """Find matching candidates for a job."""
