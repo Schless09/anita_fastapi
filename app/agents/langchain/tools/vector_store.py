@@ -1,4 +1,4 @@
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Literal, ClassVar
 from langchain.tools import BaseTool
 from langchain_openai import ChatOpenAI, OpenAIEmbeddings
 from langchain_community.vectorstores import Pinecone
@@ -7,79 +7,124 @@ from langchain.schema.runnable import RunnableSequence
 from pinecone import Pinecone as PineconeClient
 import os
 import logging
-from pydantic import Field
+from pydantic import Field, PrivateAttr, BaseModel
 from .base import parse_llm_json_response
+from app.config import get_pinecone
+from app.services.pinecone_service import PineconeService
 
 logger = logging.getLogger(__name__)
 
+class VectorStoreInput(BaseModel):
+    """Input schema for vector store operations."""
+    operation: Literal["store_job", "store_candidate", "search_jobs", "search_candidates"]
+    job_data: Optional[Dict[str, Any]] = None
+    candidate_data: Optional[Dict[str, Any]] = None
+    query: Optional[str] = None
+    top_k: Optional[int] = Field(default=5, ge=1, le=100)
+
 class VectorStoreTool(BaseTool):
-    """Tool for managing vector store operations."""
+    """Tool for managing vector store operations. Implements singleton pattern."""
     
     name = "vector_store"
-    description = "Manage vector store operations for jobs and candidates"
+    description = "Manage vector store operations for jobs and candidates. Use for storing or searching job and candidate data."
+    args_schema = VectorStoreInput
+    
+    # Class-level singleton instance
+    _instance: ClassVar[Optional['VectorStoreTool']] = None
+    
+    # Private instance state using PrivateAttr
+    _initialized: bool = PrivateAttr(default=False)
+    
     # Define fields that will be set in __init__
     embeddings: OpenAIEmbeddings = Field(default=None)
     jobs_index: Any = Field(default=None)
     candidates_index: Any = Field(default=None)
     pinecone_client: Any = Field(default=None)
     llm: ChatOpenAI = Field(default=None)
+    pinecone_service: PineconeService = Field(default=None)
+    pinecone: Any = Field(default=None)
     
     class Config:
         """Configuration for this pydantic object."""
         arbitrary_types_allowed = True
     
+    def __new__(cls, *args, **kwargs):
+        if cls._instance is None:
+            logger.info("Creating new VectorStoreTool instance")
+            cls._instance = super(VectorStoreTool, cls).__new__(cls)
+            # Initialize PrivateAttr
+            object.__setattr__(cls._instance, '_initialized', False)
+        return cls._instance
+    
     def __init__(self, jobs_index=None, candidates_index=None):
         """Initialize the vector store tool."""
-        super().__init__()
-        
-        # Create OpenAI embeddings
-        self.embeddings = OpenAIEmbeddings()
-        
-        # Set up LLM
-        self.llm = ChatOpenAI(
-            model_name="gpt-4-turbo-preview",
-            temperature=0.3
-        )
-        
-        # Use provided indices or initialize new ones
-        if jobs_index and candidates_index:
-            logger.info("Using provided vector indices.")
-            self.pinecone_client = None
-            # Create langchain Pinecone vector stores from raw indices
-            self.jobs_index = Pinecone.from_existing_index(
-                index_name=os.getenv("PINECONE_JOBS_INDEX", "jobs"),
-                embedding=self.embeddings,
-                text_key="content"
-            )
-            self.candidates_index = Pinecone.from_existing_index(
-                index_name=os.getenv("PINECONE_CANDIDATES_INDEX", "candidates"),
-                embedding=self.embeddings,
-                text_key="content"
-            )
-        else:
-            logger.info("Initializing new vector indices...")
-            # Initialize Pinecone client
-            self.pinecone_client = PineconeClient(
-                api_key=os.getenv("PINECONE_API_KEY")
+        if not self._initialized:
+            logger.info("Initializing VectorStoreTool")
+            super().__init__()
+            
+            # Initialize Pinecone service
+            self.pinecone = get_pinecone()
+            self.pinecone_service = PineconeService()
+            
+            # Create OpenAI embeddings
+            self.embeddings = OpenAIEmbeddings()
+            
+            # Set up LLM
+            self.llm = ChatOpenAI(
+                model_name="gpt-4-turbo-preview",
+                temperature=0.3
             )
             
-            # Get index names from environment
-            jobs_index_name = os.getenv("PINECONE_JOBS_INDEX", "jobs")
-            candidates_index_name = os.getenv("PINECONE_CANDIDATES_INDEX", "candidates")
+            # Use provided indices or initialize new ones
+            if jobs_index and candidates_index:
+                logger.info("Using provided vector indices.")
+                self.pinecone_client = None
+                # Create langchain Pinecone vector stores from raw indices
+                self.jobs_index = Pinecone.from_existing_index(
+                    index_name=os.getenv("PINECONE_JOBS_INDEX", "jobs"),
+                    embedding=self.embeddings,
+                    text_key="content"
+                )
+                self.candidates_index = Pinecone.from_existing_index(
+                    index_name=os.getenv("PINECONE_CANDIDATES_INDEX", "candidates"),
+                    embedding=self.embeddings,
+                    text_key="content"
+                )
+            else:
+                logger.info("Initializing new vector indices...")
+                # Initialize Pinecone client
+                self.pinecone_client = PineconeClient(
+                    api_key=os.getenv("PINECONE_API_KEY")
+                )
+                
+                # Get index names from environment
+                jobs_index_name = os.getenv("PINECONE_JOBS_INDEX", "jobs")
+                candidates_index_name = os.getenv("PINECONE_CANDIDATES_INDEX", "candidates")
+                
+                # Initialize langchain vector store indices
+                self.jobs_index = Pinecone.from_existing_index(
+                    index_name=jobs_index_name,
+                    embedding=self.embeddings,
+                    text_key="content"
+                )
+                self.candidates_index = Pinecone.from_existing_index(
+                    index_name=candidates_index_name,
+                    embedding=self.embeddings,
+                    text_key="content"
+                )
+                logger.info(f"Initialized vector indices: {jobs_index_name}, {candidates_index_name}")
             
-            # Initialize langchain vector store indices
-            self.jobs_index = Pinecone.from_existing_index(
-                index_name=jobs_index_name,
-                embedding=self.embeddings,
-                text_key="content"
-            )
-            self.candidates_index = Pinecone.from_existing_index(
-                index_name=candidates_index_name,
-                embedding=self.embeddings,
-                text_key="content"
-            )
-            logger.info(f"Initialized vector indices: {jobs_index_name}, {candidates_index_name}")
-
+            # Set initialized using PrivateAttr
+            object.__setattr__(self, '_initialized', True)
+            logger.info("✅ VectorStoreTool initialization complete")
+    
+    @classmethod
+    def get_instance(cls):
+        """Get or create the singleton instance."""
+        if cls._instance is None:
+            cls._instance = cls()
+        return cls._instance
+    
     def _run(self, operation: str, **kwargs) -> Dict[str, Any]:
         """Run vector store operations."""
         try:
@@ -223,4 +268,38 @@ class VectorStoreTool(BaseTool):
             return {
                 "status": "error",
                 "error": str(e)
-            } 
+            }
+    
+    def store_candidate_vector(self, candidate_id: str, vector: List[float], metadata: Dict[str, Any]) -> None:
+        """Store candidate vector in the vector store."""
+        try:
+            self.pinecone_service.store_candidate_vector(candidate_id, vector, metadata)
+            logger.debug(f"Stored vector for candidate {candidate_id}")
+        except Exception as e:
+            logger.error(f"Error storing candidate vector: {e}")
+            raise
+    
+    def store_job_vector(self, job_id: str, vector: List[float], metadata: Dict[str, Any]) -> None:
+        """Store job vector in the vector store."""
+        try:
+            self.pinecone_service.store_job_vector(job_id, vector, metadata)
+            logger.debug(f"Stored vector for job {job_id}")
+        except Exception as e:
+            logger.error(f"Error storing job vector: {e}")
+            raise
+    
+    def query_candidates(self, query_vector: List[float], top_k: int = 5) -> List[Dict[str, Any]]:
+        """Query candidates based on vector similarity."""
+        try:
+            return self.pinecone_service.query_candidates(query_vector, top_k)
+        except Exception as e:
+            logger.error(f"Error querying candidates: {e}")
+            raise
+    
+    def query_jobs(self, query_vector: List[float], top_k: int = 5) -> List[Dict[str, Any]]:
+        """Query jobs based on vector similarity."""
+        try:
+            return self.pinecone_service.query_jobs(query_vector, top_k)
+        except Exception as e:
+            logger.error(f"Error querying jobs: {e}")
+            raise 

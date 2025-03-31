@@ -11,6 +11,7 @@ from app.agents.langchain.tools.vector_store import VectorStoreTool
 from app.agents.langchain.tools.document_processing import PDFProcessor, ResumeParser
 from app.agents.langchain.tools.matching import MatchingTool
 from app.agents.langchain.tools.communication import EmailTool
+from app.schemas.candidate import CandidateCreate
 
 from app.agents.langchain.chains.candidate_processing import CandidateProcessingChain
 from app.agents.langchain.chains.job_matching import JobMatchingChain
@@ -27,132 +28,104 @@ from app.config import get_settings
 
 # Set up logging
 import logging
+import traceback
 logger = logging.getLogger(__name__)
 
 class BrainAgent:
+    """
+    Main orchestrator agent that coordinates all other agents.
+    Uses lazy loading for sub-agents to improve startup time.
+    """
+    
     def __init__(
         self,
-        vector_store: Optional[VectorStoreTool] = None,
-        model_name: str = "gpt-4-turbo-preview",
-        temperature: float = 0.7
+        vector_store: VectorStoreTool,
+        candidate_intake_agent: Optional[CandidateIntakeAgent] = None,
+        job_matching_agent: Optional[JobMatchingAgent] = None,
+        interview_agent: Optional[InterviewAgent] = None,
+        follow_up_agent: Optional[FollowUpAgent] = None
     ):
-        self.settings = get_settings()
-        self.llm = ChatOpenAI(
-            model_name=model_name,
-            temperature=temperature
-        )
+        self._vector_store = vector_store
+        self._candidate_intake_agent = candidate_intake_agent
+        self._job_matching_agent = job_matching_agent
+        self._interview_agent = interview_agent
+        self._follow_up_agent = follow_up_agent
         
-        # Initialize services
-        self.candidate_service = CandidateService()
-        self.job_service = JobService()
-        self.retell_service = RetellService()
-        self.openai_service = OpenAIService()
-        self.pinecone_service = PineconeService()
-        self.matching_service = MatchingService()
-        
-        # Initialize tools - ensure vector_store is only created once
-        if not vector_store:
-            logger.warning("⚠️ BrainAgent creating new VectorStoreTool - should be passed from FastAPI")
-        self.vector_store = vector_store or VectorStoreTool()
-        self.email_tool = EmailTool()
-        self.matching_tool = MatchingTool(vector_store=self.vector_store)
-        self.pdf_processor = PDFProcessor()
-        self.resume_parser = ResumeParser()
-        
-        # Initialize chains with the shared vector_store
-        self.candidate_processing_chain = CandidateProcessingChain(vector_store=self.vector_store)
-        self.job_matching_chain = JobMatchingChain(vector_store=self.vector_store)
-        self.interview_scheduling_chain = InterviewSchedulingChain()
-        self.follow_up_chain = FollowUpChain(vector_store=self.vector_store)
-        
-        # Initialize agents with the shared vector_store
-        self.candidate_intake_agent = CandidateIntakeAgent(vector_store=self.vector_store)
-        self.job_matching_agent = JobMatchingAgent(vector_store=self.vector_store)
-        self.farming_matching_agent = FarmingMatchingAgent(vector_store=self.vector_store)
-        self.interview_agent = InterviewAgent(vector_store=self.vector_store)
-        self.follow_up_agent = FollowUpAgent(vector_store=self.vector_store)
-        
-        # Initialize state management
-        self.state = {
-            "processes": {},  # Track ongoing processes
-            "transactions": {},  # Track multi-step transactions
-            "errors": {},  # Track errors by process
-            "metrics": {  # Track basic metrics
-                "candidates_processed": 0,
-                "matches_found": 0,
-                "interviews_scheduled": 0,
-                "follow_ups_sent": 0
-            }
-        }
-        logger.info("BrainAgent initialized successfully")
-
-    def _start_transaction(self, process_id: str, process_type: str) -> None:
-        """Start a new transaction for tracking multi-step processes."""
-        self.state["transactions"][process_id] = {
-            "type": process_type,
-            "start_time": datetime.utcnow().isoformat(),
-            "steps": [],
-            "status": "in_progress",
-            "current_step": None
-        }
-
-    def _update_transaction(self, process_id: str, step: str, status: str, data: Optional[Dict] = None) -> None:
-        """Update transaction status and data."""
-        if process_id in self.state["transactions"]:
-            self.state["transactions"][process_id]["steps"].append({
-                "step": step,
-                "status": status,
-                "timestamp": datetime.utcnow().isoformat(),
-                "data": data
-            })
-            self.state["transactions"][process_id]["current_step"] = step
-
-    def _end_transaction(self, process_id: str, status: str) -> None:
-        """End a transaction with final status."""
-        if process_id in self.state["transactions"]:
-            self.state["transactions"][process_id].update({
-                "end_time": datetime.utcnow().isoformat(),
-                "status": status
-            })
-
-    async def handle_candidate_submission(self, candidate_data: Dict[str, Any]) -> Dict[str, Any]:
-        """Handle a new candidate submission."""
-        # Convert Pydantic model to dict if needed
-        if hasattr(candidate_data, "model_dump"):
-            candidate_dict = candidate_data.model_dump()
-        elif hasattr(candidate_data, "dict"):
-            candidate_dict = candidate_data.dict()
-        else:
-            candidate_dict = candidate_data
-            
-        process_id = f"candidate_{candidate_dict.get('id', datetime.utcnow().isoformat())}"
-        self._start_transaction(process_id, "candidate_submission")
-        
+        logger.info("BrainAgent initialized with vector store")
+    
+    @property
+    def candidate_intake_agent(self) -> CandidateIntakeAgent:
+        """Lazy load the candidate intake agent."""
+        if self._candidate_intake_agent is None:
+            logger.info("Lazy loading CandidateIntakeAgent")
+            self._candidate_intake_agent = CandidateIntakeAgent(vector_store=self._vector_store)
+        return self._candidate_intake_agent
+    
+    @property
+    def job_matching_agent(self) -> JobMatchingAgent:
+        """Lazy load the job matching agent."""
+        if self._job_matching_agent is None:
+            logger.info("Lazy loading JobMatchingAgent")
+            self._job_matching_agent = JobMatchingAgent(vector_store=self._vector_store)
+        return self._job_matching_agent
+    
+    @property
+    def interview_agent(self) -> InterviewAgent:
+        """Lazy load the interview agent."""
+        if self._interview_agent is None:
+            logger.info("Lazy loading InterviewAgent")
+            self._interview_agent = InterviewAgent(vector_store=self._vector_store)
+        return self._interview_agent
+    
+    @property
+    def follow_up_agent(self) -> FollowUpAgent:
+        """Lazy load the follow-up agent."""
+        if self._follow_up_agent is None:
+            logger.info("Lazy loading FollowUpAgent")
+            self._follow_up_agent = FollowUpAgent(vector_store=self._vector_store)
+        return self._follow_up_agent
+    
+    async def handle_candidate_submission(self, candidate_data: CandidateCreate) -> Dict[str, Any]:
+        """
+        Handle a new candidate submission by coordinating between agents.
+        """
         try:
-            logger.info(f"Processing candidate submission: {process_id}")
-            self._update_transaction(process_id, "intake", "in_progress")
+            logger.info(f"Processing candidate submission for {candidate_data.email}")
             
-            result = await self.candidate_intake_agent.process_candidate(candidate_dict)
+            # Process candidate with intake agent
+            profile = await self.candidate_intake_agent.process_candidate(candidate_data)
+            logger.info(f"✅ Candidate profile created for {candidate_data.email}")
             
-            if result["status"] == "success":
-                self._update_transaction(process_id, "intake", "completed", result)
-                self.state["metrics"]["candidates_processed"] += 1
-                self._end_transaction(process_id, "completed")
-            else:
-                self._update_transaction(process_id, "intake", "failed", result)
-                self._end_transaction(process_id, "failed")
+            # Find job matches
+            matches = await self.job_matching_agent.find_matches(profile)
+            logger.info(f"Found {len(matches)} potential job matches")
             
-            return result
+            if matches:
+                # Schedule interview if matches found
+                interview = await self.interview_agent.schedule_interview(
+                    candidate_id=profile['id'],
+                    job_matches=matches
+                )
+                logger.info(f"Interview scheduled for candidate {profile['id']}")
+                
+                # Set up follow-up communication
+                await self.follow_up_agent.setup_follow_up(
+                    candidate_id=profile['id'],
+                    interview_id=interview['id']
+                )
+                logger.info(f"Follow-up communication set for candidate {profile['id']}")
+            
+            return {
+                "id": profile['id'],
+                "status": "processing_complete",
+                "matches": len(matches) if matches else 0,
+                "interview_scheduled": bool(matches),
+                "timestamp": datetime.utcnow().isoformat()
+            }
             
         except Exception as e:
-            logger.error(f"Error processing candidate {process_id}: {str(e)}")
-            self._update_transaction(process_id, "intake", "error", {"error": str(e)})
-            self._end_transaction(process_id, "error")
-            return {
-                "status": "error",
-                "error": str(e),
-                "process_id": process_id
-            }
+            logger.error(f"Error processing candidate {candidate_data.email}: {str(e)}")
+            raise
 
     async def handle_job_matching(self, job_id: str, top_k: int = 5) -> Dict[str, Any]:
         """Find matching candidates for a job."""

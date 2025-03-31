@@ -393,4 +393,24 @@ class CandidateService:
 
         except Exception as e:
             logger.error(f"Error extracting text from PDF: {str(e)}")
-            return ""  # Return empty string if extraction fails 
+            return ""  # Return empty string if extraction fails
+
+    async def update_candidate_profile(self, candidate_id: str, update_data: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Update a candidate's profile in Supabase.
+        """
+        try:
+            logger.info(f"Updating candidate profile for {candidate_id}")
+            
+            # Update candidate in database
+            response = await self.supabase.table('candidates_dev').update(update_data).eq('id', candidate_id).execute()
+            
+            if not response.data:
+                raise Exception(f"No candidate found with ID {candidate_id}")
+                
+            logger.info(f"Successfully updated candidate {candidate_id}")
+            return response.data[0]
+            
+        except Exception as e:
+            logger.error(f"Error updating candidate profile: {str(e)}")
+            raise Exception(f"Error updating candidate profile: {str(e)}") 

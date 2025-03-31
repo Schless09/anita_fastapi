@@ -14,6 +14,9 @@ import openai
 import traceback
 import json
 from contextlib import asynccontextmanager
+import uuid
+import tempfile
+import asyncio
 
 from app.config import (
     get_settings,
@@ -82,75 +85,161 @@ logger.info("=====================================\n")
 load_dotenv()
 logger.info("Environment variables loaded")
 
-# Initialize core services first
-logger.info("Initializing core services...")
-try:
-    settings = get_settings()
-    logger.info("✅ Settings initialized successfully")
-    
-    supabase = get_supabase_client()
-    logger.info("✅ Supabase client initialized successfully")
-    
-    # Initialize vector store and Pinecone
-    logger.info("Initializing Pinecone and vector store...")
-    pinecone_client = get_pinecone()
-    logger.info("✅ Pinecone client initialized successfully")
-    
-    logger.info(f"Creating Pinecone indices with names: {settings.pinecone_jobs_index}, {settings.pinecone_candidates_index}")
-    jobs_index = pinecone_client.Index(settings.pinecone_jobs_index)
-    logger.info("✅ Jobs index initialized successfully")
-    
-    candidates_index = pinecone_client.Index(settings.pinecone_candidates_index)
-    logger.info("✅ Candidates index initialized successfully")
-    
-    logger.info("Initializing VectorStoreTool...")
-    vector_store = VectorStoreTool(jobs_index=jobs_index, candidates_index=candidates_index)
-    logger.info("✅ VectorStoreTool initialized successfully")
-    logger.info("⚠️ This is the ONLY VectorStoreTool instance that should be used throughout the application")
-    
-    # Initialize other services
-    logger.info("Initializing remaining services...")
-    retell = RetellService()
-    logger.info("✅ RetellService initialized")
-    
-    openai_service = OpenAIService()
-    logger.info("✅ OpenAIService initialized")
-    
-    pinecone = PineconeService()
-    logger.info("✅ PineconeService initialized")
-    
-    matching = MatchingService()
-    logger.info("✅ MatchingService initialized")
-    
-    candidate_service = CandidateService()
-    logger.info("✅ CandidateService initialized")
-    
-    job_service = JobService()
-    logger.info("✅ JobService initialized")
-    
-except Exception as e:
-    logger.error(f"❌ Error during service initialization: {str(e)}")
-    logger.error(f"❌ Full traceback: {traceback.format_exc()}")
-    raise
+# Global service instances
+vector_store = None
+brain_agent_instance = None
+core_services = {}
+agents = {}
 
-# Initialize FastAPI app
-logger.info("Initializing FastAPI application...")
+async def initialize_core_services():
+    """Initialize core services asynchronously."""
+    logger.info("Initializing core services...")
+    
+    # Get or create the singleton VectorStoreTool instance
+    vector_store = VectorStoreTool.get_instance()
+    
+    # Initialize other core services
+    services = {
+        'matching_tool': MatchingTool(vector_store=vector_store),
+        'pdf_processor': PDFProcessor(),
+        'resume_parser': ResumeParser(),
+        'email_tool': EmailTool()
+    }
+    
+    logger.info("✅ Core services initialized")
+    return services
 
-# Remove legacy agent initialization since we're using the new LangChain agents
-logger.info("Using LangChain agents for processing...")
+async def initialize_chains(vector_store, services):
+    """Initialize chains asynchronously."""
+    logger.info("Initializing chains...")
+    
+    chains = {
+        'candidate_processing': CandidateProcessingChain(
+            vector_store=vector_store
+        ),
+        'job_matching': JobMatchingChain(
+            vector_store=vector_store
+        ),
+        'interview_scheduling': InterviewSchedulingChain(),
+        'follow_up': FollowUpChain(vector_store=vector_store)
+    }
+    
+    logger.info("✅ Chains initialized")
+    return chains
 
-# Replace deprecated on_event handlers with lifespan context manager
+async def initialize_agents(vector_store, services, chains):
+    """Initialize agents asynchronously."""
+    logger.info("\n=== Initializing LangChain Agents ===")
+    
+    # Create initialization tasks
+    tasks = [
+        asyncio.create_task(initialize_agent(
+            "candidate_intake",
+            CandidateIntakeAgent,
+            vector_store,
+            services,
+            chains,
+            "👤"
+        )),
+        asyncio.create_task(initialize_agent(
+            "job_matching",
+            JobMatchingAgent,
+            vector_store,
+            services,
+            chains,
+            "🔍"
+        )),
+        asyncio.create_task(initialize_agent(
+            "farming_matching",
+            FarmingMatchingAgent,
+            vector_store,
+            services,
+            chains,
+            "🌾"
+        )),
+        asyncio.create_task(initialize_agent(
+            "interview",
+            InterviewAgent,
+            vector_store,
+            services,
+            chains,
+            "🎯"
+        )),
+        asyncio.create_task(initialize_agent(
+            "follow_up",
+            FollowUpAgent,
+            vector_store,
+            services,
+            chains,
+            "📧"
+        ))
+    ]
+    
+    # Wait for all agents to initialize
+    results = await asyncio.gather(*tasks, return_exceptions=True)
+    
+    # Check for any initialization errors
+    agents = {}
+    for name, result in zip(["candidate_intake", "job_matching", "farming_matching", "interview", "follow_up"], results):
+        if isinstance(result, Exception):
+            logger.error(f"Failed to initialize {name} agent: {result}")
+        else:
+            agents[name] = result
+    
+    logger.info("=====================================\n")
+    return agents
+
+async def initialize_agent(name, agent_class, vector_store, services, chains, emoji):
+    """Initialize a single agent asynchronously."""
+    try:
+        logger.info(f"Initializing {emoji} {name} agent...")
+        
+        # Only pass vector_store - each agent handles its own tool creation internally
+        agent = agent_class(vector_store=vector_store)
+        agent.emoji = emoji
+        logger.info(f"✅ {emoji} {name} agent initialized")
+        return agent
+    except Exception as e:
+        logger.error(f"Error initializing {name} agent: {e}")
+        raise
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """
-    Lifespan event handler for FastAPI application.
-    This replaces the deprecated on_event("startup") and on_event("shutdown") handlers.
+    Lifespan context manager for FastAPI application.
+    Initialize services once and reuse them throughout the application lifecycle.
     """
-    # Startup operations
+    global core_services, agents, brain_agent_instance, vector_store
+    
+    # Startup
     try:
+        logger.info("Initializing core services...")
+        
+        # Initialize vector store first (singleton)
+        vector_store = VectorStoreTool.get_instance()
+        logger.info("✅ VectorStoreTool instance initialized (singleton)")
+        
+        # Initialize services, chains, and agents asynchronously
+        core_services = await initialize_core_services()
+        chains = await initialize_chains(vector_store, core_services)
+        agents = await initialize_agents(vector_store, core_services, chains)
+        
+        # Initialize brain agent once
+        if brain_agent_instance is None:
+            logger.info("Initializing BrainAgent...")
+            brain_agent_instance = BrainAgent(
+                vector_store=vector_store,
+                candidate_intake_agent=agents.get('candidate_intake'),
+                job_matching_agent=agents.get('job_matching'),
+                interview_agent=agents.get('interview'),
+                follow_up_agent=agents.get('follow_up')
+            )
+            logger.info("✅ BrainAgent initialized")
+        
         logger.info("Application startup complete")
         yield
-    # Shutdown operations
+        
+    # Shutdown
     finally:
         logger.info("Application shutdown complete")
 
@@ -182,47 +271,32 @@ pinecone = get_pinecone()
 supabase = get_supabase_client()
 sendgrid = get_sendgrid_client()
 
-# Initialize tools
-pdf_processor = PDFProcessor()
-resume_parser = ResumeParser()
-logger.info("🔄 Reusing shared VectorStoreTool instance for all agents and tools")
-matching_tool = MatchingTool(vector_store=vector_store)
-email_tool = EmailTool()
-
-# Initialize chains with the shared vector_store
-candidate_processing_chain = CandidateProcessingChain(vector_store=vector_store)
-job_matching_chain = JobMatchingChain(vector_store=vector_store)
-interview_scheduling_chain = InterviewSchedulingChain()
-follow_up_chain = FollowUpChain(vector_store=vector_store)
-
-# Initialize agents with emoji identifiers, passing the shared vector_store
-candidate_intake_agent = CandidateIntakeAgent(vector_store=vector_store)
-candidate_intake_agent.emoji = "👤"  # Person emoji for candidate intake
-job_matching_agent = JobMatchingAgent(vector_store=vector_store)
-job_matching_agent.emoji = "🔍"  # Magnifying glass for job matching
-farming_matching_agent = FarmingMatchingAgent(vector_store=vector_store)
-farming_matching_agent.emoji = "🌾"  # Wheat for farming
-interview_agent = InterviewAgent(vector_store=vector_store)
-interview_agent.emoji = "🎯"  # Target for interview
-follow_up_agent = FollowUpAgent(vector_store=vector_store)
-follow_up_agent.emoji = "📧"  # Envelope for follow-up
-
-# Log agent initialization
-logger.info("\n=== Initializing LangChain Agents ===")
-logger.info(f"{candidate_intake_agent.emoji} Candidate Intake Agent")
-logger.info(f"{job_matching_agent.emoji} Job Matching Agent")
-logger.info(f"{farming_matching_agent.emoji} Farming Matching Agent")
-logger.info(f"{interview_agent.emoji} Interview Agent")
-logger.info(f"{follow_up_agent.emoji} Follow-up Agent")
-logger.info("=====================================\n")
-
 # Dependencies
 def get_brain_agent():
-    return BrainAgent(vector_store=vector_store)
+    return brain_agent_instance
+
+def get_vector_store():
+    return vector_store
+
+def get_service(service_name: str):
+    return core_services.get(service_name)
+
+def get_agent(agent_name: str):
+    return agents.get(agent_name)
 
 @app.get("/health")
-def health_check():
-    return {"status": "healthy", "timestamp": datetime.utcnow().isoformat()}
+async def health_check():
+    """Health check endpoint with initialization status."""
+    return {
+        "status": "healthy",
+        "timestamp": datetime.utcnow().isoformat(),
+        "services": {
+            "vector_store": vector_store is not None,
+            "brain_agent": brain_agent_instance is not None,
+            "core_services": list(core_services.keys()),
+            "agents": list(agents.keys())
+        }
+    }
 
 # Retell webhook endpoint
 @app.post("/webhook/retell")
@@ -312,10 +386,9 @@ async def create_candidate(
     name: str = Form(...),
     email: str = Form(...),
     phone_number: str = Form(...),
-    resume: UploadFile = File(...),
-    linkedin: Optional[str] = Form(None)
+    linkedin: Optional[str] = Form(None),
+    resume: UploadFile = File(...)
 ):
-    """Create a new candidate and process their profile."""
     try:
         logger.info(f"👤 Processing new candidate submission: {email}")
         
@@ -329,13 +402,17 @@ async def create_candidate(
         # Read resume content
         resume_content = await resume.read()
         
+        # Generate candidate ID upfront
+        candidate_id = str(uuid.uuid4())
+        
         # Create candidate data object
         candidate_data = {
+            "id": candidate_id,
             "name": name,
             "email": email,
             "phone_number": phone_number,
             "linkedin": linkedin,
-            "resume_content": resume_content,
+            "resume_content": resume_content,  # Binary PDF content
             "resume_filename": resume.filename
         }
         
@@ -347,7 +424,7 @@ async def create_candidate(
         )
         
         return {
-            "id": "pending",  # Will be updated after processing
+            "id": candidate_id,
             "name": name,
             "email": email,
             "phone_number": phone_number,
