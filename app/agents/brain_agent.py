@@ -93,7 +93,16 @@ class BrainAgent:
             logger.info(f"Processing candidate submission for {candidate_data.email}")
             
             # Process candidate with intake agent
-            profile = await self.candidate_intake_agent.process_candidate(candidate_data)
+            profile = await self.candidate_intake_agent.process_candidate(
+                resume_content=candidate_data.resume_content,
+                candidate_email=candidate_data.email,
+                candidate_id=candidate_data.id,
+                additional_info={
+                    "name": candidate_data.name,
+                    "phone_number": candidate_data.phone_number,
+                    "linkedin": candidate_data.linkedin
+                }
+            )
             logger.info(f"✅ Candidate profile created for {candidate_data.email}")
             
             # Find job matches
