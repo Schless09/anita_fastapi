@@ -23,13 +23,6 @@ class Settings(BaseSettings):
     twilio_auth_token: str
     twilio_phone_number: str
     
-    # Pinecone
-    pinecone_api_key: str
-    pinecone_environment: str
-    pinecone_candidates_index: str
-    pinecone_jobs_index: str
-    pinecone_call_status_index: str
-    
     # SendGrid
     sendgrid_api_key: str
     sender_email: str

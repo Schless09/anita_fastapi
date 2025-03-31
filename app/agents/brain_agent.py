@@ -22,7 +22,7 @@ from app.services.candidate_service import CandidateService
 from app.services.job_service import JobService
 from app.services.retell_service import RetellService
 from app.services.openai_service import OpenAIService
-from app.services.pinecone_service import PineconeService
+from app.services.vector_service import VectorService
 from app.services.matching_service import MatchingService
 from app.config import get_settings
 

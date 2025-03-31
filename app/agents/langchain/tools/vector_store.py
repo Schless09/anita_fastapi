@@ -1,16 +1,13 @@
 from typing import Any, Dict, List, Optional, Literal, ClassVar
 from langchain.tools import BaseTool
 from langchain_openai import ChatOpenAI, OpenAIEmbeddings
-from langchain_community.vectorstores import Pinecone
 from langchain.docstore.document import Document
 from langchain.schema.runnable import RunnableSequence
-from pinecone import Pinecone as PineconeClient
 import os
 import logging
 from pydantic import Field, PrivateAttr, BaseModel
 from .base import parse_llm_json_response
-from app.config import get_pinecone
-from app.services.pinecone_service import PineconeService
+from app.services.vector_service import VectorService
 
 logger = logging.getLogger(__name__)
 
@@ -37,12 +34,8 @@ class VectorStoreTool(BaseTool):
     
     # Define fields that will be set in __init__
     embeddings: OpenAIEmbeddings = Field(default=None)
-    jobs_index: Any = Field(default=None)
-    candidates_index: Any = Field(default=None)
-    pinecone_client: Any = Field(default=None)
     llm: ChatOpenAI = Field(default=None)
-    pinecone_service: PineconeService = Field(default=None)
-    pinecone: Any = Field(default=None)
+    vector_service: VectorService = Field(default=None)
     
     class Config:
         """Configuration for this pydantic object."""
@@ -56,15 +49,14 @@ class VectorStoreTool(BaseTool):
             object.__setattr__(cls._instance, '_initialized', False)
         return cls._instance
     
-    def __init__(self, jobs_index=None, candidates_index=None):
+    def __init__(self):
         """Initialize the vector store tool."""
         if not self._initialized:
             logger.info("Initializing VectorStoreTool")
             super().__init__()
             
-            # Initialize Pinecone service
-            self.pinecone = get_pinecone()
-            self.pinecone_service = PineconeService()
+            # Initialize Vector service
+            self.vector_service = VectorService()
             
             # Create OpenAI embeddings
             self.embeddings = OpenAIEmbeddings()
@@ -74,45 +66,6 @@ class VectorStoreTool(BaseTool):
                 model_name="gpt-4-turbo-preview",
                 temperature=0.3
             )
-            
-            # Use provided indices or initialize new ones
-            if jobs_index and candidates_index:
-                logger.info("Using provided vector indices.")
-                self.pinecone_client = None
-                # Create langchain Pinecone vector stores from raw indices
-                self.jobs_index = Pinecone.from_existing_index(
-                    index_name=os.getenv("PINECONE_JOBS_INDEX", "jobs"),
-                    embedding=self.embeddings,
-                    text_key="content"
-                )
-                self.candidates_index = Pinecone.from_existing_index(
-                    index_name=os.getenv("PINECONE_CANDIDATES_INDEX", "candidates"),
-                    embedding=self.embeddings,
-                    text_key="content"
-                )
-            else:
-                logger.info("Initializing new vector indices...")
-                # Initialize Pinecone client
-                self.pinecone_client = PineconeClient(
-                    api_key=os.getenv("PINECONE_API_KEY")
-                )
-                
-                # Get index names from environment
-                jobs_index_name = os.getenv("PINECONE_JOBS_INDEX", "jobs")
-                candidates_index_name = os.getenv("PINECONE_CANDIDATES_INDEX", "candidates")
-                
-                # Initialize langchain vector store indices
-                self.jobs_index = Pinecone.from_existing_index(
-                    index_name=jobs_index_name,
-                    embedding=self.embeddings,
-                    text_key="content"
-                )
-                self.candidates_index = Pinecone.from_existing_index(
-                    index_name=candidates_index_name,
-                    embedding=self.embeddings,
-                    text_key="content"
-                )
-                logger.info(f"Initialized vector indices: {jobs_index_name}, {candidates_index_name}")
             
             # Set initialized using PrivateAttr
             object.__setattr__(self, '_initialized', True)
@@ -155,23 +108,26 @@ class VectorStoreTool(BaseTool):
     def _store_job(self, job_data: Dict[str, Any]) -> Dict[str, Any]:
         """Store a job in the vector store."""
         try:
-            # Create document
-            doc = Document(
-                page_content=str(job_data),
-                metadata={
-                    "type": "job",
-                    "job_id": job_data.get("id"),
-                    "title": job_data.get("title"),
-                    "company": job_data.get("company")
+            # Generate embedding and store in Supabase
+            job_id = job_data.get("id")
+            if not job_id:
+                return {
+                    "status": "error",
+                    "error": "Job ID is required"
                 }
-            )
             
-            # Add to vector store
-            self.jobs_index.add_documents([doc])
+            # Since this is a synchronous method, we can't use async directly
+            # We'll return a message that the job is being processed
+            # The actual storage will happen asynchronously
+            
+            # Create a task to store the job
+            import asyncio
+            loop = asyncio.get_event_loop()
+            asyncio.ensure_future(self.vector_service.upsert_job(job_id, job_data))
             
             return {
                 "status": "success",
-                "message": f"Job {job_data.get('id')} stored successfully"
+                "message": f"Job {job_id} is being processed"
             }
             
         except Exception as e:
@@ -183,23 +139,26 @@ class VectorStoreTool(BaseTool):
     def _store_candidate(self, candidate_data: Dict[str, Any]) -> Dict[str, Any]:
         """Store a candidate in the vector store."""
         try:
-            # Create document
-            doc = Document(
-                page_content=str(candidate_data),
-                metadata={
-                    "type": "candidate",
-                    "candidate_id": candidate_data.get("id"),
-                    "name": candidate_data.get("name"),
-                    "email": candidate_data.get("email")
+            # Generate embedding and store in Supabase
+            candidate_id = candidate_data.get("id")
+            if not candidate_id:
+                return {
+                    "status": "error",
+                    "error": "Candidate ID is required"
                 }
-            )
             
-            # Add to vector store
-            self.candidates_index.add_documents([doc])
+            # Since this is a synchronous method, we can't use async directly
+            # We'll return a message that the candidate is being processed
+            # The actual storage will happen asynchronously
+            
+            # Create a task to store the candidate
+            import asyncio
+            loop = asyncio.get_event_loop()
+            asyncio.ensure_future(self.vector_service.upsert_candidate(candidate_id, candidate_data))
             
             return {
                 "status": "success",
-                "message": f"Candidate {candidate_data.get('id')} stored successfully"
+                "message": f"Candidate {candidate_id} is being processed"
             }
             
         except Exception as e:
@@ -211,21 +170,24 @@ class VectorStoreTool(BaseTool):
     def _search_jobs(self, query: str, top_k: int = 5) -> Dict[str, Any]:
         """Search for jobs using semantic similarity."""
         try:
-            # Perform similarity search
-            results = self.jobs_index.similarity_search(
-                query,
-                k=top_k
-            )
+            # Generate embedding for query
+            query_embedding = self.embeddings.embed_query(query)
+            
+            # Query jobs using embedding
+            import asyncio
+            loop = asyncio.get_event_loop()
+            results = loop.run_until_complete(self.vector_service.query_jobs(query_embedding, top_k))
             
             # Format results
             formatted_results = [
                 {
-                    "id": doc.metadata.get("job_id"),
-                    "title": doc.metadata.get("title"),
-                    "company": doc.metadata.get("company"),
-                    "content": doc.page_content
+                    "id": job.get("id"),
+                    "title": job.get("title"),
+                    "company": job.get("company"),
+                    "content": str(job.get("profile_json", {})),
+                    "similarity": job.get("similarity", 0)
                 }
-                for doc in results
+                for job in results
             ]
             
             return {
@@ -242,21 +204,24 @@ class VectorStoreTool(BaseTool):
     def _search_candidates(self, query: str, top_k: int = 5) -> Dict[str, Any]:
         """Search for candidates using semantic similarity."""
         try:
-            # Perform similarity search
-            results = self.candidates_index.similarity_search(
-                query,
-                k=top_k
-            )
+            # Generate embedding for query
+            query_embedding = self.embeddings.embed_query(query)
+            
+            # Query candidates using embedding
+            import asyncio
+            loop = asyncio.get_event_loop()
+            results = loop.run_until_complete(self.vector_service.query_candidates(query_embedding, top_k))
             
             # Format results
             formatted_results = [
                 {
-                    "id": doc.metadata.get("candidate_id"),
-                    "name": doc.metadata.get("name"),
-                    "email": doc.metadata.get("email"),
-                    "content": doc.page_content
+                    "id": candidate.get("id"),
+                    "name": candidate.get("full_name"),
+                    "email": candidate.get("email"),
+                    "content": str(candidate.get("profile_json", {})),
+                    "similarity": candidate.get("similarity", 0)
                 }
-                for doc in results
+                for candidate in results
             ]
             
             return {
@@ -270,36 +235,37 @@ class VectorStoreTool(BaseTool):
                 "error": str(e)
             }
     
-    def store_candidate_vector(self, candidate_id: str, vector: List[float], metadata: Dict[str, Any]) -> None:
-        """Store candidate vector in the vector store."""
+    async def store_candidate_vector(self, candidate_id: str, vector: List[float], metadata: Dict[str, Any]) -> None:
+        """Store candidate vector in Supabase."""
         try:
-            self.pinecone_service.store_candidate_vector(candidate_id, vector, metadata)
+            # Update candidate with embedding
+            await self.vector_service.upsert_candidate(candidate_id, metadata)
             logger.debug(f"Stored vector for candidate {candidate_id}")
         except Exception as e:
             logger.error(f"Error storing candidate vector: {e}")
             raise
     
-    def store_job_vector(self, job_id: str, vector: List[float], metadata: Dict[str, Any]) -> None:
-        """Store job vector in the vector store."""
+    async def store_job_vector(self, job_id: str, vector: List[float], metadata: Dict[str, Any]) -> None:
+        """Store job vector in Supabase."""
         try:
-            self.pinecone_service.store_job_vector(job_id, vector, metadata)
+            await self.vector_service.upsert_job(job_id, metadata)
             logger.debug(f"Stored vector for job {job_id}")
         except Exception as e:
             logger.error(f"Error storing job vector: {e}")
             raise
     
-    def query_candidates(self, query_vector: List[float], top_k: int = 5) -> List[Dict[str, Any]]:
+    async def query_candidates(self, query_vector: List[float], top_k: int = 5) -> List[Dict[str, Any]]:
         """Query candidates based on vector similarity."""
         try:
-            return self.pinecone_service.query_candidates(query_vector, top_k)
+            return await self.vector_service.query_candidates(query_vector, top_k)
         except Exception as e:
             logger.error(f"Error querying candidates: {e}")
             raise
     
-    def query_jobs(self, query_vector: List[float], top_k: int = 5) -> List[Dict[str, Any]]:
+    async def query_jobs(self, query_vector: List[float], top_k: int = 5) -> List[Dict[str, Any]]:
         """Query jobs based on vector similarity."""
         try:
-            return self.pinecone_service.query_jobs(query_vector, top_k)
+            return await self.vector_service.query_jobs(query_vector, top_k)
         except Exception as e:
             logger.error(f"Error querying jobs: {e}")
             raise 

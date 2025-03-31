@@ -53,7 +53,6 @@ def setup_logging(level: str = 'INFO') -> None:
     # Set logging level for specific modules
     logging.getLogger('httpx').setLevel('WARNING')
     logging.getLogger('openai').setLevel('WARNING')
-    logging.getLogger('pinecone').setLevel('WARNING')
-    logging.getLogger('supabase').setLevel('WARNING')
+    logging.getLogger('langchain').setLevel('WARNING')
 
     logging.info("Logging system initialized") 

@@ -1,6 +1,5 @@
 from typing import Optional, Dict, Any
 from langchain_openai import ChatOpenAI, OpenAIEmbeddings
-from pinecone import Pinecone
 from sendgrid import SendGridAPIClient
 # from google.oauth2.credentials import Credentials
 # from google_auth_oauthlib.flow import InstalledAppFlow
@@ -26,14 +25,6 @@ def get_openai_client() -> ChatOpenAI:
 def get_embeddings() -> OpenAIEmbeddings:
     """Get OpenAI embeddings instance."""
     return OpenAIEmbeddings()
-
-@lru_cache()
-def get_pinecone() -> Pinecone:
-    """Get Pinecone client instance."""
-    return Pinecone(
-        api_key=settings.pinecone_api_key,
-        environment=settings.pinecone_environment
-    )
 
 @lru_cache()
 def get_sendgrid_client() -> SendGridAPIClient:

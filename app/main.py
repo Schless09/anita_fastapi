@@ -22,9 +22,10 @@ from app.config import (
     get_settings,
     get_openai_client,
     get_embeddings,
-    get_pinecone,
-    get_supabase_client,
-    get_sendgrid_client
+    get_sendgrid_client,
+    get_sendgrid_webhook_url,
+    setup_logging,
+    get_supabase_client
 )
 
 from app.agents.langchain.agents.candidate_intake_agent import CandidateIntakeAgent
@@ -52,29 +53,20 @@ from app.schemas.matching import MatchingResponse
 from app.api.webhook import handler as webhook_handler
 from app.services.retell_service import RetellService
 from app.services.openai_service import OpenAIService
-from app.services.pinecone_service import PineconeService
+from app.services.vector_service import VectorService
 from app.services.matching_service import MatchingService
 
-# Configure logging for serverless environment
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s [%(levelname)s] %(message)s',
-    datefmt='%Y-%m-%d %H:%M:%S',
-    force=True,  # Force reconfiguration of the root logger
-    handlers=[
-        logging.StreamHandler()  # Console handler for terminal output
-    ]
-)
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+setup_logging()
+# Reduce logs from these libraries
+logging.getLogger('httpx').setLevel(logging.WARNING)
+logging.getLogger('asyncio').setLevel(logging.WARNING)
+logging.getLogger('httpcore').setLevel(logging.WARNING)
 
 # Create logger for this module
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
-
-# Ensure third-party loggers don't overwhelm our logs
-logging.getLogger('httpx').setLevel(logging.WARNING)
-logging.getLogger('openai').setLevel(logging.WARNING)
-logging.getLogger('pinecone').setLevel(logging.WARNING)
-logging.getLogger('langchain').setLevel(logging.WARNING)
 
 # Test logging configuration
 logger.info("\n=== Starting Anita AI Recruitment API ===")
@@ -269,7 +261,6 @@ app.add_middleware(
 settings = get_settings()
 llm = get_openai_client()
 embeddings = get_embeddings()
-pinecone = get_pinecone()
 supabase = get_supabase_client()
 sendgrid = get_sendgrid_client()
 
@@ -374,11 +365,7 @@ class CallStatusRequest(BaseModel):
     call_id: str
 
 # Remove duplicate Pinecone initialization since we're using the config service
-logger.info("Using configured Pinecone instance...")
-
-# Remove duplicate index initialization since we already have it from the config
-logger.info(f"Using jobs index: {settings.pinecone_jobs_index}")
-logger.info(f"Using candidates index: {settings.pinecone_candidates_index}")
+logger.info("Using Supabase for vector storage...")
 
 # Candidate submission endpoint
 @app.post("/candidates/", response_model=CandidateResponse)

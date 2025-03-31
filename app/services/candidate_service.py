@@ -6,7 +6,7 @@ from app.config import get_settings
 from app.config.supabase import get_supabase_client
 from app.services.retell_service import RetellService
 from app.services.openai_service import OpenAIService
-from app.services.pinecone_service import PineconeService
+from app.services.vector_service import VectorService
 from app.services.matching_service import MatchingService
 import logging
 import tempfile
@@ -17,7 +17,7 @@ settings = get_settings()
 supabase = get_supabase_client()
 retell = RetellService()
 openai = OpenAIService()
-pinecone = PineconeService()
+vector_service = VectorService()
 matching = MatchingService()
 logger = logging.getLogger(__name__)
 
@@ -26,7 +26,7 @@ class CandidateService:
         self.supabase = supabase
         self.retell = retell
         self.openai = openai
-        self.pinecone = pinecone
+        self.vector_service = vector_service
         self.matching = matching
 
     async def process_candidate_submission(self, candidate_data: Dict[str, Any]) -> Dict[str, Any]:
@@ -126,7 +126,7 @@ class CandidateService:
         """
         Process call completion webhook from Retell.
         Updates candidate profile with call transcript information.
-        Once both resume and call data are processed, sends to Pinecone.
+        Once both resume and call data are processed, sends to vector database.
         """
         try:
             call_id = call_data.get('call_id')
@@ -163,7 +163,7 @@ class CandidateService:
                 profile_json['processing_status']['call_completed'] = True
                 profile_json['processing_status']['last_updated'] = datetime.utcnow().isoformat()
 
-            # If both resume and call are processed, send to Pinecone
+            # If both resume and call are processed, generate and store embedding
             if (profile_json.get('processing_status', {}).get('resume_processed') and 
                 profile_json.get('processing_status', {}).get('call_completed')):
                 try:
@@ -172,28 +172,17 @@ class CandidateService:
                         self._prepare_text_for_embedding(profile_json)
                     )
                     
-                    # Store in Pinecone
-                    await self.pinecone.upsert(
-                        vectors=[{
-                            'id': candidate_id,
-                            'values': embedding,
-                            'metadata': {
-                                'full_name': profile_json.get('full_name'),
-                                'current_role': profile_json.get('current_role'),
-                                'current_company': profile_json.get('current_company'),
-                                'years_of_experience': profile_json.get('years_of_experience'),
-                                'tech_stack': profile_json.get('tech_stack', []),
-                                'updated_at': datetime.utcnow().isoformat()
-                            }
-                        }],
-                        namespace='candidates'
+                    # Store in vector database
+                    await self.vector_service.upsert_candidate(
+                        candidate_id,
+                        profile_json
                     )
                     
                     # Update profile with embedding status
                     profile_json['processing_status']['embedding_complete'] = True
-                    logger.info(f"Successfully uploaded candidate {candidate_id} to Pinecone")
+                    logger.info(f"Successfully uploaded candidate {candidate_id} to vector database")
                 except Exception as e:
-                    logger.error(f"Error uploading to Pinecone: {str(e)}")
+                    logger.error(f"Error uploading to vector database: {str(e)}")
                     profile_json['processing_status']['embedding_error'] = str(e)
 
             # Update candidate profile
