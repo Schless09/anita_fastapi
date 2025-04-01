@@ -29,99 +29,76 @@ from app.config import get_settings
 # Set up logging
 import logging
 import traceback
+import uuid
 logger = logging.getLogger(__name__)
 
 class BrainAgent:
-    """
-    Main orchestrator agent that coordinates all other agents.
-    Uses lazy loading for sub-agents to improve startup time.
-    """
+    """Orchestrator agent that coordinates other specialized agents."""
     
-    def __init__(
-        self,
-        vector_store: VectorStoreTool,
-        candidate_intake_agent: Optional[CandidateIntakeAgent] = None,
-        job_matching_agent: Optional[JobMatchingAgent] = None,
-        interview_agent: Optional[InterviewAgent] = None,
-        follow_up_agent: Optional[FollowUpAgent] = None
-    ):
-        self._vector_store = vector_store
-        self._candidate_intake_agent = candidate_intake_agent
-        self._job_matching_agent = job_matching_agent
-        self._interview_agent = interview_agent
-        self._follow_up_agent = follow_up_agent
+    def __init__(self, vector_store):
+        """Initialize the brain agent with a vector store."""
+        self.vector_store = vector_store
+        self._candidate_intake_agent = None
+        self._job_matching_agent = None
+        self._interview_agent = None
+        self._follow_up_agent = None
         
-        logger.info("BrainAgent initialized with vector store")
-    
     @property
-    def candidate_intake_agent(self) -> CandidateIntakeAgent:
+    def candidate_intake_agent(self):
         """Lazy load the candidate intake agent."""
         if self._candidate_intake_agent is None:
-            logger.info("Lazy loading CandidateIntakeAgent")
-            self._candidate_intake_agent = CandidateIntakeAgent(vector_store=self._vector_store)
+            self._candidate_intake_agent = CandidateIntakeAgent(vector_store=self.vector_store)
         return self._candidate_intake_agent
-    
+        
     @property
-    def job_matching_agent(self) -> JobMatchingAgent:
+    def job_matching_agent(self):
         """Lazy load the job matching agent."""
         if self._job_matching_agent is None:
-            logger.info("Lazy loading JobMatchingAgent")
-            self._job_matching_agent = JobMatchingAgent(vector_store=self._vector_store)
+            self._job_matching_agent = JobMatchingAgent(vector_store=self.vector_store)
         return self._job_matching_agent
-    
+        
     @property
-    def interview_agent(self) -> InterviewAgent:
+    def interview_agent(self):
         """Lazy load the interview agent."""
         if self._interview_agent is None:
-            logger.info("Lazy loading InterviewAgent")
-            self._interview_agent = InterviewAgent(vector_store=self._vector_store)
+            self._interview_agent = InterviewAgent(vector_store=self.vector_store)
         return self._interview_agent
-    
+        
     @property
-    def follow_up_agent(self) -> FollowUpAgent:
-        """Lazy load the follow-up agent."""
+    def follow_up_agent(self):
+        """Lazy load the follow up agent."""
         if self._follow_up_agent is None:
-            logger.info("Lazy loading FollowUpAgent")
-            self._follow_up_agent = FollowUpAgent(vector_store=self._vector_store)
+            self._follow_up_agent = FollowUpAgent(vector_store=self.vector_store)
         return self._follow_up_agent
     
     async def handle_candidate_submission(self, candidate_data: CandidateCreate) -> Dict[str, Any]:
         """
-        Handle a new candidate submission by coordinating between agents.
-        Note: Supabase storage and Retell call scheduling are already done in the endpoint.
-        This method focuses on processing the resume and updating the profile.
+        Handle a new candidate submission.
+        This includes:
+        1. Processing the resume
+        2. Storing initial profile data
+        3. Scheduling the Retell AI call
+        Note: Vector store storage happens after call completion
         """
-        # Generate a unique process ID for tracking this transaction
-        process_id = f"candidate_submission_{datetime.utcnow().isoformat()}_{candidate_data.id}"
-        
         try:
-            logger.info(f"\n=== 🔄 Starting background processing for candidate (ID: {process_id}) ===")
-            logger.info(f"Candidate: {candidate_data.email} (ID: {candidate_data.id})")
+            process_id = str(uuid.uuid4())
+            logger.info(f"\n=== Starting Candidate Processing (ID: {process_id}) ===")
+            logger.info(f"Processing candidate: {candidate_data.email}")
             
-            # Step 1: Process candidate with intake agent
-            logger.info(f"\nStep 1: 👤 Processing candidate with CandidateIntakeAgent")
+            # Step 1: Process Resume
+            logger.info(f"\nStep 1: 📄 Processing Resume")
             logger.info("----------------------------------------")
-            profile = await self.candidate_intake_agent.process_candidate(
+            
+            # Process resume with candidate intake agent
+            intake_result = await self.candidate_intake_agent.process_candidate(
                 resume_content=candidate_data.resume_content,
                 candidate_email=candidate_data.email,
-                candidate_id=candidate_data.id,
-                additional_info={
-                    "name": candidate_data.name,
-                    "phone_number": candidate_data.phone_number,
-                    "linkedin": candidate_data.linkedin
-                }
+                candidate_id=candidate_data.id
             )
             
-            if profile["status"] != "success":
-                logger.error(f"❌ Error processing candidate: {profile}")
-                return {
-                    "id": candidate_data.id,
-                    "status": "processing_failed",
-                    "error": profile.get("error", "Unknown error"),
-                    "timestamp": datetime.utcnow().isoformat()
-                }
-                
-            logger.info(f"✅ Candidate profile created for {candidate_data.email}")
+            if intake_result["status"] != "success":
+                logger.error(f"❌ Resume Processing Failed: {intake_result}")
+                return intake_result
             
             # Step 2: Update Supabase with processed candidate data
             logger.info(f"\nStep 2: 📊 Updating Supabase with processed data")
@@ -132,9 +109,14 @@ class BrainAgent:
             
             # Prepare update data
             update_data = {
-                "profile_json": profile["profile"],
-                "resume_processed": True,
-                "status": "resume_processed", 
+                "profile_json": {
+                    **intake_result["profile"],
+                    "processing_status": {
+                        "resume_processed": True,
+                        "call_completed": False,
+                        "last_updated": datetime.utcnow().isoformat()
+                    }
+                },
                 "updated_at": datetime.utcnow().isoformat()
             }
             
@@ -145,40 +127,19 @@ class BrainAgent:
             )
             logger.info(f"✅ Candidate {candidate_data.id} updated in Supabase with processed resume data")
             
-            # Step 3: Find job matches
-            logger.info(f"\nStep 3: 🔍 Finding job matches with JobMatchingAgent")
+            # Step 3: Schedule Retell AI Call
+            logger.info(f"\nStep 3: 📞 Scheduling Retell AI Call")
             logger.info("----------------------------------------")
-            matches = await self.job_matching_agent.find_matches(profile)
-            matches_count = len(matches) if isinstance(matches, list) else 0
-            logger.info(f"Found {matches_count} potential job matches")
             
-            # Step 4: Update Supabase with job matches
-            if matches_count > 0:
-                logger.info(f"\nStep 4: 💾 Storing job matches in Supabase")
-                logger.info("----------------------------------------")
-                
-                # Prepare job matches data
-                job_matches_data = {
-                    "job_matches": matches,
-                    "has_matches": True,
-                    "matches_count": matches_count,
-                    "status": "matches_found",
-                    "updated_at": datetime.utcnow().isoformat()
-                }
-                
-                # Update in Supabase
-                await candidate_service.update_candidate_profile(
-                    candidate_id=candidate_data.id,
-                    update_data=job_matches_data
-                )
-                logger.info(f"✅ Job matches stored for candidate {candidate_data.id}")
+            # Schedule call with Retell
+            await candidate_service.schedule_initial_contact(candidate_data.id)
+            logger.info(f"✅ Retell AI call scheduled for candidate {candidate_data.id}")
             
-            logger.info(f"\n=== ✅ Background processing complete (ID: {process_id}) ===")
+            logger.info(f"\n=== ✅ Initial processing complete (ID: {process_id}) ===")
             
             return {
                 "id": candidate_data.id,
                 "status": "processing_complete",
-                "matches": matches_count,
                 "timestamp": datetime.utcnow().isoformat()
             }
             

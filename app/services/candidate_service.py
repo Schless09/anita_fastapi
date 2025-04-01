@@ -126,7 +126,7 @@ class CandidateService:
         """
         Process call completion webhook from Retell.
         Updates candidate profile with call transcript information.
-        Once both resume and call data are processed, sends to vector database.
+        Once both resume and call data are processed, generates and stores embedding.
         """
         try:
             call_id = call_data.get('call_id')
@@ -144,6 +144,12 @@ class CandidateService:
 
             profile_json = candidate.get('profile_json', {})
             
+            # Check if we've already processed this call
+            call_data = profile_json.get('call_data', {})
+            if call_data.get('call_id') == call_id and call_data.get('completed_at'):
+                logger.info(f"Call {call_id} already processed for candidate {candidate_id}")
+                return
+            
             # Process transcript if available
             if transcript:
                 # Extract information from transcript
@@ -160,38 +166,40 @@ class CandidateService:
                 }
                 
                 # Update processing status
-                profile_json['processing_status']['call_completed'] = True
-                profile_json['processing_status']['last_updated'] = datetime.utcnow().isoformat()
+                profile_json['processing_status'] = {
+                    'resume_processed': profile_json.get('processing_status', {}).get('resume_processed', False),
+                    'call_completed': True,
+                    'last_updated': datetime.utcnow().isoformat()
+                }
 
-            # If both resume and call are processed, generate and store embedding
-            if (profile_json.get('processing_status', {}).get('resume_processed') and 
-                profile_json.get('processing_status', {}).get('call_completed')):
-                try:
-                    # Generate embedding from complete profile
-                    embedding = await self.openai.generate_embedding(
-                        self._prepare_text_for_embedding(profile_json)
-                    )
-                    
-                    # Store in vector database
-                    await self.vector_service.upsert_candidate(
-                        candidate_id,
-                        profile_json
-                    )
-                    
-                    # Update profile with embedding status
-                    profile_json['processing_status']['embedding_complete'] = True
-                    logger.info(f"Successfully uploaded candidate {candidate_id} to vector database")
-                except Exception as e:
-                    logger.error(f"Error uploading to vector database: {str(e)}")
-                    profile_json['processing_status']['embedding_error'] = str(e)
+                # Only generate and store embedding if both resume and call are processed
+                if (profile_json.get('processing_status', {}).get('resume_processed') and 
+                    profile_json.get('processing_status', {}).get('call_completed')):
+                    try:
+                        # Generate embedding from complete profile
+                        text = self._prepare_text_for_embedding(profile_json)
+                        vector = await self.openai.generate_embedding(text)
+                        
+                        # Store in vector database
+                        await self.vector_service.upsert_candidate(
+                            candidate_id,
+                            profile_json
+                        )
+                        
+                        # Update profile with embedding status
+                        profile_json['processing_status']['embedding_complete'] = True
+                        logger.info(f"Successfully generated and stored embedding for candidate {candidate_id}")
+                    except Exception as e:
+                        logger.error(f"Error generating embedding: {str(e)}")
+                        profile_json['processing_status']['embedding_error'] = str(e)
 
-            # Update candidate profile
-            await self.supabase.table('candidates_dev').update({
-                'profile_json': profile_json,
-                'updated_at': datetime.utcnow().isoformat()
-            }).eq('id', candidate_id).execute()
+                # Update candidate profile in Supabase
+                await self.supabase.table('candidates_dev').update({
+                    'profile_json': profile_json,
+                    'updated_at': datetime.utcnow().isoformat()
+                }).eq('id', candidate_id).execute()
 
-            logger.info(f"Successfully processed call completion for candidate {candidate_id}")
+                logger.info(f"Successfully processed call completion for candidate {candidate_id}")
 
         except Exception as e:
             logger.error(f"Error processing call completion: {str(e)}")
@@ -257,6 +265,7 @@ class CandidateService:
         This includes:
         1. Extracting information from resume
         2. Storing in profile_json
+        Note: Embedding generation is deferred until after call completion
         """
         try:
             logger.info(f"Starting background processing for candidate {candidate_id}")
@@ -405,6 +414,16 @@ class CandidateService:
                 # Merge profile_json instead of replacing
                 existing_profile = existing_candidate['profile_json']
                 update_profile = update_data['profile_json']
+                
+                # Convert AIMessage objects to strings in update_profile
+                if isinstance(update_profile, dict):
+                    for key, value in update_profile.items():
+                        if hasattr(value, 'content'):  # Check if it's an AIMessage
+                            update_profile[key] = value.content
+                        elif isinstance(value, dict):
+                            for subkey, subvalue in value.items():
+                                if hasattr(subvalue, 'content'):
+                                    update_profile[key][subkey] = subvalue.content
                 
                 # Deep merge the dictionaries
                 merged_profile = self._deep_merge(existing_profile, update_profile)

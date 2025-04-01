@@ -83,30 +83,20 @@ async def handler(request):
         logger.info("📥 Received Retell webhook")
         logger.info(f"Request URL: {request.url}")
         logger.info(f"Request method: {request.method}")
-        logger.info(f"Request headers: {dict(request.headers)}")
         
         # Get request body
         body = await request.json()
         # Format payload exactly as Retell expects
         raw_body = json.dumps(body, separators=(",", ":"), ensure_ascii=False)
-        logger.info(f"📦 Raw webhook payload: {raw_body}")
         
-        # Detailed payload structure logging
-        logger.info("🔍 Detailed Payload Analysis:")
-        logger.info("📦 Webhook payload structure:")
-        for key, value in body.items():
-            logger.info(f"  {key}: {type(value).__name__} = {value}")
-            if isinstance(value, dict):
-                logger.info(f"    Nested structure for {key}:")
-                for nested_key, nested_value in value.items():
-                    logger.info(f"      {nested_key}: {type(nested_value).__name__} = {nested_value}")
-            elif isinstance(value, list):
-                logger.info(f"    List length for {key}: {len(value)}")
-                if value and isinstance(value[0], dict):
-                    logger.info(f"    First item structure in {key}:")
-                    for nested_key, nested_value in value[0].items():
-                        logger.info(f"      {nested_key}: {type(nested_value).__name__} = {nested_value}")
-
+        # Log essential payload information
+        logger.info("📦 Webhook payload summary:")
+        logger.info(f"  Event: {body.get('event')}")
+        logger.info(f"  Call ID: {body.get('call', {}).get('call_id')}")
+        logger.info(f"  Call Status: {body.get('call', {}).get('call_status')}")
+        logger.info(f"  Call Type: {body.get('call', {}).get('call_type')}")
+        logger.info(f"  Agent ID: {body.get('call', {}).get('agent_id')}")
+        
         # Verify Retell signature
         signature = request.headers.get("X-Retell-Signature")
         if not signature:
@@ -119,8 +109,7 @@ async def handler(request):
             }
 
         # Log signature verification details
-        logger.info(f"🔑 Received signature: {signature}")
-        logger.info(f"🔑 Using API key: {settings.retell_api_key[:5]}...")  # Only log first 5 chars for security
+        logger.info("🔑 Verifying Retell signature...")
 
         is_valid = verify_retell_signature(
             payload=raw_body,
@@ -140,40 +129,37 @@ async def handler(request):
         logger.info("✅ Retell signature verified")
 
         # Extract call data
-        logger.info("🔍 Starting call data extraction...")
+        logger.info("🔍 Extracting call data...")
         call_data = extract_call_data(body)
         event = call_data["event"]
         call_id = call_data["call_id"]
         
-        # Log extracted data
-        logger.info("📞 Extracted call data:")
-        logger.info(f"Event: {event}")
-        logger.info(f"Call ID: {call_id}")
-        logger.info(f"Call Status: {call_data['call_status']}")
-        logger.info(f"Start Time: {datetime.fromtimestamp(call_data['start_timestamp']/1000) if call_data['start_timestamp'] else 'N/A'}")
-        logger.info(f"End Time: {datetime.fromtimestamp(call_data['end_timestamp']/1000) if call_data['end_timestamp'] else 'N/A'}")
+        # Log essential extracted data
+        logger.info("📞 Extracted call data summary:")
+        logger.info(f"  Event: {event}")
+        logger.info(f"  Call ID: {call_id}")
+        logger.info(f"  Call Status: {call_data['call_status']}")
+        logger.info(f"  Start Time: {datetime.fromtimestamp(call_data['start_timestamp']/1000) if call_data['start_timestamp'] else 'N/A'}")
+        logger.info(f"  End Time: {datetime.fromtimestamp(call_data['end_timestamp']/1000) if call_data['end_timestamp'] else 'N/A'}")
         
-        # Log call analysis details if available
+        # Log call analysis summary if available
         if call_data.get('call_analysis'):
-            logger.info("📊 Call Analysis Details:")
+            logger.info("📊 Call Analysis Summary:")
             logger.info(f"  Summary: {call_data['call_analysis'].get('call_summary', 'N/A')}")
-            logger.info(f"  Sentiment: {call_data['call_analysis'].get('user_sentiment', 'N/A')}")
             logger.info(f"  Successful: {call_data['call_analysis'].get('call_successful', False)}")
             logger.info(f"  Voicemail: {call_data['call_analysis'].get('in_voicemail', False)}")
             
         # Log call cost if available
         if call_data.get('call_cost'):
-            logger.info("💰 Call Cost Details:")
+            logger.info("💰 Call Cost Summary:")
             logger.info(f"  Total Duration: {call_data['call_cost'].get('total_duration_seconds', 0)} seconds")
             logger.info(f"  Total Cost: ${call_data['call_cost'].get('combined_cost', 0)}")
 
         if not call_id:
             logger.error("❌ Missing call_id in webhook payload")
-            logger.error("🔍 Payload keys available:")
+            logger.error("🔍 Available payload keys:")
             for key in body.keys():
                 logger.error(f"  - {key}")
-            logger.error("🔍 Full payload structure:")
-            logger.error(json.dumps(body, indent=2))
             return {
                 "statusCode": 400,
                 "body": json.dumps({
@@ -181,43 +167,41 @@ async def handler(request):
                 })
             }
 
-        # Handle different event types
-        if event == "call_started":
-            logger.info(f"📞 Call started: {call_id}")
-        elif event == "call_ended":
-            logger.info(f"📞 Call ended: {call_id}")
-            try:
-                # Process the call completion
-                await candidate_service.process_call_completion(call_data)
-                logger.info(f"✅ Successfully processed call completion for call {call_id}")
-            except Exception as e:
-                logger.error(f"❌ Error processing call completion: {str(e)}")
-                return {
-                    "statusCode": 500,
-                    "body": json.dumps({
-                        "error": f"Error processing call completion: {str(e)}"
-                    })
-                }
-        elif event == "call_analyzed":
-            logger.info(f"📞 Call analyzed: {call_id}")
-            logger.info(f"Call Summary: {call_data.get('call_summary', 'N/A')}")
-            logger.info(f"User Sentiment: {call_data.get('user_sentiment', 'N/A')}")
-            logger.info(f"Call Successful: {call_data.get('call_successful', False)}")
-        else:
-            logger.warning(f"⚠️ Unknown event type: {event}")
-
-        # Return 204 No Content for successful webhook processing
-        return {
-            "statusCode": 204,
-            "headers": {
-                "Content-Type": "application/json",
-                "Access-Control-Allow-Origin": "*",
-                "Access-Control-Allow-Methods": "POST, OPTIONS",
-                "Access-Control-Allow-Headers": "*"
-            },
-            "body": ""  # Empty body for 204 response
-        }
-
+        # Process call completion
+        try:
+            logger.info("\n=== Processing Call Completion ===")
+            logger.info(f"Processing call: {call_id}")
+            
+            # Get candidate service
+            candidate_service = CandidateService()
+            
+            # Process call completion
+            result = await candidate_service.process_call_completion(call_data)
+            
+            # Since process_call_completion returns None on success, we'll consider it successful if no exception was raised
+            logger.info("✅ Call completion processed successfully")
+            logger.info(f"  Updated candidate: {call_data.get('metadata', {}).get('candidate_id')}")
+            logger.info(f"  Call status: {call_data.get('call_status')}")
+            
+            return {
+                "statusCode": 200,
+                "body": json.dumps({
+                    "status": "success",
+                    "candidate_id": call_data.get('metadata', {}).get('candidate_id'),
+                    "call_status": call_data.get('call_status')
+                })
+            }
+            
+        except Exception as e:
+            logger.error(f"❌ Error processing call completion: {str(e)}")
+            logger.error(f"❌ Full traceback: {traceback.format_exc()}")
+            return {
+                "statusCode": 500,
+                "body": json.dumps({
+                    "error": f"Error processing call completion: {str(e)}"
+                })
+            }
+            
     except Exception as e:
         logger.error(f"❌ Error processing webhook: {str(e)}")
         logger.error(f"❌ Full traceback: {traceback.format_exc()}")
