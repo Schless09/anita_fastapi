@@ -11,7 +11,7 @@ import socket
 import threading
 
 # Set up logging
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logging.basicConfig(level=logging.INFO, format='%(levelname)s: %(message)s')
 logger = logging.getLogger(__name__)
 
 def stream_output(process):
@@ -20,7 +20,12 @@ def stream_output(process):
         try:
             with pipe:
                 for line in iter(pipe.readline, b''):
-                    print(f"{prefix}{line.decode().strip()}")
+                    # Remove any timestamps or JSON formatting from the output
+                    line_text = line.decode().strip()
+                    if line_text.startswith('{"timestamp":'):
+                        # Skip JSON formatted logs
+                        continue
+                    print(f"{prefix}{line_text}")
                     sys.stdout.flush()
         except (IOError, ValueError):
             pass
@@ -176,6 +181,37 @@ def restart_server(port=8000):
         time.sleep(2)  # Give more time for cleanup
     
     return start_server(port=port)
+
+def start():
+    """Start the FastAPI server."""
+    try:
+        # Configure logging
+        logging.basicConfig(
+            level=logging.INFO,
+            format='%(levelname)s: %(message)s'
+        )
+        
+        logger.info("Starting server on port 8000...")
+        
+        # Start the server
+        command = [
+            "python", "-m", "uvicorn",
+            "app.main:app",
+            "--host", "127.0.0.1",
+            "--port", "8000",
+            "--log-level", "info",
+            "--reload"
+        ]
+        
+        process = subprocess.Popen(command)
+        logger.info(f"Server started successfully (PID: {process.pid})")
+        
+        # Wait for the process to complete
+        process.wait()
+        
+    except Exception as e:
+        logger.error(f"Error starting server: {str(e)}")
+        sys.exit(1)
 
 if __name__ == "__main__":
     import argparse

@@ -238,6 +238,8 @@ class CandidateService:
                     
                     if response.data:
                         logger.info(f"✅ Successfully processed call completion for candidate {candidate_id}")
+                        # Trigger matchmaking after successful profile update
+                        await self._trigger_matchmaking(candidate_id, merged_profile)
                         break
                     else:
                         logger.error(f"Failed to update candidate profile: {candidate_id}")
@@ -249,27 +251,50 @@ class CandidateService:
                         retry_delay *= 2  # Exponential backoff
                     else:
                         logger.error(f"Failed to update candidate profile after {max_retries} attempts: {str(e)}")
-                        return
+                        raise
 
-            # Generate new embeddings for the updated profile
-            try:
-                text_for_embedding = self._prepare_text_for_embedding(merged_profile)
-                embedding = await self.openai.generate_embedding(text_for_embedding)
-                
-                # Update embeddings in Supabase
-                await self.supabase.table('candidates_dev').update({
-                    'embedding': embedding,
-                    'updated_at': datetime.utcnow().isoformat()
-                }).eq('id', candidate_id).execute()
-                
-                logger.info(f"✅ Successfully updated embeddings for candidate {candidate_id}")
-            except Exception as e:
-                logger.error(f"Failed to update embeddings for candidate {candidate_id}: {str(e)}")
-                # Don't return here - we still want to continue even if embedding update fails
-                
         except Exception as e:
             logger.error(f"Error processing call completion: {str(e)}")
             raise
+
+    async def _trigger_matchmaking(self, candidate_id: str, profile: Dict[str, Any]) -> None:
+        """
+        Trigger matchmaking process for a candidate after their profile is updated.
+        """
+        try:
+            logger.info(f"Starting matchmaking process for candidate {candidate_id}")
+            
+            # Prepare candidate data for matching
+            candidate_data = {
+                "id": candidate_id,
+                "profile_json": profile
+            }
+            
+            # Get job matches
+            matches = await self.matching.match_candidate_to_jobs(candidate_data)
+            
+            if matches:
+                logger.info(f"Found {len(matches)} potential job matches for candidate {candidate_id}")
+                
+                # Store matches in the database
+                for match in matches:
+                    match_data = {
+                        "candidate_id": candidate_id,
+                        "job_id": match["job_id"],
+                        "similarity_score": match["similarity"],
+                        "created_at": datetime.utcnow().isoformat(),
+                        "updated_at": datetime.utcnow().isoformat()
+                    }
+                    
+                    await self.supabase.table('candidate_job_matches').insert(match_data).execute()
+                
+                logger.info(f"✅ Successfully stored {len(matches)} job matches for candidate {candidate_id}")
+            else:
+                logger.info(f"No job matches found for candidate {candidate_id}")
+                
+        except Exception as e:
+            logger.error(f"Error in matchmaking process for candidate {candidate_id}: {str(e)}")
+            # Don't raise the exception - we don't want to fail the profile update if matchmaking fails
 
     def _prepare_text_for_embedding(self, profile: Dict[str, Any]) -> str:
         """

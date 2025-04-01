@@ -43,7 +43,6 @@ class VectorStoreTool(BaseTool):
     
     def __new__(cls, *args, **kwargs):
         if cls._instance is None:
-            logger.info("Creating new VectorStoreTool instance")
             cls._instance = super(VectorStoreTool, cls).__new__(cls)
             # Initialize PrivateAttr
             object.__setattr__(cls._instance, '_initialized', False)
@@ -52,7 +51,6 @@ class VectorStoreTool(BaseTool):
     def __init__(self):
         """Initialize the vector store tool."""
         if not self._initialized:
-            logger.info("Initializing VectorStoreTool")
             super().__init__()
             
             # Initialize Vector service
@@ -69,7 +67,16 @@ class VectorStoreTool(BaseTool):
             
             # Set initialized using PrivateAttr
             object.__setattr__(self, '_initialized', True)
-            logger.info("✅ VectorStoreTool initialization complete")
+    
+    async def _initialize_async(self):
+        """Initialize async components."""
+        try:
+            # Test Supabase connection
+            await self.vector_service.supabase.table("jobs_dev").select("count").execute()
+            logger.info("Successfully connected to Supabase")
+        except Exception as e:
+            logger.error(f"Error initializing async components: {str(e)}")
+            raise
     
     @classmethod
     def get_instance(cls):

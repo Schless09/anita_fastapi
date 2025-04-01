@@ -29,7 +29,6 @@ class BaseAgent:
         self.tools: List[BaseTool] = []
         self.agent_executor: Optional[AgentExecutor] = None
         self.emoji = "🤖"  # Default robot emoji
-        logger.info(f"{self.emoji} Initialized {self.__class__.__name__}")
 
     def _create_prompt(self, system_message: str) -> ChatPromptTemplate:
         """Create a prompt template for the agent."""
@@ -62,17 +61,23 @@ class BaseAgent:
 
     def _log_start(self, action: str, **kwargs):
         """Log the start of an action with the agent's emoji."""
-        logger.info(f"{self.emoji} Starting {action} with params: {kwargs}")
+        if kwargs:
+            logger.debug(f"{self.emoji} {action} started: {kwargs}")
+        else:
+            logger.debug(f"{self.emoji} {action} started")
 
-    def _log_success(self, action: str, result: Any):
+    def _log_success(self, action: str, result: Any = None):
         """Log successful completion of an action with the agent's emoji."""
-        logger.info(f"{self.emoji} Successfully completed {action}")
-        logger.debug(f"{self.emoji} Result: {result}")
+        if result and logger.getEffectiveLevel() <= logging.DEBUG:
+            logger.debug(f"{self.emoji} {action} completed: {result}")
+        else:
+            logger.debug(f"{self.emoji} {action} completed")
 
     def _log_error(self, action: str, error: Exception):
         """Log an error with the agent's emoji."""
-        logger.error(f"{self.emoji} Error in {action}: {str(error)}")
-        logger.error(f"{self.emoji} Full traceback: {traceback.format_exc()}")
+        logger.error(f"{self.emoji} {action} failed: {str(error)}")
+        if logger.getEffectiveLevel() <= logging.DEBUG:
+            logger.debug(f"{self.emoji} Full traceback: {traceback.format_exc()}")
 
     async def _run(self, task: str) -> Dict[str, Any]:
         """Implementation of run in subclasses."""
@@ -86,11 +91,6 @@ class BaseAgent:
         data: Dict[str, Any]
     ) -> None:
         """Store an interaction in the conversation history."""
-        self._log_start("store_interaction", 
-                       job_id=job_id, 
-                       candidate_id=candidate_id, 
-                       interaction_type=interaction_type)
-        
         try:
             if job_id:
                 if job_id not in self.conversation_history:
@@ -116,8 +116,6 @@ class BaseAgent:
                     "timestamp": datetime.utcnow().isoformat(),
                     "data": data
                 })
-            
-            self._log_success("store_interaction", None)
         except Exception as e:
             self._log_error("store_interaction", e)
             raise 

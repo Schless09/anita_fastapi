@@ -26,6 +26,15 @@ class VectorService:
         self.jobs_table = "jobs_dev"
 
     @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=4, max=10))
+    async def generate_embedding(self, text: str) -> List[float]:
+        """Generate an embedding for the given text using OpenAI's API."""
+        try:
+            return await self.openai.generate_embedding(text)
+        except Exception as e:
+            logger.error(f"Error generating embedding: {str(e)}")
+            raise Exception(f"Error generating embedding: {str(e)}")
+
+    @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=4, max=10))
     async def upsert_candidate(self, candidate_id: str, profile_data: Dict[str, Any]) -> str:
         """
         Generate embeddings for candidate profile and store in Supabase.
@@ -43,7 +52,7 @@ class VectorService:
                 logger.error(f"Candidate {candidate_id} not found in Supabase")
                 raise ValueError(f"Candidate {candidate_id} not found")
             
-            # Update candidate with embedding
+            # Update candidate with embedding in dedicated column
             await self.supabase.table(self.candidates_table).update({
                 "embedding": vector,
                 "embedding_metadata": self._flatten_metadata(profile_data),
@@ -58,14 +67,49 @@ class VectorService:
             raise Exception(f"Error storing candidate embedding: {str(e)}")
 
     @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=4, max=10))
-    async def upsert_job(self, job_id: str, profile_data: Dict[str, Any]) -> str:
+    async def upsert_job(self, job_id: str, job_data: Dict[str, Any]) -> str:
         """
         Generate embeddings for job profile and store in Supabase.
         """
         try:
             logger.info(f"Generating embedding for job {job_id}")
-            # Convert profile data to text and generate embedding
-            text = self.openai._prepare_text_for_embedding(profile_data)
+            
+            # Prepare text for embedding
+            text_parts = []
+            
+            # Add title and company
+            if job_data.get('title'):
+                text_parts.append(f"Title: {job_data['title']}")
+            if job_data.get('company'):
+                text_parts.append(f"Company: {job_data['company']}")
+            
+            # Add description
+            if job_data.get('description'):
+                text_parts.append(f"Description: {job_data['description']}")
+            
+            # Add requirements
+            if job_data.get('requirements'):
+                text_parts.append(f"Requirements: {', '.join(job_data['requirements'])}")
+            
+            # Add location and employment type
+            if job_data.get('location'):
+                text_parts.append(f"Location: {job_data['location']}")
+            if job_data.get('employment_type'):
+                text_parts.append(f"Employment Type: {job_data['employment_type']}")
+            
+            # Add salary range if available
+            if job_data.get('salary_range'):
+                salary = job_data['salary_range']
+                if isinstance(salary, dict):
+                    if salary.get('min') and salary.get('max'):
+                        text_parts.append(f"Salary Range: ${salary['min']} - ${salary['max']}")
+                    elif salary.get('min'):
+                        text_parts.append(f"Minimum Salary: ${salary['min']}")
+                    elif salary.get('max'):
+                        text_parts.append(f"Maximum Salary: ${salary['max']}")
+            
+            # Generate embedding from combined text
+            text = " | ".join(text_parts)
             vector = await self.openai.generate_embedding(text)
             
             # Check if job exists
@@ -75,24 +119,32 @@ class VectorService:
                 # Create new job
                 await self.supabase.table(self.jobs_table).insert({
                     "id": job_id,
-                    "title": profile_data.get("title", ""),
-                    "company": profile_data.get("company", ""),
-                    "description": profile_data.get("description", ""),
-                    "profile_json": profile_data,
+                    "title": job_data.get("title", ""),
+                    "company": job_data.get("company", ""),
+                    "description": job_data.get("description", ""),
+                    "requirements": job_data.get("requirements", []),
+                    "location": job_data.get("location", ""),
+                    "employment_type": job_data.get("employment_type", ""),
+                    "salary_range": job_data.get("salary_range", {}),
+                    "profile_json": job_data,
                     "embedding": vector,
-                    "embedding_metadata": self._flatten_metadata(profile_data),
+                    "embedding_metadata": job_data.get("embedding_metadata", {}),
                     "created_at": datetime.utcnow().isoformat(),
                     "updated_at": datetime.utcnow().isoformat()
                 }).execute()
             else:
                 # Update existing job
                 await self.supabase.table(self.jobs_table).update({
-                    "title": profile_data.get("title", ""),
-                    "company": profile_data.get("company", ""),
-                    "description": profile_data.get("description", ""),
-                    "profile_json": profile_data,
+                    "title": job_data.get("title", ""),
+                    "company": job_data.get("company", ""),
+                    "description": job_data.get("description", ""),
+                    "requirements": job_data.get("requirements", []),
+                    "location": job_data.get("location", ""),
+                    "employment_type": job_data.get("employment_type", ""),
+                    "salary_range": job_data.get("salary_range", {}),
+                    "profile_json": job_data,
                     "embedding": vector,
-                    "embedding_metadata": self._flatten_metadata(profile_data),
+                    "embedding_metadata": job_data.get("embedding_metadata", {}),
                     "updated_at": datetime.utcnow().isoformat()
                 }).eq("id", job_id).execute()
             

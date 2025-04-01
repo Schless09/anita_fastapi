@@ -30,6 +30,8 @@ from app.config import get_settings
 import logging
 import traceback
 import uuid
+import asyncio
+
 logger = logging.getLogger(__name__)
 
 class BrainAgent:
@@ -42,12 +44,32 @@ class BrainAgent:
         self._job_matching_agent = None
         self._interview_agent = None
         self._follow_up_agent = None
+        self.candidate_service = CandidateService()  # Initialize candidate service
+        self.matching_agent = JobMatchingAgent()  # Initialize matching agent without vector_store
+        self.state = {
+            "metrics": {
+                "matches_found": 0,
+                "interviews_scheduled": 0,
+                "follow_ups_sent": 0
+            },
+            "transactions": {}
+        }
+        
+    async def _initialize_async(self):
+        """Initialize async components."""
+        try:
+            # Test Supabase connection
+            await self.candidate_service.supabase.table("candidates_dev").select("count").execute()
+            logger.info("Successfully connected to Supabase")
+        except Exception as e:
+            logger.error(f"Error initializing async components: {str(e)}")
+            raise
         
     @property
     def candidate_intake_agent(self):
         """Lazy load the candidate intake agent."""
         if self._candidate_intake_agent is None:
-            self._candidate_intake_agent = CandidateIntakeAgent(vector_store=self.vector_store)
+            self._candidate_intake_agent = CandidateIntakeAgent()
         return self._candidate_intake_agent
         
     @property
@@ -76,36 +98,28 @@ class BrainAgent:
         Handle a new candidate submission.
         This includes:
         1. Processing the resume
-        2. Storing initial profile data
-        3. Scheduling the Retell AI call
-        Note: Vector store storage happens after call completion
+        2. Storing the profile
+        3. Triggering matching if profile is complete
         """
         try:
-            process_id = str(uuid.uuid4())
-            logger.info(f"\n=== Starting Candidate Processing (ID: {process_id}) ===")
-            logger.info(f"Processing candidate: {candidate_data.email}")
+            logger.info(f"\n=== Processing New Candidate Submission (ID: {candidate_data.id}) ===")
             
-            # Step 1: Process Resume
+            # Step 1: Process Resume with Intake Agent
             logger.info(f"\nStep 1: 📄 Processing Resume")
             logger.info("----------------------------------------")
             
-            # Process resume with candidate intake agent
+            # Process resume with intake agent
             intake_result = await self.candidate_intake_agent.process_candidate(
                 resume_content=candidate_data.resume_content,
                 candidate_email=candidate_data.email,
                 candidate_id=candidate_data.id
             )
+            if not intake_result or "profile" not in intake_result:
+                raise ValueError("Failed to process resume")
             
-            if intake_result["status"] != "success":
-                logger.error(f"❌ Resume Processing Failed: {intake_result}")
-                return intake_result
-            
-            # Step 2: Update Supabase with processed candidate data
-            logger.info(f"\nStep 2: 📊 Updating Supabase with processed data")
+            # Step 2: Store Profile in Supabase
+            logger.info(f"\nStep 2: 💾 Storing Profile")
             logger.info("----------------------------------------")
-            
-            # Create candidate service
-            candidate_service = CandidateService()
             
             # Prepare update data
             update_data = {
@@ -121,21 +135,13 @@ class BrainAgent:
             }
             
             # Update in Supabase
-            updated_candidate = await candidate_service.update_candidate_profile(
+            updated_candidate = await self.candidate_service.update_candidate_profile(
                 candidate_id=candidate_data.id,
                 update_data=update_data
             )
             logger.info(f"✅ Candidate {candidate_data.id} updated in Supabase with processed resume data")
             
-            # Step 3: Schedule Retell AI Call
-            logger.info(f"\nStep 3: 📞 Scheduling Retell AI Call")
-            logger.info("----------------------------------------")
-            
-            # Schedule call with Retell
-            await candidate_service.schedule_initial_contact(candidate_data.id)
-            logger.info(f"✅ Retell AI call scheduled for candidate {candidate_data.id}")
-            
-            logger.info(f"\n=== ✅ Initial processing complete (ID: {process_id}) ===")
+            logger.info(f"\n=== ✅ Initial processing complete ===")
             
             return {
                 "id": candidate_data.id,
@@ -335,6 +341,58 @@ class BrainAgent:
             
         except Exception as e:
             logger.error(f"Error checking call status for candidate {candidate_id}: {str(e)}")
+            return {
+                "status": "error",
+                "error": str(e)
+            }
+
+    async def trigger_matching(self, candidate_id: str) -> Dict[str, Any]:
+        """
+        Trigger the matching process for a candidate after their profile is complete.
+        This will:
+        1. Get the candidate's profile from Supabase
+        2. Use the matching agent to find potential matches
+        3. Store the matches in the database
+        """
+        try:
+            logger.info(f"\n=== Starting Matching Process for Candidate {candidate_id} ===")
+            
+            # Get candidate data from Supabase
+            response = await self.candidate_service.supabase.table('candidates_dev').select('*').eq('id', candidate_id).single().execute()
+            candidate = response.data
+            if not candidate:
+                raise ValueError(f"Candidate {candidate_id} not found")
+            
+            # Get the candidate's profile
+            profile = candidate.get('profile_json', {})
+            if not profile:
+                raise ValueError(f"No profile found for candidate {candidate_id}")
+            
+            # Use matching agent to find potential matches
+            matches = await self.matching_agent.find_matches(profile)
+            
+            # Store matches in the candidate's profile
+            profile['matches'] = matches
+            profile['matching_status'] = {
+                'matched_at': datetime.utcnow().isoformat(),
+                'num_matches': len(matches)
+            }
+            
+            # Update candidate in Supabase
+            await self.candidate_service.supabase.table('candidates_dev').update({
+                'profile_json': profile,
+                'updated_at': datetime.utcnow().isoformat()
+            }).eq('id', candidate_id).execute()
+            
+            logger.info(f"✅ Successfully processed matches for candidate {candidate_id}")
+            return {
+                "status": "success",
+                "candidate_id": candidate_id,
+                "num_matches": len(matches)
+            }
+            
+        except Exception as e:
+            logger.error(f"❌ Error in matching process for candidate {candidate_id}: {str(e)}")
             return {
                 "status": "error",
                 "error": str(e)

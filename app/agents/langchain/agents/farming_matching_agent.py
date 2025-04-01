@@ -10,13 +10,13 @@ class FarmingMatchingAgent(BaseAgent):
         model_name: str = "gpt-4-turbo-preview",
         temperature: float = 0.7,
         memory: Optional[Any] = None,
-        vector_store: Optional[VectorStoreTool] = None
+        vector_store: Optional[Any] = None
     ):
         super().__init__(model_name, temperature, memory)
         
         # Initialize tools
         self.tools = [
-            vector_store or VectorStoreTool(),  # Use provided vector_store or create a new one
+            VectorStoreTool(vector_store=vector_store) if vector_store else VectorStoreTool(),  # Use provided vector_store or create a new one
             MatchingTool(vector_store=vector_store),  # Pass vector_store to MatchingTool
             EmailTool()
         ]

@@ -1,7 +1,9 @@
-import hmac
-import hashlib
 import json
-from typing import Dict, Any
+from retell import Retell
+from app.config import get_settings
+
+settings = get_settings()
+retell = Retell(api_key=settings.retell_api_key)
 
 def verify_retell_signature(
     payload: str,
@@ -9,7 +11,7 @@ def verify_retell_signature(
     api_key: str
 ) -> bool:
     """
-    Verify a Retell webhook signature.
+    Verify a Retell webhook signature using their official SDK.
     
     Args:
         payload: The raw JSON payload as a string
@@ -20,14 +22,11 @@ def verify_retell_signature(
         bool: True if signature is valid, False otherwise
     """
     try:
-        # Create HMAC SHA-256 hash
-        expected_signature = hmac.new(
-            api_key.encode('utf-8'),
-            payload.encode('utf-8'),
-            hashlib.sha256
-        ).hexdigest()
-        
-        # Compare signatures
-        return hmac.compare_digest(signature, expected_signature)
-    except Exception:
+        return retell.verify(
+            payload,
+            api_key=api_key,
+            signature=signature
+        )
+    except Exception as e:
+        print(f"Error verifying signature: {str(e)}")
         return False 

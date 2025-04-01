@@ -48,6 +48,13 @@ class Settings(BaseSettings):
     supabase_url: str
     supabase_key: str
 
+    # Pinecone
+    pinecone_api_key: str
+    pinecone_environment: str
+    pinecone_candidates_index: str
+    pinecone_jobs_index: str
+    pinecone_call_status_index: str
+
     @property
     def webhook_base_url(self) -> str:
         """Get the base URL for webhooks based on environment."""

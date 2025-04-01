@@ -8,6 +8,7 @@ from datetime import datetime, timedelta
 import os
 from dotenv import load_dotenv
 import logging
+import logging.config
 import logging.handlers
 from enum import Enum
 import openai
@@ -55,16 +56,24 @@ from app.services.retell_service import RetellService
 from app.services.openai_service import OpenAIService
 from app.services.vector_service import VectorService
 from app.services.matching_service import MatchingService
+from app.routes.jobs import router as jobs_router
 
-# Configure logging
-logging.basicConfig(level=logging.INFO, format='%(levelname)s: %(message)s')
-logger = logging.getLogger(__name__)
+# Load environment variables first
+load_dotenv()
+
+# Configure logging from config file
+logging.config.fileConfig('app/config/logging.conf')
+logger = logging.getLogger('app')
 
 # Test logging configuration
-logger.info("🚀 Starting Anita AI")
+logger.info("🚀 Starting Anita AI with debug logging enabled")
+logger.debug("Debug logging is enabled")
 
-# Load environment variables
-load_dotenv()
+# Suppress noisy logs from other libraries
+logging.getLogger("httpx").setLevel(logging.WARNING)
+logging.getLogger("httpcore").setLevel(logging.WARNING)
+logging.getLogger("asyncio").setLevel(logging.WARNING)
+logging.getLogger("urllib3").setLevel(logging.WARNING)
 
 # Create FastAPI app
 app = FastAPI(
@@ -72,6 +81,41 @@ app = FastAPI(
     description="API for AI-driven recruitment with enhanced candidate-job matching",
     version="2.0.0"
 )
+
+# Global service instances
+vector_store = None
+brain_agent_instance = None
+core_services = {}
+agents = {}
+
+# Initialize services
+settings = get_settings()
+llm = get_openai_client()
+embeddings = get_embeddings()
+supabase = get_supabase_client()
+sendgrid = get_sendgrid_client()
+
+@app.on_event("startup")
+async def startup_event():
+    """Initialize services on startup."""
+    global vector_store, brain_agent_instance
+    try:
+        logger.info("Initializing services...")
+        
+        # Initialize vector store
+        from app.agents.langchain.tools.vector_store import VectorStoreTool
+        vector_store = VectorStoreTool()
+        await vector_store._initialize_async()
+        
+        # Initialize brain agent
+        from app.agents.brain_agent import BrainAgent
+        brain_agent_instance = BrainAgent(vector_store=vector_store)
+        await brain_agent_instance._initialize_async()
+        
+        logger.info("✅ Services initialized successfully")
+    except Exception as e:
+        logger.error(f"❌ Error initializing services: {str(e)}")
+        raise
 
 # Configure CORS
 app.add_middleware(
@@ -85,30 +129,30 @@ app.add_middleware(
 # Mount static files
 app.mount("/public", StaticFiles(directory="public"), name="public")
 
-# Global service instances
-vector_store = VectorStoreTool()  # Initialize vector store first
-brain_agent_instance = BrainAgent(vector_store=vector_store)  # Initialize brain agent with vector store
-core_services = {}
-agents = {}
-
-# Initialize services
-settings = get_settings()
-llm = get_openai_client()
-embeddings = get_embeddings()
-supabase = get_supabase_client()
-sendgrid = get_sendgrid_client()
-
 # Import routers
 from app.api.webhook import router as webhook_router
 
 # Include routers
 app.include_router(webhook_router, prefix="/webhook", tags=["webhook"])
+app.include_router(jobs_router, tags=["jobs"])
 
 # Dependencies
-def get_brain_agent():
+async def get_brain_agent():
+    global brain_agent_instance
+    if brain_agent_instance is None:
+        raise HTTPException(
+            status_code=500,
+            detail="Brain agent not initialized"
+        )
     return brain_agent_instance
 
-def get_vector_store():
+async def get_vector_store():
+    global vector_store
+    if vector_store is None:
+        raise HTTPException(
+            status_code=500,
+            detail="Vector store not initialized"
+        )
     return vector_store
 
 def get_service(service_name: str):

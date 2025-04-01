@@ -9,15 +9,15 @@ class JobMatchingAgent(BaseAgent):
         self,
         model_name: str = "gpt-4-turbo-preview",
         temperature: float = 0.7,
-        memory: Optional[Any] = None,
-        vector_store: Optional[VectorStoreTool] = None
+        memory: Optional[Any] = None
     ):
         super().__init__(model_name, temperature, memory)
         
         # Initialize tools
+        vector_store_tool = VectorStoreTool()  # Create a new VectorStoreTool instance
         self.tools = [
-            vector_store or VectorStoreTool(),
-            MatchingTool(vector_store=vector_store),
+            vector_store_tool,
+            MatchingTool(vector_store=vector_store_tool),
             EmailTool()
         ]
         

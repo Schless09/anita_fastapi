@@ -36,12 +36,7 @@ class MatchingTool(BaseTool):
         )
         
         # Initialize vector store
-        if vector_store:
-            logger.info("MatchingTool using provided VectorStoreTool instance")
-            self.vector_store = vector_store
-        else:
-            logger.warning("⚠️ MatchingTool creating new VectorStoreTool - this should be avoided!")
-            self.vector_store = VectorStoreTool()
+        self.vector_store = vector_store or VectorStoreTool()
 
     def _run(self, operation: str, **kwargs) -> Dict[str, Any]:
         """Run matching operations."""

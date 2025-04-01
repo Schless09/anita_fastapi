@@ -8,6 +8,8 @@ from pydantic import BaseModel
 import logging
 import traceback
 from langchain.prompts import PromptTemplate
+from datetime import datetime
+from app.config import get_supabase_client
 
 logger = logging.getLogger(__name__)
 
@@ -27,6 +29,9 @@ class CandidateIntakeAgent(BaseAgent):
         self.vector_store = vector_store or VectorStoreTool()
         self.email_tool = EmailTool()
         self.matching_tool = MatchingTool(vector_store=vector_store)
+        
+        # Initialize Supabase client
+        self.supabase = get_supabase_client()
         
         # Set tools list for the agent
         self.tools = [
@@ -91,7 +96,36 @@ class CandidateIntakeAgent(BaseAgent):
         # Profile creation chain
         profile_creation_prompt = PromptTemplate(
             input_variables=["parsed_data", "analysis"],
-            template="""Create a comprehensive candidate profile using the parsed data and analysis:
+            template="""Create a comprehensive candidate profile using the parsed data and analysis.
+            You MUST return a valid JSON object with the following structure:
+            {{
+                "basic_info": {{
+                    "name": "string",
+                    "email": "string",
+                    "phone": "string",
+                    "location": "string"
+                }},
+                "professional_summary": "string",
+                "skills": ["string"],
+                "experience": [
+                    {{
+                        "title": "string",
+                        "company": "string",
+                        "duration": "string",
+                        "description": "string"
+                    }}
+                ],
+                "education": [
+                    {{
+                        "degree": "string",
+                        "institution": "string",
+                        "year": "string"
+                    }}
+                ],
+                "additional_qualifications": ["string"]
+            }}
+            
+            Use the following data to create the profile:
             
             Parsed Data:
             {parsed_data}
@@ -99,13 +133,7 @@ class CandidateIntakeAgent(BaseAgent):
             Analysis:
             {analysis}
             
-            Create a profile in JSON format with:
-            1. Basic information
-            2. Professional summary
-            3. Skills and expertise
-            4. Experience highlights
-            5. Education details
-            6. Additional qualifications"""
+            Return ONLY the JSON object, no other text."""
         )
         
         self.profile_creation_chain = profile_creation_prompt | self.llm
@@ -118,69 +146,115 @@ class CandidateIntakeAgent(BaseAgent):
         additional_info: Optional[Dict[str, Any]] = None
     ) -> Dict[str, Any]:
         try:
-            logger.info(f"\n=== Starting Candidate Intake Process ===")
-            logger.info(f"Candidate ID: {candidate_id}")
-            logger.info(f"Candidate Email: {candidate_email}")
+            logger.info("\n=== Starting Candidate Intake Process ===")
+            logger.info(f"Processing candidate: {candidate_email}")
             
-            # Step 1: Process PDF
-            logger.info("\nStep 1: 📄 Processing PDF")
+            # Step 1: Parse Resume
+            logger.info("\nStep 1: 📄 Parsing Resume")
             logger.info("----------------------------------------")
+            
+            # First convert PDF to text
             pdf_result = await self.pdf_processor._arun(resume_content)
             if pdf_result["status"] != "success":
                 logger.error(f"❌ PDF Processing Failed: {pdf_result}")
                 return pdf_result
-            logger.info("✅ PDF processed successfully")
-            
-            # Step 2: Parse resume
-            logger.info("\nStep 2: 🔍 Parsing Resume")
-            logger.info("----------------------------------------")
+                
+            # Then parse the text content
             parse_result = await self.resume_parser._arun(pdf_result["text_content"])
+            
             if parse_result["status"] != "success":
                 logger.error(f"❌ Resume Parsing Failed: {parse_result}")
                 return parse_result
             logger.info("✅ Resume parsed successfully")
             
-            # Step 3: Analyze resume
-            logger.info("\nStep 3: 📊 Analyzing Resume")
+            # Step 2: Analyze Resume
+            logger.info("\nStep 2: 🔍 Analyzing Resume")
             logger.info("----------------------------------------")
             analysis_result = await self.resume_analysis_chain.ainvoke(
                 {"resume_text": pdf_result["text_content"]}
             )
-            logger.info("✅ Resume analysis complete")
             
-            # Step 4: Create profile
-            logger.info("\nStep 4: 👤 Creating Profile")
+            if not analysis_result:
+                logger.error("❌ Resume Analysis Failed")
+                return {"status": "error", "error": "Failed to analyze resume"}
+            logger.info("✅ Resume analyzed successfully")
+            
+            # Step 3: Create Profile
+            logger.info("\nStep 3: 👤 Creating Profile")
             logger.info("----------------------------------------")
             profile_result = await self.profile_creation_chain.ainvoke(
                 {"parsed_data": parse_result["parsed_data"], "analysis": analysis_result}
             )
             logger.info("✅ Profile created successfully")
             
-            # Step 5: Store in vector store
-            logger.info("\nStep 5: 💾 Storing in Vector Store")
+            # Step 4: Store in Supabase
+            logger.info("\nStep 4: 💾 Storing in Supabase")
             logger.info("----------------------------------------")
+            
+            # Convert AIMessage to string if needed and parse JSON
+            if hasattr(profile_result, 'content'):
+                profile_result = profile_result.content
+            
+            try:
+                # Try to parse the profile result as JSON
+                if isinstance(profile_result, str):
+                    import json
+                    # Clean the string to ensure it's valid JSON
+                    profile_result = profile_result.strip()
+                    if profile_result.startswith('```json'):
+                        profile_result = profile_result[7:]
+                    if profile_result.endswith('```'):
+                        profile_result = profile_result[:-3]
+                    profile_result = profile_result.strip()
+                    
+                    # Parse the cleaned JSON
+                    profile_result = json.loads(profile_result)
+                    
+                    # Validate the structure
+                    required_fields = ["basic_info", "professional_summary", "skills", "experience", "education"]
+                    for field in required_fields:
+                        if field not in profile_result:
+                            raise ValueError(f"Missing required field: {field}")
+                            
+            except json.JSONDecodeError as e:
+                logger.error(f"❌ Failed to parse profile result as JSON: {str(e)}")
+                logger.error(f"❌ Raw profile result: {profile_result}")
+                return {
+                    "status": "error",
+                    "error": "Failed to parse profile result as JSON"
+                }
+            except ValueError as e:
+                logger.error(f"❌ Invalid profile structure: {str(e)}")
+                logger.error(f"❌ Profile result: {profile_result}")
+                return {
+                    "status": "error",
+                    "error": f"Invalid profile structure: {str(e)}"
+                }
+            
+            # Update candidate profile in Supabase
             profile_data = {
-                "id": candidate_id,
                 "email": candidate_email,
                 "profile": profile_result,
+                "processing_status": {
+                    "resume_processed": True,
+                    "call_completed": False,
+                    "last_updated": datetime.utcnow().isoformat()
+                },
                 **(additional_info or {})
             }
             
-            vector_result = await self.vector_store._arun(
-                "store_candidate",
-                candidate_data=profile_data
-            )
+            # Store in Supabase
+            await self.supabase.table('candidates_dev').update({
+                'profile_json': profile_data,
+                'updated_at': datetime.utcnow().isoformat()
+            }).eq('id', candidate_id).execute()
             
-            if vector_result["status"] != "success":
-                logger.error(f"❌ Vector Store Storage Failed: {vector_result}")
-                return vector_result
-            logger.info("✅ Profile stored in vector store")
+            logger.info("✅ Profile stored in Supabase")
             
-            logger.info("\n=== Candidate Intake Process Complete ===")
             return {
                 "status": "success",
-                "id": candidate_id,
-                "profile": profile_data
+                "candidate_id": candidate_id,
+                "profile": profile_result
             }
             
         except Exception as e:
