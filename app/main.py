@@ -17,6 +17,7 @@ from contextlib import asynccontextmanager
 import uuid
 import tempfile
 import asyncio
+from retell import Retell
 
 from app.config import (
     get_settings,
@@ -24,7 +25,6 @@ from app.config import (
     get_embeddings,
     get_sendgrid_client,
     get_sendgrid_webhook_url,
-    setup_logging,
     get_supabase_client
 )
 
@@ -50,203 +50,28 @@ from app.agents.brain_agent import BrainAgent
 from app.schemas.candidate import CandidateCreate, CandidateResponse, CandidateUpdate
 from app.schemas.job import JobCreate, JobResponse, JobUpdate
 from app.schemas.matching import MatchingResponse
-from app.api.webhook import handler as webhook_handler
+from app.api.webhook import router as webhook_router
 from app.services.retell_service import RetellService
 from app.services.openai_service import OpenAIService
 from app.services.vector_service import VectorService
 from app.services.matching_service import MatchingService
 
 # Configure logging
-logging.basicConfig(level=logging.INFO)
-setup_logging()
-# Reduce logs from these libraries
-logging.getLogger('httpx').setLevel(logging.WARNING)
-logging.getLogger('asyncio').setLevel(logging.WARNING)
-logging.getLogger('httpcore').setLevel(logging.WARNING)
-
-# Create logger for this module
+logging.basicConfig(level=logging.INFO, format='%(levelname)s: %(message)s')
 logger = logging.getLogger(__name__)
-logger.setLevel(logging.INFO)
 
 # Test logging configuration
-logger.info("\n=== Starting Anita AI Recruitment API ===")
-logger.info(f"Environment: {os.getenv('VERCEL_ENV', 'development')}")
-logger.info("=====================================\n")
+logger.info("🚀 Starting Anita AI")
 
 # Load environment variables
 load_dotenv()
-logger.info("Environment variables loaded")
 
-# Global service instances
-vector_store = None
-brain_agent_instance = None
-core_services = {}
-agents = {}
-
-async def initialize_core_services():
-    """Initialize core services asynchronously."""
-    logger.info("Initializing core services...")
-    
-    # Get or create the singleton VectorStoreTool instance
-    vector_store = VectorStoreTool.get_instance()
-    
-    # Initialize other core services
-    services = {
-        'matching_tool': MatchingTool(vector_store=vector_store),
-        'pdf_processor': PDFProcessor(),
-        'resume_parser': ResumeParser(),
-        'email_tool': EmailTool()
-    }
-    
-    logger.info("✅ Core services initialized")
-    return services
-
-async def initialize_chains(vector_store, services):
-    """Initialize chains asynchronously."""
-    logger.info("Initializing chains...")
-    
-    chains = {
-        'candidate_processing': CandidateProcessingChain(
-            vector_store=vector_store
-        ),
-        'job_matching': JobMatchingChain(
-            vector_store=vector_store
-        ),
-        'interview_scheduling': InterviewSchedulingChain(
-            vector_store=vector_store
-        ),
-        'follow_up': FollowUpChain(vector_store=vector_store)
-    }
-    
-    logger.info("✅ Chains initialized")
-    return chains
-
-async def initialize_agents(vector_store, services, chains):
-    """Initialize agents asynchronously."""
-    logger.info("\n=== Initializing LangChain Agents ===")
-    
-    # Create initialization tasks
-    tasks = [
-        asyncio.create_task(initialize_agent(
-            "candidate_intake",
-            CandidateIntakeAgent,
-            vector_store,
-            services,
-            chains,
-            "👤"
-        )),
-        asyncio.create_task(initialize_agent(
-            "job_matching",
-            JobMatchingAgent,
-            vector_store,
-            services,
-            chains,
-            "🔍"
-        )),
-        asyncio.create_task(initialize_agent(
-            "farming_matching",
-            FarmingMatchingAgent,
-            vector_store,
-            services,
-            chains,
-            "🌾"
-        )),
-        asyncio.create_task(initialize_agent(
-            "interview",
-            InterviewAgent,
-            vector_store,
-            services,
-            chains,
-            "🎯"
-        )),
-        asyncio.create_task(initialize_agent(
-            "follow_up",
-            FollowUpAgent,
-            vector_store,
-            services,
-            chains,
-            "📧"
-        ))
-    ]
-    
-    # Wait for all agents to initialize
-    results = await asyncio.gather(*tasks, return_exceptions=True)
-    
-    # Check for any initialization errors
-    agents = {}
-    for name, result in zip(["candidate_intake", "job_matching", "farming_matching", "interview", "follow_up"], results):
-        if isinstance(result, Exception):
-            logger.error(f"Failed to initialize {name} agent: {result}")
-        else:
-            agents[name] = result
-    
-    logger.info("=====================================\n")
-    return agents
-
-async def initialize_agent(name, agent_class, vector_store, services, chains, emoji):
-    """Initialize a single agent asynchronously."""
-    try:
-        logger.info(f"Initializing {emoji} {name} agent...")
-        
-        # Only pass vector_store - each agent handles its own tool creation internally
-        agent = agent_class(vector_store=vector_store)
-        agent.emoji = emoji
-        logger.info(f"✅ {emoji} {name} agent initialized")
-        return agent
-    except Exception as e:
-        logger.error(f"Error initializing {name} agent: {e}")
-        raise
-
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    """
-    Lifespan context manager for FastAPI application.
-    Initialize services once and reuse them throughout the application lifecycle.
-    """
-    global core_services, agents, brain_agent_instance, vector_store
-    
-    # Startup
-    try:
-        logger.info("Initializing core services...")
-        
-        # Initialize vector store first (singleton)
-        vector_store = VectorStoreTool.get_instance()
-        logger.info("✅ VectorStoreTool instance initialized (singleton)")
-        
-        # Initialize services, chains, and agents asynchronously
-        core_services = await initialize_core_services()
-        chains = await initialize_chains(vector_store, core_services)
-        agents = await initialize_agents(vector_store, core_services, chains)
-        
-        # Initialize brain agent once
-        if brain_agent_instance is None:
-            logger.info("Initializing BrainAgent...")
-            brain_agent_instance = BrainAgent(
-                vector_store=vector_store,
-                candidate_intake_agent=agents.get('candidate_intake'),
-                job_matching_agent=agents.get('job_matching'),
-                interview_agent=agents.get('interview'),
-                follow_up_agent=agents.get('follow_up')
-            )
-            logger.info("✅ BrainAgent initialized")
-        
-        logger.info("Application startup complete")
-        yield
-        
-    # Shutdown
-    finally:
-        logger.info("Application shutdown complete")
-
-# Update app definition to use lifespan
+# Create FastAPI app
 app = FastAPI(
     title="Anita AI Recruitment API",
     description="API for AI-driven recruitment with enhanced candidate-job matching",
-    version="2.0.0",
-    lifespan=lifespan
+    version="2.0.0"
 )
-
-# Mount static files
-app.mount("/public", StaticFiles(directory="public"), name="public")
 
 # Configure CORS
 app.add_middleware(
@@ -257,12 +82,27 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Mount static files
+app.mount("/public", StaticFiles(directory="public"), name="public")
+
+# Global service instances
+vector_store = VectorStoreTool()  # Initialize vector store first
+brain_agent_instance = BrainAgent(vector_store=vector_store)  # Initialize brain agent with vector store
+core_services = {}
+agents = {}
+
 # Initialize services
 settings = get_settings()
 llm = get_openai_client()
 embeddings = get_embeddings()
 supabase = get_supabase_client()
 sendgrid = get_sendgrid_client()
+
+# Import routers
+from app.api.webhook import router as webhook_router
+
+# Include routers
+app.include_router(webhook_router, prefix="/webhook", tags=["webhook"])
 
 # Dependencies
 def get_brain_agent():
@@ -290,43 +130,6 @@ async def health_check():
             "agents": list(agents.keys())
         }
     }
-
-# Retell webhook endpoint
-@app.post("/webhook/retell")
-async def retell_webhook(request: Request):
-    """Handle Retell webhook events."""
-    logger.info("🔍 FastAPI received Retell webhook request")
-    logger.info(f"🔍 Request path: {request.url.path}")
-    logger.info(f"🔍 Request method: {request.method}")
-    logger.info(f"🔍 Request headers: {dict(request.headers)}")
-    
-    try:
-        # Get raw body for signature verification
-        body = await request.json()
-        logger.info(f"🔍 Request body: {json.dumps(body, indent=2)}")
-        
-        response = await webhook_handler(request)
-        logger.info(f"✅ Webhook handler returned response: {response}")
-        
-        # If status code is 204, return an empty response
-        if response.get("statusCode") == 204:
-            return Response(status_code=204)
-            
-        # Otherwise convert the webhook handler response to a FastAPI response
-        status_code = response.get("statusCode", 500)
-        headers = response.get("headers", {})
-        body = json.loads(response.get("body", "{}"))
-        
-        return JSONResponse(
-            status_code=status_code,
-            content=body,
-            headers=headers
-        )
-        
-    except Exception as e:
-        logger.error(f"❌ Error in FastAPI webhook route: {str(e)}")
-        logger.error(f"❌ Full traceback: {traceback.format_exc()}")
-        raise HTTPException(status_code=500, detail=str(e))
 
 # Configure OpenAI
 OPENAI_API_KEY = os.getenv('OPENAI_API_KEY')
@@ -547,3 +350,7 @@ async def check_call_status(
             status_code=500,
             detail=f"Error checking call status: {str(e)}"
         )
+
+@app.get("/")
+async def root():
+    return {"message": "Welcome to the API"}
