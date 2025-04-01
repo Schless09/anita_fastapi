@@ -13,6 +13,8 @@ import tempfile
 import os
 import PyPDF2
 import json
+import asyncio
+from fastapi import HTTPException
 
 settings = get_settings()
 supabase = get_supabase_client()
@@ -71,14 +73,72 @@ class CandidateService:
                 'created_at': datetime.utcnow().isoformat(),
                 'updated_at': datetime.utcnow().isoformat(),
                 'profile_json': {
-                    'current_role': current_role,
-                    'current_company': current_company,
                     'skills': [],
                     'education': [],
                     'experience': [],
+                    'industries': [],
+                    'next_steps': '',
+                    'tech_stack': [],
+                    'resume_text': text if 'text' in locals() else '',
+                    'career_goals': [],
+                    'current_role': current_role,
+                    'company_stage': '',
+                    'deal_breakers': [],
+                    'candidate_tags': [],
+                    'current_company': current_company,
+                    'additional_notes': '',
+                    'role_preferences': [],
+                    'processing_status': {
+                        'last_updated': datetime.utcnow().isoformat(),
+                        'call_completed': False,
+                        'resume_processed': False
+                    },
+                    'skills_to_develop': [],
+                    'previous_companies': [],
+                    'preferred_locations': [],
+                    'salary_expectations': {
+                        'max': 0,
+                        'min': 0
+                    },
+                    'willing_to_relocate': False,
+                    'years_of_experience': 0,
+                    'benefits_preferences': [],
+                    'company_size_at_join': 0,
+                    'current_company_size': 0,
+                    'preferred_industries': [],
                     'professional_summary': '',
+                    'undesired_industries': [],
+                    'desired_company_stage': [],
+                    'industries_to_explore': [],
+                    'leadership_experience': False,
+                    'technologies_to_avoid': [],
+                    'preferred_company_size': [],
+                    'desired_company_culture': '',
+                    'preferred_product_types': [],
+                    'preferred_project_types': [],
+                    'visa_sponsorship_needed': False,
+                    'bad_experiences_to_avoid': [],
+                    'traits_to_avoid_detected': [],
                     'additional_qualifications': [],
-                    'resume_text': text # Store the processed resume text
+                    'company_mission_alignment': [],
+                    'funding_stage_preferences': [],
+                    'motivation_for_job_change': [],
+                    'preferred_management_style': [],
+                    'preferred_work_arrangement': [],
+                    'company_culture_preferences': [],
+                    'preferred_interview_process': [],
+                    'work_environment_preferences': [],
+                    'company_reputation_importance': '',
+                    'project_visibility_preference': [],
+                    'work_life_balance_preferences': '',
+                    'early_stage_startup_experience': False,
+                    'total_compensation_expectations': {
+                        'bonus': '',
+                        'equity': '',
+                        'base_salary_max': 0,
+                        'base_salary_min': 0
+                    },
+                    'experience_with_significant_company_growth': False
                 }
             }
             
@@ -122,163 +182,194 @@ class CandidateService:
     async def process_call_completion(self, call_data: Dict[str, Any]) -> None:
         """
         Process completed call data and update candidate profile.
-        Extracts information from raw transcript using OpenAI.
         """
         try:
-            # Extract essential data
+            # Extract candidate_id from metadata
             candidate_id = call_data.get('metadata', {}).get('candidate_id')
-            transcript = call_data.get('transcript', '')
-
             if not candidate_id:
-                logger.error("❌ No candidate_id found in call metadata")
+                logger.error("No candidate_id found in call metadata")
                 return
 
+            # Get transcript
+            transcript = call_data.get('transcript')
             if not transcript:
-                logger.error("❌ No transcript found in call data")
+                logger.error("No transcript found in call data")
                 return
-            
-            # Get current profile
-            response = await self.supabase.table('candidates_dev').select('profile_json').eq('id', candidate_id).single().execute()
+
+            # Get current candidate profile
+            response = await self.supabase.table('candidates_dev').select('profile_json').eq('id', candidate_id).execute()
             if not response.data:
-                logger.error(f"❌ No profile found for candidate {candidate_id}")
+                logger.error(f"Could not find candidate profile for {candidate_id}")
                 return
-                
-            current_profile = response.data.get('profile_json', {})
+
+            current_profile = response.data[0].get('profile_json', {})
             
             # Extract information from transcript using OpenAI
-            transcript_info = await self.openai.extract_transcript_info(transcript)
+            extracted_info = await self.openai.extract_transcript_info(transcript)
             
-            # Combine all extracted information
-            extracted_info = {
-                # Resume information (preserve existing)
-                "current_role": current_profile.get('current_role', ''),
-                "current_company": current_profile.get('current_company', ''),
-                "resume_text": current_profile.get('resume_text', ''),
+            # Only merge if we got valid extracted info
+            if not extracted_info:
+                logger.error(f"No valid information extracted from transcript for candidate {candidate_id}")
+                return
                 
-                # Transcript information
-                "previous_companies": transcript_info.get('previous_companies', []),
-                "tech_stack": list(set(current_profile.get('tech_stack', []) + transcript_info.get('tech_stack', []))),
-                "years_of_experience": transcript_info.get('years_of_experience', 0),
-                "industries": transcript_info.get('industries', []),
-                "undesired_industries": transcript_info.get('undesired_industries', []),
-                "company_size_at_join": transcript_info.get('company_size_at_join', 0),
-                "current_company_size": transcript_info.get('current_company_size', 0),
-                "company_stage": transcript_info.get('company_stage', ''),
-                "experience_with_significant_company_growth": transcript_info.get('experience_with_significant_company_growth', False),
-                "early_stage_startup_experience": transcript_info.get('early_stage_startup_experience', False),
-                "leadership_experience": transcript_info.get('leadership_experience', False),
-                "preferred_work_arrangement": transcript_info.get('preferred_work_arrangement', []),
-                "preferred_locations": transcript_info.get('preferred_locations', []),
-                "visa_sponsorship_needed": transcript_info.get('visa_sponsorship_needed', False),
-                "salary_expectations": transcript_info.get('salary_expectations', {'min': 0, 'max': 0}),
-                "desired_company_stage": transcript_info.get('desired_company_stage', []),
-                "preferred_industries": transcript_info.get('preferred_industries', []),
-                "preferred_product_types": transcript_info.get('preferred_product_types', []),
-                "motivation_for_job_change": transcript_info.get('motivation_for_job_change', []),
-                "work_life_balance_preferences": transcript_info.get('work_life_balance_preferences', ''),
-                "desired_company_culture": transcript_info.get('desired_company_culture', ''),
-                "traits_to_avoid_detected": transcript_info.get('traits_to_avoid_detected', []),
-                "additional_notes": transcript_info.get('additional_notes', ''),
-                "candidate_tags": transcript_info.get('candidate_tags', []),
-                "next_steps": transcript_info.get('next_steps', ''),
-                "role_preferences": transcript_info.get('role_preferences', []),
-                "technologies_to_avoid": transcript_info.get('technologies_to_avoid', []),
-                "company_culture_preferences": transcript_info.get('company_culture_preferences', []),
-                "work_environment_preferences": transcript_info.get('work_environment_preferences', []),
-                "career_goals": transcript_info.get('career_goals', []),
-                "skills_to_develop": transcript_info.get('skills_to_develop', []),
-                "preferred_project_types": transcript_info.get('preferred_project_types', []),
-                "company_mission_alignment": transcript_info.get('company_mission_alignment', []),
-                "preferred_company_size": transcript_info.get('preferred_company_size', []),
-                "funding_stage_preferences": transcript_info.get('funding_stage_preferences', []),
-                "total_compensation_expectations": transcript_info.get('total_compensation_expectations', {
-                    'base_salary_min': 0,
-                    'base_salary_max': 0,
-                    'equity': '',
-                    'bonus': ''
-                }),
-                "benefits_preferences": transcript_info.get('benefits_preferences', []),
-                "deal_breakers": transcript_info.get('deal_breakers', []),
-                "bad_experiences_to_avoid": transcript_info.get('bad_experiences_to_avoid', []),
-                "willing_to_relocate": transcript_info.get('willing_to_relocate', False),
-                "preferred_interview_process": transcript_info.get('preferred_interview_process', []),
-                "company_reputation_importance": transcript_info.get('company_reputation_importance', ''),
-                "preferred_management_style": transcript_info.get('preferred_management_style', []),
-                "industries_to_explore": transcript_info.get('industries_to_explore', []),
-                "project_visibility_preference": transcript_info.get('project_visibility_preference', []),
-                
-                # Update processing status
-                "processing_status": {
-                    'resume_processed': current_profile.get('processing_status', {}).get('resume_processed', False),
-                    'call_completed': True,
-                    'last_updated': datetime.utcnow().isoformat()
-                }
+            # Deep merge the extracted information with current profile, but be careful about empty values
+            merged_profile = self._deep_merge(current_profile, extracted_info)
+            
+            # Update processing status
+            merged_profile['processing_status'] = {
+                'status': 'completed',
+                'last_updated': datetime.utcnow().isoformat(),
+                'call_completed': True
             }
             
-            # Deep merge the new information with existing profile
-            updated_profile = self._deep_merge(current_profile, extracted_info)
+            # Update candidate in Supabase with retry logic
+            max_retries = 3
+            retry_delay = 1
             
-            # Update in Supabase
-            update_data = {
-                'profile_json': updated_profile,
-                'updated_at': datetime.utcnow().isoformat()
-            }
-            
-            response = await self.supabase.table('candidates_dev').update(update_data).eq('id', candidate_id).execute()
-            
-            if not response.data:
-                logger.error(f"❌ Failed to update profile for candidate {candidate_id}")
-                raise Exception(f"Failed to update profile: No data returned from update")
-            
-            # Generate embeddings for matching
-            await self.vector_service.generate_and_store_candidate_embedding(candidate_id)
-            
-            logger.info(f"✅ Successfully processed call completion for candidate {candidate_id}")
+            for attempt in range(max_retries):
+                try:
+                    # Update only the profile_json field
+                    update_data = {
+                        'profile_json': merged_profile,
+                        'updated_at': datetime.utcnow().isoformat()
+                    }
+                    
+                    response = await self.supabase.table('candidates_dev').update(update_data).eq('id', candidate_id).execute()
+                    
+                    if response.data:
+                        logger.info(f"✅ Successfully processed call completion for candidate {candidate_id}")
+                        break
+                    else:
+                        logger.error(f"Failed to update candidate profile: {candidate_id}")
+                        
+                except Exception as e:
+                    if attempt < max_retries - 1:
+                        logger.warning(f"Attempt {attempt + 1} failed to update candidate profile: {str(e)}. Retrying in {retry_delay} seconds...")
+                        await asyncio.sleep(retry_delay)
+                        retry_delay *= 2  # Exponential backoff
+                    else:
+                        logger.error(f"Failed to update candidate profile after {max_retries} attempts: {str(e)}")
+                        return
 
+            # Generate new embeddings for the updated profile
+            try:
+                text_for_embedding = self._prepare_text_for_embedding(merged_profile)
+                embedding = await self.openai.generate_embedding(text_for_embedding)
+                
+                # Update embeddings in Supabase
+                await self.supabase.table('candidates_dev').update({
+                    'embedding': embedding,
+                    'updated_at': datetime.utcnow().isoformat()
+                }).eq('id', candidate_id).execute()
+                
+                logger.info(f"✅ Successfully updated embeddings for candidate {candidate_id}")
+            except Exception as e:
+                logger.error(f"Failed to update embeddings for candidate {candidate_id}: {str(e)}")
+                # Don't return here - we still want to continue even if embedding update fails
+                
         except Exception as e:
-            logger.error(f"❌ Error processing call completion: {str(e)}")
+            logger.error(f"Error processing call completion: {str(e)}")
             raise
 
-    def _prepare_text_for_embedding(self, profile_json: Dict[str, Any]) -> str:
+    def _prepare_text_for_embedding(self, profile: Dict[str, Any]) -> str:
         """
-        Prepare profile data for embedding by converting it to a text string.
+        Prepare text for embedding generation by combining relevant profile information.
+        Also updates embedding_metadata to track what information was included.
         """
+        # Initialize embedding metadata if it doesn't exist
+        if 'embedding_metadata' not in profile:
+            profile['embedding_metadata'] = {
+                'last_updated': datetime.utcnow().isoformat(),
+                'sources': [],
+                'fields_included': []
+            }
+        
+        # Track which fields we're including
+        fields_included = []
         text_parts = []
         
-        # Add basic information
-        text_parts.append(f"Name: {profile_json.get('full_name', '')}")
-        text_parts.append(f"Current Role: {profile_json.get('current_role', '')}")
-        text_parts.append(f"Current Company: {profile_json.get('current_company', '')}")
-        text_parts.append(f"Years of Experience: {profile_json.get('years_of_experience', '')}")
+        # Add current role and company
+        if profile.get('current_role') and profile['current_role'] != "current role":
+            text_parts.append(f"Current role: {profile['current_role']}")
+            fields_included.append('current_role')
+        if profile.get('current_company') and profile['current_company'] != "current company":
+            text_parts.append(f"Current company: {profile['current_company']}")
+            fields_included.append('current_company')
         
-        # Add tech stack
-        tech_stack = profile_json.get('tech_stack', [])
-        if tech_stack:
-            text_parts.append(f"Skills: {', '.join(tech_stack)}")
+        # Add years of experience
+        if profile.get('years_of_experience'):
+            text_parts.append(f"Years of experience: {profile['years_of_experience']}")
+            fields_included.append('years_of_experience')
         
-        # Add previous companies
-        prev_companies = profile_json.get('previous_companies', [])
-        if prev_companies:
-            text_parts.append(f"Previous Companies: {', '.join(prev_companies)}")
+        # Add skills and tech stack
+        if profile.get('skills'):
+            text_parts.append(f"Skills: {', '.join(profile['skills'])}")
+            fields_included.append('skills')
+        if profile.get('tech_stack'):
+            text_parts.append(f"Tech stack: {', '.join(profile['tech_stack'])}")
+            fields_included.append('tech_stack')
+        
+        # Add experience
+        if profile.get('experience'):
+            exp_text = "Experience: "
+            for exp in profile['experience']:
+                if exp.get('title') and exp.get('company'):
+                    exp_text += f"{exp['title']} at {exp['company']}, "
+            text_parts.append(exp_text.rstrip(', '))
+            fields_included.append('experience')
         
         # Add education
-        education = profile_json.get('education', [])
-        if education:
-            text_parts.append(f"Education: {', '.join(education)}")
+        if profile.get('education'):
+            edu_text = "Education: "
+            for edu in profile['education']:
+                if edu.get('degree') and edu.get('institution'):
+                    edu_text += f"{edu['degree']} from {edu['institution']}, "
+            text_parts.append(edu_text.rstrip(', '))
+            fields_included.append('education')
         
         # Add career goals
-        text_parts.append(f"Career Goals: {profile_json.get('career_goals', '')}")
+        if profile.get('career_goals'):
+            text_parts.append(f"Career goals: {', '.join(profile['career_goals'])}")
+            fields_included.append('career_goals')
         
         # Add work preferences
-        work_prefs = profile_json.get('work_preferences', {})
-        if work_prefs:
-            text_parts.append(f"Work Preferences: Remote - {work_prefs.get('remote_preference', '')}, Location - {work_prefs.get('preferred_location', '')}")
+        if profile.get('work_preferences'):
+            prefs = profile['work_preferences']
+            if prefs.get('arrangement'):
+                text_parts.append(f"Work arrangement preferences: {', '.join(prefs['arrangement'])}")
+                fields_included.append('work_preferences.arrangement')
+            if prefs.get('benefits'):
+                text_parts.append(f"Benefits preferences: {', '.join(prefs['benefits'])}")
+                fields_included.append('work_preferences.benefits')
+            if prefs.get('company_size'):
+                text_parts.append(f"Company size preferences: {', '.join(prefs['company_size'])}")
+                fields_included.append('work_preferences.company_size')
         
         # Add industry preferences
-        industries = profile_json.get('industry_preferences', [])
-        if industries:
-            text_parts.append(f"Industry Preferences: {', '.join(industries)}")
+        if profile.get('preferred_industries'):
+            text_parts.append(f"Preferred industries: {', '.join(profile['preferred_industries'])}")
+            fields_included.append('preferred_industries')
         
+        # Add project preferences
+        if profile.get('preferred_project_types'):
+            text_parts.append(f"Preferred project types: {', '.join(profile['preferred_project_types'])}")
+            fields_included.append('preferred_project_types')
+        
+        # Update embedding metadata
+        profile['embedding_metadata'].update({
+            'last_updated': datetime.utcnow().isoformat(),
+            'fields_included': fields_included
+        })
+        
+        # Add source information if available
+        if profile.get('call_status'):
+            profile['embedding_metadata']['sources'].append({
+                'type': 'call',
+                'timestamp': datetime.utcnow().isoformat(),
+                'completeness': profile['call_status'].get('is_complete', False)
+            })
+        
+        # Combine all text parts
         return " | ".join(text_parts)
 
     async def extract_dynamic_variables(self, candidate_data: Dict[str, Any]) -> Dict[str, Any]:
@@ -389,14 +480,27 @@ class CandidateService:
         """
         Deep merge two dictionaries. If keys exist in both, dict2 values take precedence.
         For nested dictionaries, they are recursively merged.
+        Empty values in dict2 will not overwrite existing values in dict1.
         """
         result = dict1.copy()
         for key, value in dict2.items():
+            # Skip empty values
+            if value is None or (isinstance(value, (list, dict)) and not value):
+                continue
+                
             if key in result and isinstance(result[key], dict) and isinstance(value, dict):
                 result[key] = self._deep_merge(result[key], value)
             else:
-                result[key] = value
-        return result 
+                # Only update if the new value is not empty
+                if isinstance(value, str) and value.strip():
+                    result[key] = value
+                elif isinstance(value, (list, dict)) and value:
+                    result[key] = value
+                elif isinstance(value, (int, float)) and value != 0:
+                    result[key] = value
+                elif isinstance(value, bool):
+                    result[key] = value
+        return result
 
     async def manually_process_call(self, call_data: Dict[str, Any]) -> None:
         """
@@ -409,4 +513,51 @@ class CandidateService:
             logger.info(f"✅ Successfully processed call data manually")
         except Exception as e:
             logger.error(f"Error manually processing call: {str(e)}")
-            raise 
+            raise
+
+    async def process_call_analyzed(self, candidate_id: str, call_id: str, transcript: str) -> Dict[str, Any]:
+        """
+        Process a call that has been analyzed and update the candidate's profile.
+        Handles partial information and incomplete calls gracefully.
+        """
+        try:
+            # Get the candidate
+            candidate = await self.get_candidate(candidate_id)
+            if not candidate:
+                raise HTTPException(status_code=404, detail="Candidate not found")
+
+            # Extract information from transcript
+            transcript_info = await self.openai.extract_transcript_info(transcript)
+            
+            # Update the candidate's profile with any available information
+            if transcript_info:
+                # Initialize profile_json if it doesn't exist
+                if not candidate.profile_json:
+                    candidate.profile_json = {}
+                
+                # Update only the fields that have values
+                for key, value in transcript_info.items():
+                    if value and key != 'call_status':  # Skip empty values and call_status
+                        if isinstance(value, list) and value:  # For list fields, only update if not empty
+                            candidate.profile_json[key] = value
+                        elif isinstance(value, dict) and any(value.values()):  # For dict fields, only update if any values
+                            candidate.profile_json[key] = value
+                        elif isinstance(value, str) and value.strip():  # For string fields, only update if not empty
+                            candidate.profile_json[key] = value
+
+                # Update call status
+                if 'call_status' in transcript_info:
+                    candidate.profile_json['call_status'] = transcript_info['call_status']
+                
+                # Update the candidate
+                await self.update_candidate(candidate_id, candidate)
+                
+                logger.info(f"Successfully updated candidate {candidate_id} with transcript information")
+                return {"status": "success", "message": "Candidate profile updated with transcript information"}
+            else:
+                logger.warning(f"No information could be extracted from transcript for candidate {candidate_id}")
+                return {"status": "warning", "message": "No information could be extracted from transcript"}
+                
+        except Exception as e:
+            logger.error(f"Error processing call analyzed for candidate {candidate_id}: {str(e)}")
+            raise HTTPException(status_code=500, detail=str(e)) 

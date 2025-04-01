@@ -355,135 +355,112 @@ class OpenAIService:
 
     async def extract_transcript_info(self, transcript: str) -> Dict[str, Any]:
         """
-        Extract structured information from a call transcript using OpenAI.
+        Extract structured information from call transcript using OpenAI.
+        Returns a dictionary with the extracted information.
+        Handles partial conversations and captures any available information.
         """
         try:
-            # Create a system message that defines the structure we want
-            system_message = """You are an expert at analyzing job candidate interviews and extracting structured information.
-            Extract the following information from the transcript and return it in a structured JSON format.
-            If information is not found, use empty values (empty strings, empty lists, 0, or false) as appropriate.
+            system_message = """You are an expert at extracting structured information from call transcripts.
+            Extract ANY information that is available, even from partial conversations.
+            Focus on capturing:
+            1. Any explicitly stated preferences (work arrangements, benefits, company size, etc.)
+            2. Any mentioned experience or skills
+            3. Any stated career goals or preferences
+            4. Any mentioned education or qualifications
+            5. Any industry preferences or restrictions
+            6. Any technical preferences or restrictions
             
-            Required fields in the JSON response:
-            - previous_companies: List of companies the candidate has worked at
-            - tech_stack: List of technologies and skills mentioned
-            - years_of_experience: Number of years of experience (as a number)
-            - industries: List of industries mentioned
-            - undesired_industries: List of industries the candidate wants to avoid
-            - company_size_at_join: Size of company when candidate joined (as a number)
-            - current_company_size: Current size of company (as a number)
-            - company_stage: Current stage of company (e.g., startup, enterprise)
-            - experience_with_significant_company_growth: Boolean indicating if they've experienced company growth
-            - early_stage_startup_experience: Boolean indicating if they've worked at early stage startups
-            - leadership_experience: Boolean indicating if they have leadership experience
-            - preferred_work_arrangement: List of preferred work arrangements (e.g., remote, hybrid)
-            - preferred_locations: List of preferred locations
-            - visa_sponsorship_needed: Boolean indicating if they need visa sponsorship
-            - salary_expectations: Object with min and max values
-            - desired_company_stage: List of preferred company stages
-            - preferred_industries: List of preferred industries
-            - preferred_product_types: List of preferred product types
-            - motivation_for_job_change: List of reasons for job change
-            - work_life_balance_preferences: String describing work-life balance preferences
-            - desired_company_culture: String describing desired company culture
-            - traits_to_avoid_detected: List of traits to avoid
-            - additional_notes: String with any additional notes
-            - candidate_tags: List of relevant tags
-            - next_steps: String describing next steps
-            - role_preferences: List of preferred roles
-            - technologies_to_avoid: List of technologies to avoid
-            - company_culture_preferences: List of company culture preferences
-            - work_environment_preferences: List of work environment preferences
-            - career_goals: List of career goals
-            - skills_to_develop: List of skills to develop
-            - preferred_project_types: List of preferred project types
-            - company_mission_alignment: List of mission alignment preferences
-            - preferred_company_size: List of preferred company sizes
-            - funding_stage_preferences: List of preferred funding stages
-            - total_compensation_expectations: Object with base_salary_min, base_salary_max, equity, and bonus
-            - benefits_preferences: List of preferred benefits
-            - deal_breakers: List of deal breakers
-            - bad_experiences_to_avoid: List of bad experiences to avoid
-            - willing_to_relocate: Boolean indicating if they're willing to relocate
-            - preferred_interview_process: List of preferred interview process elements
-            - company_reputation_importance: String describing importance of company reputation
-            - preferred_management_style: List of preferred management styles
-            - industries_to_explore: List of industries they're interested in exploring
-            - project_visibility_preference: List of project visibility preferences"""
-
-            # Create the user message with the transcript
-            user_message = f"Please analyze this interview transcript and extract the required information. Return the information in a JSON object format:\n\n{transcript}"
-
-            # Get completion from OpenAI
+            Do NOT include any personal information like name, email, phone, or location.
+            Keep the information professional and focused on qualifications and preferences.
+            
+            If a field is not mentioned in the conversation, return an empty value for that field.
+            Do not make assumptions about missing information."""
+            
+            user_message = f"""Please extract any available information from this call transcript:
+            {transcript}
+            
+            Return the information in this exact JSON structure, with empty values for any fields not mentioned:
+            {{
+                "professional_summary": "string or empty string",
+                "current_role": "string or empty string",
+                "current_company": "string or empty string",
+                "years_of_experience": "string or empty string",
+                "tech_stack": ["string"],
+                "skills": ["string"],
+                "experience": [
+                    {{
+                        "title": "string",
+                        "company": "string",
+                        "duration": "string",
+                        "description": "string"
+                    }}
+                ],
+                "education": [
+                    {{
+                        "degree": "string",
+                        "institution": "string",
+                        "year": "string"
+                    }}
+                ],
+                "career_goals": ["string"],
+                "work_preferences": {{
+                    "arrangement": ["string"],
+                    "benefits": ["string"],
+                    "company_size": ["string"],
+                    "interview_preference": "string"
+                }},
+                "preferred_industries": ["string"],
+                "preferred_project_types": ["string"],
+                "project_visibility_preference": ["string"],
+                "desired_company_stage": ["string"],
+                "preferred_company_size": ["string"],
+                "technologies_to_avoid": ["string"],
+                "call_status": {{
+                    "is_complete": false,
+                    "reason": "string",
+                    "follow_up_needed": true
+                }}
+            }}"""
+            
             response = self.client.chat.completions.create(
-                model=self.model,
+                model="gpt-4-turbo-preview",
                 messages=[
                     {"role": "system", "content": system_message},
                     {"role": "user", "content": user_message}
                 ],
-                response_format={"type": "json_object"},
-                temperature=0.3
+                response_format={"type": "json_object"}
             )
-
-            # Parse the response
-            extracted_info = json.loads(response.choices[0].message.content)
             
-            # Log the extracted information
-            logger.info(f"📝 Extracted transcript information: {json.dumps(extracted_info, indent=2)}")
-            
-            return extracted_info
-
+            if response.choices and response.choices[0].message.content:
+                extracted_info = json.loads(response.choices[0].message.content)
+                
+                # Analyze if the call was complete
+                transcript_lines = transcript.split('\n')
+                if len(transcript_lines) < 20:  # Arbitrary threshold for very short conversations
+                    extracted_info['call_status'] = {
+                        'is_complete': False,
+                        'reason': 'Conversation too short',
+                        'follow_up_needed': True
+                    }
+                elif not any('experience' in line.lower() or 'background' in line.lower() for line in transcript_lines):
+                    extracted_info['call_status'] = {
+                        'is_complete': False,
+                        'reason': 'No background/experience discussed',
+                        'follow_up_needed': True
+                    }
+                else:
+                    extracted_info['call_status'] = {
+                        'is_complete': True,
+                        'reason': 'Sufficient information gathered',
+                        'follow_up_needed': False
+                    }
+                
+                logger.info(f"Successfully extracted transcript info: {json.dumps(extracted_info, indent=2)}")
+                return extracted_info
+            else:
+                logger.error("No content in OpenAI response")
+                return {}
+                
         except Exception as e:
-            logger.error(f"Error extracting transcript information: {str(e)}")
-            # Return empty structure if extraction fails
-            return {
-                "previous_companies": [],
-                "tech_stack": [],
-                "years_of_experience": 0,
-                "industries": [],
-                "undesired_industries": [],
-                "company_size_at_join": 0,
-                "current_company_size": 0,
-                "company_stage": "",
-                "experience_with_significant_company_growth": False,
-                "early_stage_startup_experience": False,
-                "leadership_experience": False,
-                "preferred_work_arrangement": [],
-                "preferred_locations": [],
-                "visa_sponsorship_needed": False,
-                "salary_expectations": {"min": 0, "max": 0},
-                "desired_company_stage": [],
-                "preferred_industries": [],
-                "preferred_product_types": [],
-                "motivation_for_job_change": [],
-                "work_life_balance_preferences": "",
-                "desired_company_culture": "",
-                "traits_to_avoid_detected": [],
-                "additional_notes": "",
-                "candidate_tags": [],
-                "next_steps": "",
-                "role_preferences": [],
-                "technologies_to_avoid": [],
-                "company_culture_preferences": [],
-                "work_environment_preferences": [],
-                "career_goals": [],
-                "skills_to_develop": [],
-                "preferred_project_types": [],
-                "company_mission_alignment": [],
-                "preferred_company_size": [],
-                "funding_stage_preferences": [],
-                "total_compensation_expectations": {
-                    "base_salary_min": 0,
-                    "base_salary_max": 0,
-                    "equity": "",
-                    "bonus": ""
-                },
-                "benefits_preferences": [],
-                "deal_breakers": [],
-                "bad_experiences_to_avoid": [],
-                "willing_to_relocate": False,
-                "preferred_interview_process": [],
-                "company_reputation_importance": "",
-                "preferred_management_style": [],
-                "industries_to_explore": [],
-                "project_visibility_preference": []
-            } 
+            logger.error(f"Error extracting transcript info: {str(e)}")
+            return {} 
