@@ -98,7 +98,7 @@ class RetellService:
             
             async with httpx.AsyncClient() as client:
                 response = await client.get(
-                    f"{self.api_base}/v2/call/{call_id}",
+                    f"{self.api_base}/v2/get-call/{call_id}",
                     headers={
                         "Authorization": f"Bearer {self.api_key}",
                         "Content-Type": "application/json"
@@ -145,4 +145,33 @@ class RetellService:
             
         except Exception as e:
             logger.error(f"Error canceling call: {str(e)}")
-            raise Exception(f"Error canceling call with Retell: {str(e)}") 
+            raise Exception(f"Error canceling call with Retell: {str(e)}")
+
+    async def get_call(self, call_id: str) -> Dict[str, Any]:
+        """
+        Get call data from Retell API.
+        """
+        try:
+            logger.info(f"Getting call data for: {call_id}")
+            
+            async with httpx.AsyncClient() as client:
+                response = await client.get(
+                    f"{self.api_base}/get-call/{call_id}",
+                    headers={
+                        "Authorization": f"Bearer {self.api_key}",
+                        "Content-Type": "application/json"
+                    }
+                )
+                
+                if response.status_code != 200:
+                    error_msg = f"Retell API error: {response.status_code} - {response.text}"
+                    logger.error(error_msg)
+                    raise Exception(error_msg)
+                
+                call_data = response.json()
+                logger.info(f"Successfully got call data: {call_data}")
+                return call_data
+            
+        except Exception as e:
+            logger.error(f"Error getting call data: {str(e)}")
+            raise Exception(f"Error getting call data from Retell: {str(e)}") 

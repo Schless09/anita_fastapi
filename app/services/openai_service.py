@@ -104,28 +104,53 @@ class OpenAIService:
             text_parts.append(f"Years of experience: {data['years_of_experience']}")
 
         # Add tech stack
-        if data.get('tech_stack'):
-            text_parts.append(f"Tech stack: {', '.join(data['tech_stack'])}")
+        if tech_stack := data.get('tech_stack', []):
+            text_parts.append(f"Tech stack: {', '.join(tech_stack)}")
 
         # Add previous experience
-        if data.get('previous_companies'):
-            text_parts.append(f"Previous companies: {', '.join(data['previous_companies'])}")
+        if prev_companies := data.get('previous_companies', []):
+            text_parts.append(f"Previous companies: {', '.join(prev_companies)}")
 
-        # Add education
-        if data.get('education'):
-            text_parts.append(f"Education: {', '.join(data['education'])}")
-
-        # Add preferences
-        if data.get('work_preferences'):
-            prefs = data['work_preferences']
-            if prefs.get('arrangement'):
-                text_parts.append(f"Work arrangement preferences: {', '.join(prefs['arrangement'])}")
-            if prefs.get('location'):
-                text_parts.append(f"Location preferences: {', '.join(prefs['location'])}")
+        # Add education - handle both string list and dict list formats
+        if education := data.get('education', []):
+            if education and isinstance(education[0], dict):
+                # Handle dictionary format
+                edu_texts = []
+                for edu in education:
+                    parts = []
+                    if degree := edu.get('degree'):
+                        parts.append(degree)
+                    if institution := edu.get('institution'):
+                        parts.append(f"at {institution}")
+                    if year := edu.get('year'):
+                        parts.append(f"({year})")
+                    edu_texts.append(" ".join(parts))
+                text_parts.append(f"Education: {', '.join(edu_texts)}")
+            else:
+                # Handle string list format
+                text_parts.append(f"Education: {', '.join(str(e) for e in education)}")
 
         # Add career goals
-        if data.get('career_goals'):
-            text_parts.append(f"Career goals: {data['career_goals']}")
+        if career_goals := data.get('career_goals', []):
+            if isinstance(career_goals, list):
+                text_parts.append(f"Career Goals: {', '.join(career_goals)}")
+            else:
+                text_parts.append(f"Career Goals: {career_goals}")
+
+        # Add work preferences
+        if work_prefs := data.get('work_preferences', {}):
+            if isinstance(work_prefs, dict):
+                prefs = []
+                if arrangement := work_prefs.get('arrangement', []):
+                    prefs.append(f"Work arrangement: {', '.join(arrangement)}")
+                if location := work_prefs.get('location', []):
+                    prefs.append(f"Location: {', '.join(location)}")
+                if prefs:
+                    text_parts.append(f"Work Preferences: {'; '.join(prefs)}")
+
+        # Add industry preferences
+        if industries := data.get('preferred_industries', []):
+            text_parts.append(f"Industry Preferences: {', '.join(industries)}")
 
         return " | ".join(text_parts)
 
@@ -328,65 +353,137 @@ class OpenAIService:
                 "current_company": "current company"
             }
 
-    async def extract_transcript_information(self, transcript: str) -> Dict[str, Any]:
+    async def extract_transcript_info(self, transcript: str) -> Dict[str, Any]:
         """
-        Extract structured information from the call transcript.
-        This is called after the Retell call is completed.
+        Extract structured information from a call transcript using OpenAI.
         """
         try:
-            prompt = f"""
-            Extract the following information from this interview transcript:
-            - years_of_experience: Total years of professional experience (number)
-            - tech_stack: Array of technologies and skills mentioned
-            - previous_companies: Array of previous companies discussed
-            - education: Array of education details mentioned
-            - career_goals: Brief description of career objectives or goals
-            - salary_expectations: Object with min and max values in USD
-            - work_preferences: Object with remote_preference (string), preferred_location (string), and willing_to_relocate (boolean)
-            - industry_preferences: Array of preferred industries
-
-            Return as a JSON object.
-            If information is not found in the transcript, use empty values or zeros.
-
-            Transcript:
-            {transcript}
-            """
+            # Create a system message that defines the structure we want
+            system_message = """You are an expert at analyzing job candidate interviews and extracting structured information.
+            Extract the following information from the transcript and return it in a structured JSON format.
+            If information is not found, use empty values (empty strings, empty lists, 0, or false) as appropriate.
             
+            Required fields in the JSON response:
+            - previous_companies: List of companies the candidate has worked at
+            - tech_stack: List of technologies and skills mentioned
+            - years_of_experience: Number of years of experience (as a number)
+            - industries: List of industries mentioned
+            - undesired_industries: List of industries the candidate wants to avoid
+            - company_size_at_join: Size of company when candidate joined (as a number)
+            - current_company_size: Current size of company (as a number)
+            - company_stage: Current stage of company (e.g., startup, enterprise)
+            - experience_with_significant_company_growth: Boolean indicating if they've experienced company growth
+            - early_stage_startup_experience: Boolean indicating if they've worked at early stage startups
+            - leadership_experience: Boolean indicating if they have leadership experience
+            - preferred_work_arrangement: List of preferred work arrangements (e.g., remote, hybrid)
+            - preferred_locations: List of preferred locations
+            - visa_sponsorship_needed: Boolean indicating if they need visa sponsorship
+            - salary_expectations: Object with min and max values
+            - desired_company_stage: List of preferred company stages
+            - preferred_industries: List of preferred industries
+            - preferred_product_types: List of preferred product types
+            - motivation_for_job_change: List of reasons for job change
+            - work_life_balance_preferences: String describing work-life balance preferences
+            - desired_company_culture: String describing desired company culture
+            - traits_to_avoid_detected: List of traits to avoid
+            - additional_notes: String with any additional notes
+            - candidate_tags: List of relevant tags
+            - next_steps: String describing next steps
+            - role_preferences: List of preferred roles
+            - technologies_to_avoid: List of technologies to avoid
+            - company_culture_preferences: List of company culture preferences
+            - work_environment_preferences: List of work environment preferences
+            - career_goals: List of career goals
+            - skills_to_develop: List of skills to develop
+            - preferred_project_types: List of preferred project types
+            - company_mission_alignment: List of mission alignment preferences
+            - preferred_company_size: List of preferred company sizes
+            - funding_stage_preferences: List of preferred funding stages
+            - total_compensation_expectations: Object with base_salary_min, base_salary_max, equity, and bonus
+            - benefits_preferences: List of preferred benefits
+            - deal_breakers: List of deal breakers
+            - bad_experiences_to_avoid: List of bad experiences to avoid
+            - willing_to_relocate: Boolean indicating if they're willing to relocate
+            - preferred_interview_process: List of preferred interview process elements
+            - company_reputation_importance: String describing importance of company reputation
+            - preferred_management_style: List of preferred management styles
+            - industries_to_explore: List of industries they're interested in exploring
+            - project_visibility_preference: List of project visibility preferences"""
+
+            # Create the user message with the transcript
+            user_message = f"Please analyze this interview transcript and extract the required information. Return the information in a JSON object format:\n\n{transcript}"
+
+            # Get completion from OpenAI
             response = self.client.chat.completions.create(
-                model="gpt-4-turbo-preview",
-                messages=[{
-                    "role": "system",
-                    "content": "You are an interview transcript analyzer. Extract structured information accurately."
-                }, {
-                    "role": "user",
-                    "content": prompt
-                }],
-                response_format={ "type": "json_object" }
+                model=self.model,
+                messages=[
+                    {"role": "system", "content": system_message},
+                    {"role": "user", "content": user_message}
+                ],
+                response_format={"type": "json_object"},
+                temperature=0.3
             )
-            
+
+            # Parse the response
             extracted_info = json.loads(response.choices[0].message.content)
             
-            # Clean and validate the extracted information
-            cleaned_info = {
-                "years_of_experience": self._parse_years_of_experience(extracted_info.get("years_of_experience", 0)),
-                "tech_stack": list(extracted_info.get("tech_stack", [])),
-                "previous_companies": list(extracted_info.get("previous_companies", [])),
-                "education": list(extracted_info.get("education", [])),
-                "career_goals": str(extracted_info.get("career_goals", "")),
-                "salary_expectations": {
-                    "min": int(extracted_info.get("salary_expectations", {}).get("min", 0) or 0),
-                    "max": int(extracted_info.get("salary_expectations", {}).get("max", 0) or 0)
-                },
-                "work_preferences": {
-                    "remote_preference": str(extracted_info.get("work_preferences", {}).get("remote_preference", "")),
-                    "preferred_location": str(extracted_info.get("work_preferences", {}).get("preferred_location", "")),
-                    "willing_to_relocate": bool(extracted_info.get("work_preferences", {}).get("willing_to_relocate", False))
-                },
-                "industry_preferences": list(extracted_info.get("industry_preferences", []))
-            }
+            # Log the extracted information
+            logger.info(f"📝 Extracted transcript information: {json.dumps(extracted_info, indent=2)}")
             
-            return cleaned_info
-            
+            return extracted_info
+
         except Exception as e:
             logger.error(f"Error extracting transcript information: {str(e)}")
-            raise 
+            # Return empty structure if extraction fails
+            return {
+                "previous_companies": [],
+                "tech_stack": [],
+                "years_of_experience": 0,
+                "industries": [],
+                "undesired_industries": [],
+                "company_size_at_join": 0,
+                "current_company_size": 0,
+                "company_stage": "",
+                "experience_with_significant_company_growth": False,
+                "early_stage_startup_experience": False,
+                "leadership_experience": False,
+                "preferred_work_arrangement": [],
+                "preferred_locations": [],
+                "visa_sponsorship_needed": False,
+                "salary_expectations": {"min": 0, "max": 0},
+                "desired_company_stage": [],
+                "preferred_industries": [],
+                "preferred_product_types": [],
+                "motivation_for_job_change": [],
+                "work_life_balance_preferences": "",
+                "desired_company_culture": "",
+                "traits_to_avoid_detected": [],
+                "additional_notes": "",
+                "candidate_tags": [],
+                "next_steps": "",
+                "role_preferences": [],
+                "technologies_to_avoid": [],
+                "company_culture_preferences": [],
+                "work_environment_preferences": [],
+                "career_goals": [],
+                "skills_to_develop": [],
+                "preferred_project_types": [],
+                "company_mission_alignment": [],
+                "preferred_company_size": [],
+                "funding_stage_preferences": [],
+                "total_compensation_expectations": {
+                    "base_salary_min": 0,
+                    "base_salary_max": 0,
+                    "equity": "",
+                    "bonus": ""
+                },
+                "benefits_preferences": [],
+                "deal_breakers": [],
+                "bad_experiences_to_avoid": [],
+                "willing_to_relocate": False,
+                "preferred_interview_process": [],
+                "company_reputation_importance": "",
+                "preferred_management_style": [],
+                "industries_to_explore": [],
+                "project_visibility_preference": []
+            } 

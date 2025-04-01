@@ -63,77 +63,44 @@ def extract_call_data(body: Dict[str, Any]) -> Dict[str, Any]:
 async def handler(request: Request, background_tasks: BackgroundTasks):
     """Handle Retell webhook events."""
     try:
-        # Get raw body and parse JSON
-        body = await request.body()
-        post_data = json.loads(body)
+        # Get the raw payload
+        payload = await request.json()
+        logger.info(f"📥 Received Retell webhook: {json.dumps(payload, indent=2)}")
         
-        # Get signature from header
-        signature = request.headers.get("x-retell-signature")
-        if not signature:
-            logger.error("❌ Missing Retell signature")
-            return JSONResponse(
-                status_code=401,
-                content={"error": "Missing signature"}
-            )
-        
-        # Verify signature using Retell SDK
-        valid_signature = retell.verify(
-            json.dumps(post_data, separators=(",", ":"), ensure_ascii=False),
-            api_key=str(settings.retell_api_key),
-            signature=str(signature)
-        )
-        
-        if not valid_signature:
-            logger.error("❌ Invalid Retell signature")
-            return JSONResponse(
-                status_code=401,
-                content={"error": "Invalid signature"}
-            )
-        
-        # Extract essential call data
-        call_data = extract_call_data(post_data)
-        call_id = call_data.get('call_id')
+        # Extract call data
+        call_data = extract_call_data(payload)
+        if not call_data:
+            logger.error("❌ Failed to extract call data from webhook payload")
+            return {"status": "error", "message": "Invalid webhook payload"}
+            
+        # Get candidate_id from metadata
         candidate_id = call_data.get('metadata', {}).get('candidate_id')
+        if not candidate_id:
+            logger.error("❌ No candidate_id found in call metadata")
+            return {"status": "error", "message": "No candidate_id in metadata"}
+            
+        # Process based on event type and call status
+        event_type = call_data.get('event')
         call_status = call_data.get('call_status')
         
-        # Log only essential information
-        logger.info(f"📞 Call {call_id} - Status: {call_status}")
+        logger.info(f"📞 Processing webhook for candidate {candidate_id}")
+        logger.info(f"Event type: {event_type}, Call status: {call_status}")
         
-        # Skip processing if call is not completed
-        if call_status not in ['ended', 'completed']:
-            logger.info("⏳ Call not completed yet, skipping processing")
-            return JSONResponse(
-                status_code=200,
-                content={"message": "Call not completed"}
-            )
+        # Initialize services
+        candidate_service = CandidateService()
         
         # Process call completion
-        try:
-            await candidate_service.process_call_completion(call_data)
-            
-            # Check if profile is complete and trigger matching
-            response = await candidate_service.supabase.table('candidates_dev').select('profile_json').eq('id', candidate_id).single().execute()
-            profile = response.data.get('profile_json', {})
-            
-            if profile.get('processing_status', {}).get('resume_processed') and profile.get('processing_status', {}).get('call_completed'):
-                logger.info("🎯 Profile complete, triggering matching")
-                background_tasks.add_task(brain_agent.trigger_matching, candidate_id)
-            
-            return JSONResponse(
-                status_code=200,
-                content={"message": "Call processed successfully"}
+        if call_status == "ended":
+            logger.info(f"🎯 Processing completed call for candidate {candidate_id}")
+            # Process in background
+            background_tasks.add_task(
+                candidate_service.process_call_completion,
+                call_data
             )
+            return {"status": "success", "message": "Call completion processing started"}
             
-        except Exception as e:
-            logger.error(f"❌ Error processing call: {str(e)}")
-            return JSONResponse(
-                status_code=500,
-                content={"error": str(e)}
-            )
-            
+        return {"status": "success", "message": "Webhook processed"}
+        
     except Exception as e:
-        logger.error(f"❌ Webhook error: {str(e)}")
-        return JSONResponse(
-            status_code=500,
-            content={"error": str(e)}
-        ) 
+        logger.error(f"❌ Error processing webhook: {str(e)}")
+        return {"status": "error", "message": str(e)} 

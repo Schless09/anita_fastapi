@@ -12,6 +12,7 @@ import logging
 import tempfile
 import os
 import PyPDF2
+import json
 
 settings = get_settings()
 supabase = get_supabase_client()
@@ -70,18 +71,14 @@ class CandidateService:
                 'created_at': datetime.utcnow().isoformat(),
                 'updated_at': datetime.utcnow().isoformat(),
                 'profile_json': {
-                    'first_name': candidate_data.get('first_name', ''),
-                    'last_name': candidate_data.get('last_name', ''),
-                    'email': candidate_data.get('email', ''),
-                    'phone': candidate_data.get('phone', ''),
-                    'linkedin_url': linkedin_url,
                     'current_role': current_role,
                     'current_company': current_company,
-                    'processing_status': {
-                        'resume_processed': False,
-                        'call_completed': False,
-                        'last_updated': datetime.utcnow().isoformat()
-                    }
+                    'skills': [],
+                    'education': [],
+                    'experience': [],
+                    'professional_summary': '',
+                    'additional_qualifications': [],
+                    'resume_text': text # Store the processed resume text
                 }
             }
             
@@ -124,85 +121,122 @@ class CandidateService:
 
     async def process_call_completion(self, call_data: Dict[str, Any]) -> None:
         """
-        Process call completion webhook from Retell.
-        Updates candidate profile with call transcript information.
-        Once both resume and call data are processed, generates and stores embedding.
+        Process completed call data and update candidate profile.
+        Extracts information from raw transcript using OpenAI.
         """
         try:
-            call_id = call_data.get('call_id')
+            # Extract essential data
             candidate_id = call_data.get('metadata', {}).get('candidate_id')
-            transcript = call_data.get('transcript')
+            transcript = call_data.get('transcript', '')
 
             if not candidate_id:
-                raise ValueError("No candidate_id found in webhook data")
+                logger.error("❌ No candidate_id found in call metadata")
+                return
 
-            # Get current candidate data
-            response = await self.supabase.table('candidates_dev').select('*').eq('id', candidate_id).single().execute()
-            candidate = response.data
-            if not candidate:
-                raise ValueError(f"Candidate {candidate_id} not found")
-
-            profile_json = candidate.get('profile_json', {})
-            
-            # Check if we've already processed this call
-            call_data = profile_json.get('call_data', {})
-            if call_data.get('call_id') == call_id and call_data.get('completed_at'):
-                logger.info(f"Call {call_id} already processed for candidate {candidate_id}")
+            if not transcript:
+                logger.error("❌ No transcript found in call data")
                 return
             
-            # Process transcript if available
-            if transcript:
-                # Extract information from transcript
-                transcript_info = await self.openai.extract_transcript_information(transcript)
+            # Get current profile
+            response = await self.supabase.table('candidates_dev').select('profile_json').eq('id', candidate_id).single().execute()
+            if not response.data:
+                logger.error(f"❌ No profile found for candidate {candidate_id}")
+                return
                 
-                # Update profile with transcript information
-                profile_json.update(transcript_info)
+            current_profile = response.data.get('profile_json', {})
+            
+            # Extract information from transcript using OpenAI
+            transcript_info = await self.openai.extract_transcript_info(transcript)
+            
+            # Combine all extracted information
+            extracted_info = {
+                # Resume information (preserve existing)
+                "current_role": current_profile.get('current_role', ''),
+                "current_company": current_profile.get('current_company', ''),
+                "resume_text": current_profile.get('resume_text', ''),
                 
-                # Store raw transcript
-                profile_json['call_data'] = {
-                    'call_id': call_id,
-                    'raw_transcript': transcript,
-                    'completed_at': datetime.utcnow().isoformat()
-                }
+                # Transcript information
+                "previous_companies": transcript_info.get('previous_companies', []),
+                "tech_stack": list(set(current_profile.get('tech_stack', []) + transcript_info.get('tech_stack', []))),
+                "years_of_experience": transcript_info.get('years_of_experience', 0),
+                "industries": transcript_info.get('industries', []),
+                "undesired_industries": transcript_info.get('undesired_industries', []),
+                "company_size_at_join": transcript_info.get('company_size_at_join', 0),
+                "current_company_size": transcript_info.get('current_company_size', 0),
+                "company_stage": transcript_info.get('company_stage', ''),
+                "experience_with_significant_company_growth": transcript_info.get('experience_with_significant_company_growth', False),
+                "early_stage_startup_experience": transcript_info.get('early_stage_startup_experience', False),
+                "leadership_experience": transcript_info.get('leadership_experience', False),
+                "preferred_work_arrangement": transcript_info.get('preferred_work_arrangement', []),
+                "preferred_locations": transcript_info.get('preferred_locations', []),
+                "visa_sponsorship_needed": transcript_info.get('visa_sponsorship_needed', False),
+                "salary_expectations": transcript_info.get('salary_expectations', {'min': 0, 'max': 0}),
+                "desired_company_stage": transcript_info.get('desired_company_stage', []),
+                "preferred_industries": transcript_info.get('preferred_industries', []),
+                "preferred_product_types": transcript_info.get('preferred_product_types', []),
+                "motivation_for_job_change": transcript_info.get('motivation_for_job_change', []),
+                "work_life_balance_preferences": transcript_info.get('work_life_balance_preferences', ''),
+                "desired_company_culture": transcript_info.get('desired_company_culture', ''),
+                "traits_to_avoid_detected": transcript_info.get('traits_to_avoid_detected', []),
+                "additional_notes": transcript_info.get('additional_notes', ''),
+                "candidate_tags": transcript_info.get('candidate_tags', []),
+                "next_steps": transcript_info.get('next_steps', ''),
+                "role_preferences": transcript_info.get('role_preferences', []),
+                "technologies_to_avoid": transcript_info.get('technologies_to_avoid', []),
+                "company_culture_preferences": transcript_info.get('company_culture_preferences', []),
+                "work_environment_preferences": transcript_info.get('work_environment_preferences', []),
+                "career_goals": transcript_info.get('career_goals', []),
+                "skills_to_develop": transcript_info.get('skills_to_develop', []),
+                "preferred_project_types": transcript_info.get('preferred_project_types', []),
+                "company_mission_alignment": transcript_info.get('company_mission_alignment', []),
+                "preferred_company_size": transcript_info.get('preferred_company_size', []),
+                "funding_stage_preferences": transcript_info.get('funding_stage_preferences', []),
+                "total_compensation_expectations": transcript_info.get('total_compensation_expectations', {
+                    'base_salary_min': 0,
+                    'base_salary_max': 0,
+                    'equity': '',
+                    'bonus': ''
+                }),
+                "benefits_preferences": transcript_info.get('benefits_preferences', []),
+                "deal_breakers": transcript_info.get('deal_breakers', []),
+                "bad_experiences_to_avoid": transcript_info.get('bad_experiences_to_avoid', []),
+                "willing_to_relocate": transcript_info.get('willing_to_relocate', False),
+                "preferred_interview_process": transcript_info.get('preferred_interview_process', []),
+                "company_reputation_importance": transcript_info.get('company_reputation_importance', ''),
+                "preferred_management_style": transcript_info.get('preferred_management_style', []),
+                "industries_to_explore": transcript_info.get('industries_to_explore', []),
+                "project_visibility_preference": transcript_info.get('project_visibility_preference', []),
                 
                 # Update processing status
-                profile_json['processing_status'] = {
-                    'resume_processed': profile_json.get('processing_status', {}).get('resume_processed', False),
+                "processing_status": {
+                    'resume_processed': current_profile.get('processing_status', {}).get('resume_processed', False),
                     'call_completed': True,
                     'last_updated': datetime.utcnow().isoformat()
                 }
-
-                # Only generate and store embedding if both resume and call are processed
-                if (profile_json.get('processing_status', {}).get('resume_processed') and 
-                    profile_json.get('processing_status', {}).get('call_completed')):
-                    try:
-                        # Generate embedding from complete profile
-                        text = self._prepare_text_for_embedding(profile_json)
-                        vector = await self.openai.generate_embedding(text)
-                        
-                        # Store in vector database
-                        await self.vector_service.upsert_candidate(
-                            candidate_id,
-                            profile_json
-                        )
-                        
-                        # Update profile with embedding status
-                        profile_json['processing_status']['embedding_complete'] = True
-                        logger.info(f"Successfully generated and stored embedding for candidate {candidate_id}")
-                    except Exception as e:
-                        logger.error(f"Error generating embedding: {str(e)}")
-                        profile_json['processing_status']['embedding_error'] = str(e)
-
-                # Update candidate profile in Supabase
-                await self.supabase.table('candidates_dev').update({
-                    'profile_json': profile_json,
-                    'updated_at': datetime.utcnow().isoformat()
-                }).eq('id', candidate_id).execute()
-
-                logger.info(f"Successfully processed call completion for candidate {candidate_id}")
+            }
+            
+            # Deep merge the new information with existing profile
+            updated_profile = self._deep_merge(current_profile, extracted_info)
+            
+            # Update in Supabase
+            update_data = {
+                'profile_json': updated_profile,
+                'updated_at': datetime.utcnow().isoformat()
+            }
+            
+            response = await self.supabase.table('candidates_dev').update(update_data).eq('id', candidate_id).execute()
+            
+            if not response.data:
+                logger.error(f"❌ Failed to update profile for candidate {candidate_id}")
+                raise Exception(f"Failed to update profile: No data returned from update")
+            
+            # Generate embeddings for matching
+            await self.vector_service.generate_and_store_candidate_embedding(candidate_id)
+            
+            logger.info(f"✅ Successfully processed call completion for candidate {candidate_id}")
 
         except Exception as e:
-            logger.error(f"Error processing call completion: {str(e)}")
+            logger.error(f"❌ Error processing call completion: {str(e)}")
             raise
 
     def _prepare_text_for_embedding(self, profile_json: Dict[str, Any]) -> str:
@@ -268,95 +302,41 @@ class CandidateService:
         Note: Embedding generation is deferred until after call completion
         """
         try:
-            logger.info(f"Starting background processing for candidate {candidate_id}")
-            
-            # 1. Get candidate data
-            response = await self.supabase.table('candidates_dev').select('*').eq('id', candidate_id).single().execute()
-            candidate = response.data
-            if not candidate:
-                raise Exception(f"Candidate {candidate_id} not found")
-
-            profile_json = candidate.get('profile_json', {})
-            resume_data = profile_json.get('resume', {})
-            
-            # 2. Process resume if available
-            if resume_data and resume_data.get('content'):
-                try:
-                    # Convert base64 back to bytes
-                    resume_content = base64.b64decode(resume_data['content'])
-                    
-                    # Extract text and information from resume
-                    extracted_info = await self.openai.extract_resume_information(resume_content)
-                    
-                    # Update profile with extracted information
-                    profile_json.update(extracted_info)
-                    
-                    # Update processing status
-                    profile_json['processing_status'] = {
-                        'resume_processed': True,
-                        'call_completed': False,
-                        'last_updated': datetime.utcnow().isoformat()
-                    }
-                    
-                    # Update candidate profile
-                    await self.supabase.table('candidates_dev').update({
-                        'profile_json': profile_json,
-                        'updated_at': datetime.utcnow().isoformat()
-                    }).eq('id', candidate_id).execute()
-                    
-                    logger.info(f"Successfully processed resume for candidate {candidate_id}")
-
-                except Exception as e:
-                    logger.error(f"Error processing resume: {str(e)}")
-                    # Update profile_json to indicate error
-                    profile_json['processing_status'] = {
-                        'resume_processed': False,
-                        'resume_error': str(e),
-                        'last_updated': datetime.utcnow().isoformat()
-                    }
-                    await self.supabase.table('candidates_dev').update({
-                        'profile_json': profile_json,
-                        'updated_at': datetime.utcnow().isoformat()
-                    }).eq('id', candidate_id).execute()
-                    raise
-            
-            logger.info(f"Completed background processing for candidate {candidate_id}")
-            
-        except Exception as e:
-            logger.error(f"Error in background processing for candidate {candidate_id}: {str(e)}")
-            raise
-
-    async def schedule_initial_contact(self, candidate_id: str) -> None:
-        """
-        Schedule initial contact with the candidate.
-        """
-        try:
             # Get candidate data
             response = await self.supabase.table('candidates_dev').select('*').eq('id', candidate_id).single().execute()
             candidate = response.data
             if not candidate:
-                raise Exception(f"Candidate {candidate_id} not found")
+                raise ValueError(f"Candidate {candidate_id} not found")
+
+            # Process resume
+            resume_content = candidate.get('resume_content')
+            if not resume_content:
+                raise ValueError(f"No resume content found for candidate {candidate_id}")
+
+            # Extract information from resume
+            resume_info = await self.openai.extract_resume_info(resume_content)
             
-            # Get phone number from candidate data
-            phone = candidate.get('phone')
-            if not phone:
-                raise ValueError(f"Candidate {candidate_id} has no phone number")
-            
-            # Schedule call with Retell
-            await self.retell.schedule_call(
-                candidate_id=candidate_id,
-                dynamic_variables={
-                    'candidate_name': candidate.get('full_name', ''),
-                    'current_role': candidate.get('profile_json', {}).get('current_role', ''),
-                    'years_of_experience': candidate.get('profile_json', {}).get('years_of_experience', 0),
-                    'phone': phone  # Add phone number to dynamic variables
+            # Update profile with resume information
+            profile_json = candidate.get('profile_json', {})
+            profile_json.update({
+                'resume_info': resume_info,
+                'processing_status': {
+                    'resume_processed': True,
+                    'call_completed': False,
+                    'last_updated': datetime.utcnow().isoformat()
                 }
-            )
+            })
             
-            logger.info(f"Successfully scheduled initial contact for candidate {candidate_id}")
+            # Update candidate in Supabase
+            await self.supabase.table('candidates_dev').update({
+                'profile_json': profile_json,
+                'updated_at': datetime.utcnow().isoformat()
+            }).eq('id', candidate_id).execute()
+            
+            logger.info(f"✅ Successfully processed resume for candidate {candidate_id}")
             
         except Exception as e:
-            logger.error(f"Error scheduling initial contact: {str(e)}")
+            logger.error(f"Error processing candidate background: {str(e)}")
             raise
 
     async def _extract_text_from_pdf(self, pdf_content: bytes) -> str:
@@ -384,61 +364,22 @@ class CandidateService:
             logger.error(f"Error extracting text from PDF: {str(e)}")
             return ""  # Return empty string if extraction fails
 
-    async def update_candidate_profile(self, candidate_id: str, update_data: Dict[str, Any]) -> Dict[str, Any]:
+    async def update_candidate_profile(
+        self,
+        candidate_id: str,
+        update_data: Dict[str, Any]
+    ) -> Dict[str, Any]:
         """
-        Update a candidate's profile in Supabase with new data.
-        
-        Args:
-            candidate_id: The unique ID of the candidate to update
-            update_data: Dictionary of fields to update
-            
-        Returns:
-            The updated candidate data
+        Update a candidate's profile in Supabase.
         """
         try:
-            logger.info(f"Updating candidate {candidate_id} in Supabase")
-            
-            # Check if candidate exists
-            check_response = await self.supabase.table('candidates_dev').select('*').eq('id', candidate_id).execute()
-            if not check_response.data:
-                logger.error(f"Candidate {candidate_id} not found in Supabase")
-                raise ValueError(f"Candidate {candidate_id} not found")
-            
-            # Add updated_at timestamp
-            if 'updated_at' not in update_data:
-                update_data['updated_at'] = datetime.utcnow().isoformat()
-            
-            # If updating profile_json, merge with existing rather than replacing
-            existing_candidate = check_response.data[0]
-            if 'profile_json' in update_data and existing_candidate.get('profile_json'):
-                # Merge profile_json instead of replacing
-                existing_profile = existing_candidate['profile_json']
-                update_profile = update_data['profile_json']
-                
-                # Convert AIMessage objects to strings in update_profile
-                if isinstance(update_profile, dict):
-                    for key, value in update_profile.items():
-                        if hasattr(value, 'content'):  # Check if it's an AIMessage
-                            update_profile[key] = value.content
-                        elif isinstance(value, dict):
-                            for subkey, subvalue in value.items():
-                                if hasattr(subvalue, 'content'):
-                                    update_profile[key][subkey] = subvalue.content
-                
-                # Deep merge the dictionaries
-                merged_profile = self._deep_merge(existing_profile, update_profile)
-                update_data['profile_json'] = merged_profile
-            
-            # Update candidate in database
+            # Update the candidate
             response = await self.supabase.table('candidates_dev').update(update_data).eq('id', candidate_id).execute()
-            updated_candidate = response.data[0] if response.data else None
             
-            if not updated_candidate:
-                logger.error(f"Failed to update candidate {candidate_id}")
-                raise Exception(f"Failed to update candidate {candidate_id}")
+            if not response.data:
+                raise ValueError(f"Candidate {candidate_id} not found")
                 
-            logger.info(f"Successfully updated candidate {candidate_id}")
-            return updated_candidate
+            return response.data[0]
             
         except Exception as e:
             logger.error(f"Error updating candidate profile: {str(e)}")
@@ -456,3 +397,16 @@ class CandidateService:
             else:
                 result[key] = value
         return result 
+
+    async def manually_process_call(self, call_data: Dict[str, Any]) -> None:
+        """
+        Manually process a call for a candidate.
+        This is used when the webhook processing fails.
+        """
+        try:
+            logger.info(f"🔄 Manually processing call data")
+            await self.process_call_completion(call_data)
+            logger.info(f"✅ Successfully processed call data manually")
+        except Exception as e:
+            logger.error(f"Error manually processing call: {str(e)}")
+            raise 
