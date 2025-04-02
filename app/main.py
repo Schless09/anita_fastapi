@@ -60,6 +60,7 @@ from app.routes.jobs import router as jobs_router
 # Import the new webhook router
 from app.routes.webhooks import router as webhook_jobs_router
 from app.routes.candidates import router as candidates_router
+from app.dependencies import get_brain_agent
 
 # Load environment variables first
 load_dotenv()
@@ -141,25 +142,6 @@ app.include_router(jobs_router, tags=["jobs"])
 app.include_router(candidates_router, tags=["candidates"])
 # Include the new webhook router
 app.include_router(webhook_jobs_router, prefix="/api/v1", tags=["Webhooks"])
-
-# Dependencies
-async def get_brain_agent():
-    global brain_agent_instance
-    if brain_agent_instance is None:
-        raise HTTPException(
-            status_code=500,
-            detail="Brain agent not initialized"
-        )
-    return brain_agent_instance
-
-async def get_vector_store():
-    global vector_store
-    if vector_store is None:
-        raise HTTPException(
-            status_code=500,
-            detail="Vector store not initialized"
-        )
-    return vector_store
 
 def get_service(service_name: str):
     return core_services.get(service_name)

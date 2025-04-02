@@ -33,9 +33,12 @@ import traceback
 import uuid
 import asyncio
 import json
+import os
+import openai
+from dotenv import load_dotenv
+from fastapi import HTTPException
+from supabase._async.client import AsyncClient, create_client
 
-from app.services.openai_service import OpenAIService
-from app.services.matching_service import MatchingService
 from anita.services.email_service import send_job_match_email
 
 logger = logging.getLogger(__name__)
@@ -76,6 +79,17 @@ class BrainAgent:
             # Test Supabase connection
             await self.candidate_service.supabase.table("candidates_dev").select("count").execute()
             logger.info("Successfully connected to Supabase")
+
+            # Initialize OpenAI client
+            openai.api_key = os.getenv("OPENAI_API_KEY")
+            if not openai.api_key:
+                logger.warning("OPENAI_API_KEY not found in environment variables. Match reason generation will be disabled.")
+                self.openai_enabled = False
+            else:
+                self.openai_enabled = True
+                # TODO: Consider using async OpenAI client if available and beneficial
+                # from openai import AsyncOpenAI
+                # self.openai_client = AsyncOpenAI(api_key=os.getenv("OPENAI_API_KEY"))
         except Exception as e:
             logger.error(f"Error initializing async components: {str(e)}")
             raise
@@ -257,6 +271,82 @@ class BrainAgent:
                 "timestamp": datetime.utcnow().isoformat()
             }
 
+    async def _generate_match_reason_and_tags(
+        self, 
+        candidate_text: str, 
+        job_text: str, 
+        match_score: float
+    ) -> Optional[Dict[str, Any]]:
+        """Generates a match reason and tags using OpenAI based on candidate text, job text, and the calculated match score."""
+        if not self.openai_enabled or not openai.api_key:
+            logger.warning("OpenAI is not configured. Skipping match reason generation.")
+            return None
+
+        system_prompt = (
+            "You are an expert talent acquisition specialist. Analyze the provided candidate profile text, job description text, and the pre-calculated similarity score (0.0 to 1.0). "
+            f"The match score is {match_score:.2f}. "
+            "Based ONLY on the provided texts AND considering the given match score, identify the key reasons for this specific level of alignment (or misalignment). "
+            "Provide your analysis in JSON format with two keys: "
+            "1. \"match_reason\": A concise 1-2 sentence explanation summarizing the core factors contributing to the given match score. If the score is low, emphasize mismatches or weak points. If high, highlight strong alignments. "
+            "2. \"match_tags\": A JSON list of 5-7 relevant keyword tags summarizing the match factors consistent with the score (e.g., python, fastapi, senior_engineer, good_skill_match, low_experience_match, weak_domain_fit). "
+            "Focus exclusively on information present in the texts and ensure the tone reflects the provided score."
+        )
+
+        user_prompt = (
+            f"Please analyze the match between the following candidate and job:\n\n"
+            f"--- CANDIDATE PROFILE ---\n{candidate_text}\n\n"
+            f"--- JOB DESCRIPTION ---\n{job_text}\n\n"
+            f"Provide the analysis in the specified JSON format."
+        )
+
+        logger.info("Attempting to generate match reason/tags via OpenAI...")
+        try:
+            # Use the ChatCompletions endpoint
+            response = openai.chat.completions.create(
+                # model="gpt-4-turbo-preview", # Consider gpt-4 for higher quality if needed
+                model="gpt-3.5-turbo-0125", # Use a model that supports JSON mode
+                response_format={"type": "json_object"}, # Request JSON output
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt}
+                ],
+                temperature=0.5, # Adjust for desired creativity/factuality
+                max_tokens=250 # Limit response size
+            )
+
+            response_content = response.choices[0].message.content
+            if not response_content:
+                logger.error("OpenAI response content is empty.")
+                return None
+
+            logger.debug(f"Raw OpenAI response: {response_content}")
+
+            # Parse the JSON response
+            try:
+                result = json.loads(response_content)
+                # Basic validation of expected keys
+                if "match_reason" in result and "match_tags" in result and isinstance(result["match_tags"], list):
+                    logger.info("Successfully generated match reason and tags via OpenAI.")
+                    return {
+                        "match_reason": str(result["match_reason"]), # Ensure string type
+                        "match_tags": [str(tag) for tag in result["match_tags"]] # Ensure list of strings
+                    }
+                else:
+                    logger.error(f"OpenAI response JSON is missing expected keys or has incorrect types: {result}")
+                    return None
+            except json.JSONDecodeError as json_err:
+                logger.error(f"Failed to parse OpenAI JSON response: {json_err}")
+                logger.error(f"Response content was: {response_content}")
+                return None
+
+        except openai.APIError as api_err:
+            logger.error(f"OpenAI API error: {api_err}")
+            return None
+        except Exception as e:
+            logger.error(f"Unexpected error generating match reason/tags via OpenAI: {e}")
+            logger.error(f"Traceback: {traceback.format_exc()}")
+            return None
+
     async def handle_call_processed(self, candidate_id: str, call_data: Dict[str, Any]) -> Dict[str, Any]:
         """
         Handle post-call processing: transcript analysis, embedding, matching.
@@ -364,32 +454,105 @@ class BrainAgent:
                     self.state["metrics"]["matches_found"] += len(matches)
 
                     if matches:
+                        self._update_transaction(process_id, "match_storage", "started")
                         match_records = []
+                        # Extract all unique job IDs needed
+                        job_ids_to_fetch = list(set(match.get("job_id") for match in matches if match.get("job_id") is not None))
+
+                        # Fetch job details (multiple relevant fields) in bulk
+                        job_details_map = {}
+                        if job_ids_to_fetch:
+                            try:
+                                # Fetch multiple relevant columns for context
+                                job_fields_to_select = [
+                                    'id',
+                                    'job_title',
+                                    'key_responsibilities', # list
+                                    'skills_must_have',     # list
+                                    'skills_preferred',     # list
+                                    'minimum_years_of_experience', # int/str
+                                    'seniority', # enum/str
+                                    'ideal_candidate_profile', # text
+                                    'product_description' # text
+                                ]
+                                logger.info(f"Fetching details for {len(job_ids_to_fetch)} job IDs: {job_ids_to_fetch}")
+                                job_resp = await self.supabase.table('jobs_dev').select(','.join(job_fields_to_select)) \
+                                    .in_('id', job_ids_to_fetch).execute()
+
+                                if job_resp.data:
+                                    # Store the whole job data dictionary
+                                    job_details_map = {job['id']: job for job in job_resp.data}
+                                    logger.info(f"Fetched details for {len(job_details_map)} jobs.")
+                                else:
+                                    logger.warning(f"Could not fetch details for job IDs: {job_ids_to_fetch}. Response: {job_resp}")
+                            except Exception as db_err:
+                                logger.error(f"Error fetching job details: {db_err}")
+                                logger.error(f"Traceback: {traceback.format_exc()}")
+                                # Proceed without job text if fetching fails
+
                         for match in matches:
                             job_id = match.get("job_id")
                             similarity_score = match.get("similarity")
                             if job_id is None or similarity_score is None:
-                                logger.warning(f"Skipping match storage... {match}")
+                                logger.warning(f"Skipping match storage due to missing job_id or score: {match}")
                                 continue
-                            match_records.append({
+
+                            job_data = job_details_map.get(job_id)
+                            job_text = ""
+                            if job_data:
+                                # Construct job_text from multiple fields
+                                parts = []
+                                if job_data.get('job_title'): parts.append(f"Job Title: {job_data['job_title']}")
+                                if job_data.get('seniority'): parts.append(f"Seniority: {job_data['seniority']}")
+                                if job_data.get('minimum_years_of_experience'): parts.append(f"Min Experience: {job_data['minimum_years_of_experience']} years")
+                                if job_data.get('key_responsibilities'): parts.append(f"Responsibilities: {', '.join(job_data['key_responsibilities'])}")
+                                if job_data.get('skills_must_have'): parts.append(f"Must-Have Skills: {', '.join(job_data['skills_must_have'])}")
+                                if job_data.get('skills_preferred'): parts.append(f"Preferred Skills: {', '.join(job_data['skills_preferred'])}")
+                                if job_data.get('product_description'): parts.append(f"Product: {job_data['product_description']}")
+                                if job_data.get('ideal_candidate_profile'): parts.append(f"Ideal Candidate: {job_data['ideal_candidate_profile']}")
+                                job_text = "\n".join(parts)
+                            else:
+                                logger.warning(f"No job details found for job_id {job_id} in fetched data.")
+
+
+                            # Generate match reason and tags
+                            reason_tags_data = None
+                            if job_text and merged_profile:
+                                reason_tags_data = await self._generate_match_reason_and_tags(
+                                    candidate_text=merged_profile,
+                                    job_text=job_text,
+                                    match_score=similarity_score
+                                )
+                            else:
+                                logger.warning(f"Skipping reason generation for job {job_id} due to missing candidate or job text.")
+
+
+                            match_record = {
                                 "candidate_id": candidate_id,
                                 "job_id": job_id,
-                                "match_score": similarity_score
-                                # Rely on DB defaults for created_at, updated_at, matched_at, status etc.
-                                # "created_at": datetime.utcnow().isoformat(),
-                                # "updated_at": datetime.utcnow().isoformat()
-                            })
+                                "match_score": similarity_score,
+                                # Add reason and tags if generated
+                                "match_reason": reason_tags_data.get("match_reason") if reason_tags_data else None,
+                                "match_tags": reason_tags_data.get("match_tags") if reason_tags_data else None
+                            }
+                            match_records.append(match_record)
+
                         if match_records:
-                            logger.debug(f"Attempting to insert/upsert match records into candidate_job_matches_dev: {match_records}")
+                            logger.debug(f"Attempting to insert/upsert {len(match_records)} match records into candidate_job_matches_dev")
                             # Use the correct table name with _dev suffix
                             insert_response = await self.supabase.table('candidate_job_matches_dev')\
                                 .upsert(match_records, \
-                                        on_conflict='candidate_id, job_id', # Specify conflict columns, not constraint name
-                                        ignore_duplicates=True)\
+                                        on_conflict='candidate_id, job_id', # Specify conflict columns
+                                        ignore_duplicates=False # Make sure scores/reasons are updated
+                                        ) \
                                 .execute()
                             # Check response status
-                            if insert_response.data or (hasattr(insert_response, 'status_code') and 200 <= insert_response.status_code < 300):
-                                logger.info(f"✅ Successfully upserted/ignored job matches for candidate {candidate_id}")
+                            # Note: Checking insert_response needs care, Supabase async might differ
+                            # Let's assume success if no exception is raised for now, or check status code if available.
+                            # Example check (adapt based on actual Supabase async client behavior):
+                            if hasattr(insert_response, 'data') or (hasattr(insert_response, 'status_code') and 200 <= insert_response.status_code < 300):
+                                logger.info(f"✅ Successfully upserted {len(insert_response.data)} job matches for candidate {candidate_id}")
+                                self._update_transaction(process_id, "match_storage", "completed", {"count": len(insert_response.data)})
 
                                 # --- Start Email Logic ---
                                 try:

@@ -1,13 +1,13 @@
-from fastapi import APIRouter, HTTPException, BackgroundTasks, File, UploadFile, Form
+from fastapi import APIRouter, HTTPException, BackgroundTasks, File, UploadFile, Form, Depends
 from typing import Dict, Any, Optional
 from app.services.candidate_service import CandidateService
 import logging
 from app.agents.brain_agent import BrainAgent
+from app.dependencies import get_brain_agent
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
 candidate_service = CandidateService()
-brain_agent = BrainAgent()
 
 @router.post("/candidates")
 async def create_candidate(
@@ -17,7 +17,8 @@ async def create_candidate(
     email: str = Form(...),
     phone: str = Form(...),
     linkedin_url: Optional[str] = Form(None),
-    resume: UploadFile = File(...)
+    resume: UploadFile = File(...),
+    brain_agent: BrainAgent = Depends(get_brain_agent)
 ):
     """
     Handle new candidate submission from frontend (multipart/form-data).
