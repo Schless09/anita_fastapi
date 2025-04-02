@@ -125,9 +125,9 @@ class BrainAgent:
 
             # Step 1: Process Resume with Intake Agent (if resume provided)
             if resume_content:
-                logger.info(f"\nStep 1: 📄 Processing Resume")
-                logger.info("----------------------------------------")
-                intake_result = await self.candidate_intake_agent.process_candidate(
+            logger.info(f"\nStep 1: 📄 Processing Resume")
+            logger.info("----------------------------------------")
+            intake_result = await self.candidate_intake_agent.process_candidate(
                         resume_content=resume_content,
                         candidate_email=candidate_email,
                         candidate_id=candidate_id
