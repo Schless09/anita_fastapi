@@ -34,6 +34,10 @@ import uuid
 import asyncio
 import json
 
+from app.services.openai_service import OpenAIService
+from app.services.matching_service import MatchingService
+from anita.services.email_service import send_job_match_email
+
 logger = logging.getLogger(__name__)
 
 class BrainAgent:
@@ -386,6 +390,90 @@ class BrainAgent:
                             # Check response status
                             if insert_response.data or (hasattr(insert_response, 'status_code') and 200 <= insert_response.status_code < 300):
                                 logger.info(f"✅ Successfully upserted/ignored job matches for candidate {candidate_id}")
+
+                                # --- Start Email Logic ---
+                                try:
+                                    logger.info(f"Checking for high-scoring matches (>0.90) for candidate {candidate_id} to send email.")
+                                    
+                                    # 1. Get Candidate Email and Name
+                                    candidate_info_resp = await self.supabase.table('candidates_dev')\
+                                        .select('email', 'full_name')\
+                                        .eq('id', candidate_id)\
+                                        .limit(1)\
+                                        .execute()
+
+                                    candidate_email = None
+                                    candidate_name = None
+                                    if candidate_info_resp.data:
+                                        candidate_email = candidate_info_resp.data[0].get('email')
+                                        candidate_name = candidate_info_resp.data[0].get('full_name') # Assuming 'full_name'
+                                    
+                                    if not candidate_email:
+                                        logger.warning(f"Could not find email for candidate {candidate_id}. Cannot send job match email.")
+                                    else:
+                                        # Define threshold before use
+                                        MATCH_SCORE_THRESHOLD = 0.40 # Lowered threshold for testing
+                                        
+                                        # 2. Get High-Scoring Job Matches (Title and URL) - Using two queries
+                                        logger.info(f"Fetching high-scoring match job IDs (>{MATCH_SCORE_THRESHOLD}) for candidate {candidate_id}.")
+                                        
+                                        # Query 1: Get job IDs with scores above the threshold
+                                        matches_ids_resp = await self.supabase.table('candidate_job_matches_dev') \
+                                            .select('job_id, match_score') \
+                                            .eq('candidate_id', candidate_id) \
+                                            .gt('match_score', MATCH_SCORE_THRESHOLD) \
+                                            .execute()
+
+                                        high_scoring_job_ids = []
+                                        if matches_ids_resp.data:
+                                            high_scoring_job_ids = [match['job_id'] for match in matches_ids_resp.data if 'job_id' in match]
+                                            logger.info(f"Found {len(high_scoring_job_ids)} potential job IDs.")
+                                        else:
+                                             logger.info(f"No matches found above threshold {MATCH_SCORE_THRESHOLD} in initial query.")
+
+
+                                        high_scoring_jobs = []
+                                        # Query 2: Get job details for the found IDs
+                                        if high_scoring_job_ids:
+                                            logger.info(f"Fetching details for job IDs: {high_scoring_job_ids}")
+                                            jobs_details_resp = await self.supabase.table('jobs_dev') \
+                                                .select('id, job_title, job_url') \
+                                                .in_('id', high_scoring_job_ids) \
+                                                .execute()
+
+                                            if jobs_details_resp.data:
+                                                # Reconstruct the list with title and url
+                                                high_scoring_jobs = [
+                                                    {'job_title': job['job_title'], 'job_url': job['job_url']}
+                                                    for job in jobs_details_resp.data 
+                                                    if job.get('job_title') and job.get('job_url') # Ensure data exists
+                                                ]
+                                                logger.info(f"Successfully fetched details for {len(high_scoring_jobs)} jobs.")
+                                            else:
+                                                logger.warning(f"Could not fetch details for job IDs: {high_scoring_job_ids}")
+                                        
+                                        # 3. Send Email if matches exist (logic remains the same)
+                                        if high_scoring_jobs:
+                                            logger.info(f"Found {len(high_scoring_jobs)} jobs with details matching criteria for candidate {candidate_id}. Attempting to send email to {candidate_email}.")
+                                            # Run email sending in background? For now, run synchronously.
+                                            email_sent = send_job_match_email(
+                                                recipient_email=candidate_email, 
+                                                candidate_name=candidate_name, 
+                                                job_matches=high_scoring_jobs
+                                            )
+                                            if email_sent:
+                                                logger.info(f"Successfully queued/sent job match email for candidate {candidate_id}.")
+                                            else:
+                                                logger.error(f"Failed to send job match email for candidate {candidate_id}.")
+                                        else:
+                                            logger.info(f"No high-scoring matches (>0.90) found for candidate {candidate_id}. Skipping email.")
+
+                                except Exception as email_err:
+                                    logger.error(f"Error during email sending logic for candidate {candidate_id}: {email_err}")
+                                    logger.error(f"Traceback: {traceback.format_exc()}")
+                                    # Log error but don't stop the overall process
+                                # --- End Email Logic ---
+
                             else:
                                 logger.error(f"Failed to upsert job matches for candidate {candidate_id}. Response: {insert_response}")
                                 self._update_transaction(process_id, "match_storage", "failed", {"error": "DB upsert failed", "response": str(insert_response)})
