@@ -82,21 +82,20 @@ async def handler(request: Request, background_tasks: BackgroundTasks):
         logger.info(f"📞 Processing webhook for candidate {candidate_id}")
         logger.info(f"Event type: {event_type}, Call status: {call_status}")
 
-        # Process completed/ended calls via BrainAgent
-        # Check for 'ended' status OR specific events like 'call_analyzed' if available
-        if call_status == "ended": # Or potentially check event_type == 'call_analyzed' etc.
-            logger.info(f"🧠 Routing completed call for candidate {candidate_id} to BrainAgent")
-            # Ensure brain_agent is initialized (consider dependency injection for FastAPI)
+        # --- Trigger brain agent ONLY on the final analysis event --- 
+        # Use 'call_analyzed' as the primary trigger, assuming it contains final data
+        if event_type == 'call_analyzed':
+            logger.info(f"🧠 Routing 'call_analyzed' event for candidate {candidate_id} to BrainAgent")
             background_tasks.add_task(
-                brain_agent.handle_call_processed,
+                brain_agent.handle_call_processed, # Target the correct method
                 candidate_id=candidate_id,
                 call_data=call_data
             )
-            return JSONResponse(content={"status": "success", "message": "Call processing delegated to BrainAgent"})
-
-        # Handle other events if necessary (e.g., call_started)
-        logger.info(f"Webhook event '{event_type}' with status '{call_status}' received but not explicitly handled.")
-        return JSONResponse(content={"status": "success", "message": "Webhook received, no action taken for this event/status"})
+            return JSONResponse(content={"status": "success", "message": "'call_analyzed' processing delegated to BrainAgent"})
+        else:
+            # Log other events but don't trigger the main processing
+            logger.info(f"Webhook event '{event_type}' (Status: '{call_status}') received but not the primary trigger ('call_analyzed'). No action taken.")
+            return JSONResponse(content={"status": "success", "message": f"Webhook received, event '{event_type}' ignored"})
 
     except Exception as e:
         logger.error(f"❌ Error processing webhook: {str(e)}\nTraceback: {traceback.format_exc()}")

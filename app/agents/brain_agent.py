@@ -1,5 +1,5 @@
 # agents/brain_agent.py
-from typing import Dict, Any, Optional, List
+from typing import Dict, Any, Optional, List, Tuple
 from datetime import datetime, timedelta
 from langchain_openai import ChatOpenAI
 from app.agents.langchain.agents.candidate_intake_agent import CandidateIntakeAgent
@@ -128,10 +128,10 @@ class BrainAgent:
                 logger.info(f"\nStep 1: 📄 Processing Resume")
                 logger.info("----------------------------------------")
                 intake_result = await self.candidate_intake_agent.process_candidate(
-                    resume_content=resume_content,
-                    candidate_email=candidate_email,
-                    candidate_id=candidate_id
-                )
+                        resume_content=resume_content,
+                        candidate_email=candidate_email,
+                        candidate_id=candidate_id
+                    )
                 if not intake_result or intake_result.get("status") != "success" or "profile" not in intake_result:
                     error_msg = intake_result.get("error", "Failed to process resume")
                     logger.error(f"❌ Resume processing failed for {candidate_id}: {error_msg}")
@@ -177,7 +177,7 @@ class BrainAgent:
                 "profile_json": merged_profile,
                 "updated_at": datetime.utcnow().isoformat()
             }
-
+            
             update_response = await self.supabase.table('candidates_dev').update(update_data).eq('id', candidate_id).execute()
 
             if not update_response.data:
@@ -239,7 +239,7 @@ class BrainAgent:
                 "status": "initial_processing_complete",
                 "timestamp": datetime.utcnow().isoformat()
             }
-
+            
         except Exception as e:
             error_msg = f"Error during initial submission processing for {candidate_id}: {str(e)}"
             logger.error(f"❌ {error_msg}")
@@ -256,15 +256,16 @@ class BrainAgent:
     async def handle_call_processed(self, candidate_id: str, call_data: Dict[str, Any]) -> Dict[str, Any]:
         """
         Handle post-call processing: transcript analysis, embedding, matching.
-        Only proceeds if a transcript is available.
+        Only proceeds if a transcript is available AND status isn't already final/processing.
         """
         process_id = f"call_processed_{candidate_id}_{datetime.utcnow().isoformat()}"
         self._start_transaction(process_id, "call_processing")
-        try:
-            logger.info(f"\n=== Processing Completed Call for Candidate ID: {candidate_id} ===")
+        final_process_status = "error_processing_call" # Default final status in case of unexpected exit
 
-            # --- Add Status Check --- 
-            # Fetch current profile *first* to check status before proceeding
+        try:
+            logger.info(f"\n=== Processing Incoming Call Event for Candidate ID: {candidate_id} ===")
+
+            # --- Refined Status Check --- 
             pre_check_response = await self.supabase.table('candidates_dev').select('profile_json').eq('id', candidate_id).single().execute()
             if not pre_check_response.data:
                 logger.error(f"(Agent Pre-Check) Could not find candidate profile for {candidate_id}. Aborting call processing.")
@@ -274,202 +275,248 @@ class BrainAgent:
             current_profile_for_check = pre_check_response.data.get('profile_json', {})
             current_status = current_profile_for_check.get('processing_status', {}).get('status')
 
-            final_statuses = ['completed', 'call_missed_or_failed', 'error_processing_call']
-            if current_status in final_statuses:
-                 logger.info(f"(Agent Check) Candidate {candidate_id} already has final processing status '{current_status}'. Skipping call processing for this trigger.")
-                 self._end_transaction(process_id, "skipped", f"Already processed with status: {current_status}")
-                 return {"status": "skipped", "reason": f"Already processed: {current_status}"} # Exit early
-            logger.info(f"(Agent Check) Candidate {candidate_id} status is '{current_status}'. Proceeding with call processing.")
-            # --- End Status Check ---
+            # Exit if already completed, failed, OR if another process is already working on it
+            terminal_or_processing_statuses = ['completed', 'call_missed_or_failed', 'error_processing_call', 'processing_call']
+            if current_status in terminal_or_processing_statuses:
+                 logger.info(f"(Agent Check) Candidate {candidate_id} status is '{current_status}'. Skipping call processing for this trigger.")
+                 self._end_transaction(process_id, "skipped", f"Already processed/processing: {current_status}")
+                 return {"status": "skipped", "reason": f"Already processed/processing: {current_status}"} # Exit early
+            logger.info(f"(Agent Check) Candidate {candidate_id} status is '{current_status}'. Proceeding.")
+            
+            # --- Set 'processing' Status IMMEDIATELY ---
+            logger.info(f"Setting status to 'processing_call' for {candidate_id}")
+            await self._update_candidate_status(candidate_id, 'processing_call')
+            # --- End Status Lock ---
 
             # 1. Check for Transcript
             transcript = call_data.get('transcript')
             if not transcript or not transcript.strip():
-                logger.warning(f"No valid transcript found for call {call_data.get('call_id')} (Candidate: {candidate_id}). Updating status and stopping.")
+                logger.warning(f"No valid transcript found for call {call_data.get('call_id')} (Candidate: {candidate_id}).")
                 self._update_transaction(process_id, "transcript_check", "failed", {"reason": "No transcript"})
-                await self._update_candidate_status(candidate_id, 'call_missed_or_failed')
-                self._end_transaction(process_id, "stopped")
-                return {"status": "stopped", "reason": "No transcript"}
+                final_process_status = 'call_missed_or_failed' # Set final status for finally block
+                return {"status": "stopped", "reason": "No transcript"} # Exit before embedding/matching
             logger.info(f"Transcript found for call {call_data.get('call_id')}. Proceeding.")
             self._update_transaction(process_id, "transcript_check", "completed")
-
-            # 2. Analyze Transcript & Merge Profile
+            
+            # --- Main Processing Block --- 
+            # Define merged_profile here before the block
+            merged_profile = current_profile_for_check # Start with the profile we already fetched
+            embedding_success = False
+            matches = []
+            
+            # 2. Analyze Transcript & Merge Profile (Wrap in try/except)
             self._update_transaction(process_id, "profile_update", "started")
             logger.info(f"Analyzing transcript and merging profile for {candidate_id}")
             try:
-                # Fetch existing profile
-                fetch_resp = await self.supabase.table('candidates_dev').select('profile_json').eq('id', candidate_id).single().execute()
-                if not fetch_resp.data:
-                    raise ValueError(f"Candidate {candidate_id} not found during call processing.")
-                current_profile = fetch_resp.data.get('profile_json', {})
-
-                # Extract info from transcript
                 extracted_info = await self.openai_service.extract_transcript_info(transcript)
                 if not extracted_info:
-                    logger.warning(f"No information extracted from transcript for {candidate_id}. Profile will not be updated with transcript data.")
-                    merged_profile = current_profile
+                     logger.warning(f"No information extracted from transcript for {candidate_id}. Profile will not be updated with transcript data.")
                 else:
-                    merged_profile = self._deep_merge(current_profile, extracted_info)
-                    logger.info(f"Successfully merged transcript info for {candidate_id}")
+                     merged_profile = self._deep_merge(merged_profile, extracted_info)
+                     logger.info(f"Successfully merged transcript info for {candidate_id}")
 
-                # Update processing status
+                # Update processing status within the merged profile dictionary
                 if 'processing_status' not in merged_profile: merged_profile['processing_status'] = {}
                 merged_profile['processing_status'].update({
-                    'status': 'completed',
-                    'call_completed': True,
-                    'last_updated': datetime.utcnow().isoformat()
+                     # Keep 'processing_call' until the very end
+                     'call_completed': True,
+                     'last_updated': datetime.utcnow().isoformat()
                 })
 
-                # Save merged profile
+                # Save merged profile (without changing final status yet)
                 update_resp = await self.supabase.table('candidates_dev').update({
-                    'profile_json': merged_profile,
-                    'updated_at': datetime.utcnow().isoformat()
+                     'profile_json': merged_profile,
+                     'updated_at': datetime.utcnow().isoformat()
                 }).eq('id', candidate_id).execute()
                 if not update_resp.data:
-                    raise Exception("Failed to save merged profile to database.")
+                     raise Exception("Failed to save merged profile to database.")
                 self._update_transaction(process_id, "profile_update", "completed")
             except Exception as profile_err:
-                logger.error(f"Error analyzing transcript or updating profile for {candidate_id}: {profile_err}")
-                self._update_transaction(process_id, "profile_update", "failed", {"error": str(profile_err)})
-                await self._update_candidate_status(candidate_id, 'error_processing_call')
-                self._end_transaction(process_id, "error")
-                raise profile_err
+                 logger.error(f"Error analyzing transcript or updating profile for {candidate_id}: {profile_err}")
+                 self._update_transaction(process_id, "profile_update", "failed", {"error": str(profile_err)})
+                 # final_process_status will be set to error_processing_call in outer except/finally
+                 raise profile_err # Re-raise to outer handler
 
             # 3. Generate & Store Embedding
             self._update_transaction(process_id, "embedding", "started")
             logger.info(f"Generating embedding for {candidate_id}")
-            embedding_success = await self._generate_and_store_embedding(candidate_id, merged_profile)
+            # Use the updated merged_profile for embedding generation
+            embedding_success = await self._generate_and_store_embedding(candidate_id, merged_profile) 
             if not embedding_success:
-                logger.error(f"Embedding generation/storage failed for {candidate_id}. Stopping.")
-                self._update_transaction(process_id, "embedding", "failed", {"reason": "Embedding function returned false"})
-                self._end_transaction(process_id, "failed")
-                return {"status": "failed", "reason": "Embedding generation failed"}
-            self._update_transaction(process_id, "embedding", "completed")
-            self.state["metrics"]["embeddings_generated"] += 1
+                 logger.error(f"Embedding generation/storage failed for {candidate_id}. Matchmaking will be skipped.")
+                 self._update_transaction(process_id, "embedding", "failed", {"reason": "Embedding function returned false"})
+                 # Let process finish, final status determined later
+            else:
+                self._update_transaction(process_id, "embedding", "completed")
+                self.state["metrics"]["embeddings_generated"] += 1
 
-            # 4. Trigger Matchmaking
-            self._update_transaction(process_id, "matchmaking", "started")
-            logger.info(f"Triggering matchmaking for {candidate_id}")
-            try:
-                matches = await self.matching_service.match_candidate_to_jobs(candidate_id)
-                logger.info(f"Found {len(matches)} potential matches for {candidate_id}")
-                self.state["metrics"]["matches_found"] += len(matches)
+            # 4. Trigger Matchmaking (Only if embedding succeeded)
+            if embedding_success:
+                self._update_transaction(process_id, "matchmaking", "started")
+                logger.info(f"Triggering matchmaking for {candidate_id}")
+                try:
+                    matches = await self.matching_service.match_candidate_to_jobs(candidate_id)
+                    logger.info(f"Found {len(matches)} potential matches for {candidate_id}")
+                    self.state["metrics"]["matches_found"] += len(matches)
 
-                if matches:
-                    # Store matches in the database
-                    match_records = []
-                    for match in matches:
-                        job_id = match.get("job_id")
-                        similarity_score = match.get("similarity")
-                        if job_id is None or similarity_score is None:
-                            logger.warning(f"Skipping match storage for candidate {candidate_id} due to missing job_id/similarity: {match}")
-                            continue
-                        match_records.append({
-                            "candidate_id": candidate_id,
-                            "job_id": job_id,
-                            "match_score": similarity_score,
-                            "created_at": datetime.utcnow().isoformat(),
-                            "updated_at": datetime.utcnow().isoformat()
-                        })
-                    if match_records:
-                        # Log the records being inserted for debugging
-                        logger.debug(f"Attempting to insert match records: {match_records}") 
-                        insert_response = await self.supabase.table('candidate_job_matches').insert(match_records).execute()
-                        if insert_response.data:
-                            logger.info(f"✅ Successfully stored {len(insert_response.data)} job matches for candidate {candidate_id}")
-                            self.state["metrics"]["successful_matches_stored"] += len(insert_response.data)
-                        else:
-                            logger.error(f"Failed to store job matches for candidate {candidate_id}. Response: {insert_response}")
-                            self._update_transaction(process_id, "match_storage", "failed", {"error": "DB insert failed"})
+                    if matches:
+                        match_records = []
+                        for match in matches:
+                            job_id = match.get("job_id")
+                            similarity_score = match.get("similarity")
+                            if job_id is None or similarity_score is None:
+                                logger.warning(f"Skipping match storage... {match}")
+                                continue
+                            match_records.append({
+                                "candidate_id": candidate_id,
+                                "job_id": job_id,
+                                "match_score": similarity_score
+                                # Rely on DB defaults for created_at, updated_at, matched_at, status etc.
+                                # "created_at": datetime.utcnow().isoformat(),
+                                # "updated_at": datetime.utcnow().isoformat()
+                            })
+                        if match_records:
+                            logger.debug(f"Attempting to insert/upsert match records into candidate_job_matches_dev: {match_records}")
+                            # Use the correct table name with _dev suffix
+                            insert_response = await self.supabase.table('candidate_job_matches_dev')\
+                                .upsert(match_records, \
+                                        on_conflict='candidate_id, job_id', # Specify conflict columns, not constraint name
+                                        ignore_duplicates=True)\
+                                .execute()
+                            # Check response status
+                            if insert_response.data or (hasattr(insert_response, 'status_code') and 200 <= insert_response.status_code < 300):
+                                logger.info(f"✅ Successfully upserted/ignored job matches for candidate {candidate_id}")
+                            else:
+                                logger.error(f"Failed to upsert job matches for candidate {candidate_id}. Response: {insert_response}")
+                                self._update_transaction(process_id, "match_storage", "failed", {"error": "DB upsert failed", "response": str(insert_response)})
 
-                self._update_transaction(process_id, "matchmaking", "completed")
-            except Exception as match_err:
-                logger.error(f"Error during matchmaking or storing matches for {candidate_id}: {match_err}")
-                logger.error(f"Traceback: {traceback.format_exc()}")
-                self._update_transaction(process_id, "matchmaking", "failed", {"error": str(match_err)})
-
-            logger.info(f"\n=== ✅ Call Processing Complete for {candidate_id} ===")
-            self._end_transaction(process_id, "completed")
+                    self._update_transaction(process_id, "matchmaking", "completed")
+                except Exception as match_err:
+                    logger.error(f"Error during matchmaking or storing matches for {candidate_id}: {match_err}")
+                    logger.error(f"Traceback: {traceback.format_exc()}")
+                    self._update_transaction(process_id, "matchmaking", "failed", {"error": str(match_err)})
+                    # Don't set final status to error here, let it be completed if embedding worked
+            else:
+                 logger.warning(f"Skipping matchmaking for {candidate_id} due to embedding failure.")
+                 self._update_transaction(process_id, "matchmaking", "skipped", {"reason": "Embedding failed"})
+            
+            # If we reached here without a major error being raised
+            final_process_status = 'completed'
+            logger.info(f"\n=== ✅ Call Processing Workflow Succeeded for {candidate_id} ===")
             return {"status": "completed", "matches_found": len(matches)}
-
+            
+        # Outer except block catches errors raised from within the main processing block
         except Exception as e:
+            final_process_status = 'error_processing_call' # Ensure status reflects the error
             error_msg = f"Unhandled error during call processing for {candidate_id}: {str(e)}"
             logger.error(f"❌ {error_msg}")
             logger.error(f"❌ Full traceback: {traceback.format_exc()}")
-            await self._update_candidate_status(candidate_id, 'error_processing_call')
             self._update_transaction(process_id, "error", "failed", {"error": error_msg})
-            self._end_transaction(process_id, "error")
             return {"status": "error", "error": error_msg}
 
+        finally:
+            # --- Ensure final status is set --- 
+            logger.info(f"Updating final status to '{final_process_status}' for candidate {candidate_id}.")
+            await self._update_candidate_status(candidate_id, final_process_status)
+            self._end_transaction(process_id, final_process_status)
+            logger.info(f"Transaction {process_id} ended with status: {final_process_status}")
+            # --- End Final Status Update ---
+
     # --- Embedding Helper Methods (Moved from CandidateService) ---
-    def _prepare_candidate_text_for_embedding(self, profile_json: Dict[str, Any]) -> str:
-        """Prepare a comprehensive text string from candidate profile for embedding."""
+    def _prepare_candidate_text_for_embedding(self, profile_json: Dict[str, Any]) -> Tuple[str, List[str]]:
+        """Prepare a comprehensive text string from candidate profile for embedding.
+           Returns the text string and a list of profile keys included in the text.
+        """
         sections = []
-        
+        fields_included = [] # List to track used fields
+
+        # Helper function to add section if value exists
+        def add_section(key: str, value: Any, prefix: str = "", is_list: bool = False):
+            if value:
+                # Check for non-empty lists if is_list is True
+                if is_list and isinstance(value, list) and value:
+                    sections.append(f"{prefix}{', '.join(map(str, value))}")
+                    fields_included.append(key)
+                # Check for non-list, non-dict values that are not just whitespace
+                elif not is_list and not isinstance(value, (list, dict)):
+                    str_value = str(value).strip()
+                    if str_value: # Ensure the string representation isn't empty
+                        sections.append(f"{prefix}{str_value}")
+                        fields_included.append(key)
+
         # Basic Info (Handle nesting)
         basic_info = profile_json.get('basic_info', {})
-        if name := basic_info.get('full_name'): sections.append(f"Name: {name}")
-        if email := basic_info.get('email'): sections.append(f"Email: {email}") # Add email?
-        if phone := basic_info.get('phone'): sections.append(f"Phone: {phone}") # Add phone?
-        if loc := basic_info.get('location'): sections.append(f"Location: {loc}") # Add location?
-        
-        # Top-level Role/Company (Extracted by agent)
-        if role := profile_json.get('current_role'): sections.append(f"Current Role: {role}")
-        if company := profile_json.get('current_company'): sections.append(f"Current Company: {company}")
-        if summary := profile_json.get('professional_summary'): sections.append(f"Summary: {summary}")
-        
-        # Transcript extracted fields (may overlap/augment)
-        if goals := profile_json.get('career_goals'): sections.append(f"Career Goals: {', '.join(goals)}")
-        if motivation := profile_json.get('motivation_for_job_change'): sections.append(f"Motivation for Change: {', '.join(motivation)}")
+        add_section('basic_info.full_name', basic_info.get('full_name'), "Name: ")
+        add_section('basic_info.email', basic_info.get('email'), "Email: ")
+        add_section('basic_info.phone', basic_info.get('phone'), "Phone: ")
+        add_section('basic_info.location', basic_info.get('location'), "Location: ")
+
+        # Top-level Role/Company/Summary (Extracted by agent)
+        add_section('current_role', profile_json.get('current_role'), "Current Role: ")
+        add_section('current_company', profile_json.get('current_company'), "Current Company: ")
+        add_section('professional_summary', profile_json.get('professional_summary'), "Summary: ")
+
+        # Transcript extracted fields
+        add_section('career_goals', profile_json.get('career_goals'), "Career Goals: ", is_list=True)
+        add_section('motivation_for_job_change', profile_json.get('motivation_for_job_change'), "Motivation for Change: ", is_list=True)
 
         # Skills & Tech
-        if skills := profile_json.get('skills'): sections.append(f"Skills: {', '.join(skills)}")
-        if tech := profile_json.get('tech_stack'): sections.append(f"Tech Stack: {', '.join(tech)}")
-        if develop := profile_json.get('skills_to_develop'): sections.append(f"Skills to Develop: {', '.join(develop)}")
-        if avoid := profile_json.get('technologies_to_avoid'): sections.append(f"Technologies to Avoid: {', '.join(avoid)}")
+        add_section('skills', profile_json.get('skills'), "Skills: ", is_list=True)
+        add_section('tech_stack', profile_json.get('tech_stack'), "Tech Stack: ", is_list=True)
+        add_section('skills_to_develop', profile_json.get('skills_to_develop'), "Skills to Develop: ", is_list=True)
+        add_section('technologies_to_avoid', profile_json.get('technologies_to_avoid'), "Technologies to Avoid: ", is_list=True)
 
         # Experience
         experience = profile_json.get("experience", [])
         if experience:
             sections.append("Experience:")
+            fields_included.append('experience') # Mark experience block as included
             for job in experience:
-                job_desc = f"- {job.get('title')} at {job.get('company')}"
-                if duration := job.get('duration'): job_desc += f" ({duration})"
-                sections.append(job_desc)
+                job_text_parts = []
+                if title := job.get('title'): job_text_parts.append(title)
+                if company := job.get('company'): job_text_parts.append(f"at {company}")
+                if duration := job.get('duration'): job_text_parts.append(f"({duration})")
+                if job_text_parts: sections.append(f"- {' '.join(job_text_parts)}")
                 if desc := job.get('description'): sections.append(f"  {desc[:200]}...") # Truncate description
-        # Use inferred years if available
-        if yrs_exp := profile_json.get('years_of_experience'): sections.append(f"Years of Experience: {yrs_exp}") 
-        if leadership := profile_json.get('leadership_experience'): sections.append(f"Leadership Experience: {'Yes' if leadership else 'No'}")
+
+        add_section('years_of_experience', profile_json.get('years_of_experience'), "Years of Experience: ")
+        if 'leadership_experience' in profile_json: # Handle boolean specifically
+             sections.append(f"Leadership Experience: {'Yes' if profile_json['leadership_experience'] else 'No'}")
+             fields_included.append('leadership_experience')
 
         # Education
         education = profile_json.get("education", [])
         if education:
             sections.append("Education:")
+            fields_included.append('education') # Mark education block as included
             for edu in education:
-                edu_desc = f"- {edu.get('degree')} at {edu.get('institution')}"
-                if year := edu.get('year'): edu_desc += f" ({year})"
-                sections.append(edu_desc)
+                edu_text_parts = []
+                if degree := edu.get('degree'): edu_text_parts.append(degree)
+                if institution := edu.get('institution'): edu_text_parts.append(f"at {institution}")
+                if year := edu.get('year'): edu_text_parts.append(f"({year})")
+                if edu_text_parts: sections.append(f"- {' '.join(edu_text_parts)}")
 
-        # Preferences & Deal Breakers (Add relevant ones from transcript analysis)
-        if prefs := profile_json.get('work_preferences', {}):
-            if benefits := prefs.get('benefits'): sections.append(f"Benefit Preferences: {', '.join(benefits)}")
-            # Add other work prefs if needed
-        if roles := profile_json.get('role_preferences'): sections.append(f"Role Preferences: {', '.join(roles)}")
-        if locs := profile_json.get('preferred_locations'): sections.append(f"Preferred Locations: {', '.join(locs)}")
-        if inds := profile_json.get('preferred_industries'): sections.append(f"Preferred Industries: {', '.join(inds)}")
-        if stage := profile_json.get('desired_company_stage'): sections.append(f"Desired Company Stage: {', '.join(stage)}")
-        if size := profile_json.get('preferred_company_size'): sections.append(f"Preferred Company Size: {', '.join(size)}")
-        if culture := profile_json.get('desired_company_culture'): sections.append(f"Desired Company Culture: {culture}")
-        if breakers := profile_json.get('deal_breakers'): sections.append(f"Deal Breakers: {', '.join(breakers)}")
+        # Preferences & Deal Breakers
+        prefs = profile_json.get('work_preferences', {})
+        add_section('work_preferences.benefits', prefs.get('benefits'), "Benefit Preferences: ", is_list=True)
+        add_section('role_preferences', profile_json.get('role_preferences'), "Role Preferences: ", is_list=True)
+        add_section('preferred_locations', profile_json.get('preferred_locations'), "Preferred Locations: ", is_list=True)
+        add_section('preferred_industries', profile_json.get('preferred_industries'), "Preferred Industries: ", is_list=True)
+        add_section('desired_company_stage', profile_json.get('desired_company_stage'), "Desired Company Stage: ", is_list=True)
+        add_section('preferred_company_size', profile_json.get('preferred_company_size'), "Preferred Company Size: ", is_list=True)
+        add_section('desired_company_culture', profile_json.get('desired_company_culture'), "Desired Company Culture: ")
+        add_section('deal_breakers', profile_json.get('deal_breakers'), "Deal Breakers: ", is_list=True)
 
-        # Resume Text (if available)
+        # Resume Text Snippet
         if resume_text := profile_json.get('resume_text'):
             sections.append("\n--- Resume Text Snippet ---")
             sections.append(str(resume_text)[:1500]) # Limit length
+            fields_included.append('resume_text')
 
         full_text = "\n\n".join(filter(None, sections)).strip()
         logger.debug(f"Prepared text for embedding (Agent - Full) (length {len(full_text)}): {full_text[:500]}...")
-        return full_text
+        # Return text and the list of fields used
+        return full_text, list(set(fields_included)) # Use set to ensure uniqueness
 
     async def _generate_and_store_embedding(self, candidate_id: str, profile_json_for_embedding: Dict[str, Any]) -> bool:
         """Generates embedding from profile data and updates the candidate record.
@@ -477,31 +524,45 @@ class BrainAgent:
         """
         try:
             logger.info(f"(Agent) Generating embedding for candidate {candidate_id}")
-            candidate_text = self._prepare_candidate_text_for_embedding(profile_json_for_embedding)
+            # Get text AND fields used
+            candidate_text, fields_included = self._prepare_candidate_text_for_embedding(profile_json_for_embedding)
+            text_length = len(candidate_text) # Get length for metadata
 
             if not candidate_text:
                 logger.warning(f"(Agent) No text content for candidate {candidate_id}. Skipping embedding.")
-                await self._update_candidate_embedding_status(candidate_id, False, "No content for embedding")
-                return False
+                # Pass empty fields list and 0 length on failure
+                await self._update_candidate_embedding_status(candidate_id, False, "No content for embedding", [], 0)
+                return False # Indicate failure
 
             embedding = await self.openai_service.generate_embedding(candidate_text)
 
-            success = await self._update_candidate_embedding_status(candidate_id, True, None, embedding)
-            if success:
-                logger.info(f"✅ (Agent) Successfully generated and stored embedding for {candidate_id}")
-                return True
-            else:
-                logger.error(f"(Agent) Failed attempt to store embedding for {candidate_id}.")
-                return False
+            # Update status, passing the embedding vector AND metadata fields
+            success = await self._update_candidate_embedding_status(candidate_id, True, None, fields_included, text_length, embedding)
 
+            if success:
+                 logger.info(f"✅ (Agent) Successfully generated and stored embedding for {candidate_id}")
+                 return True
+            else:
+                 logger.error(f"(Agent) Failed attempt to store embedding for {candidate_id}.")
+                 # Try to update status with failure details, pass metadata that was *attempted*
+                 await self._update_candidate_embedding_status(candidate_id, False, "Failed to store embedding", fields_included, text_length)
+                 return False # Indicate failure
+            
         except Exception as e:
             error_msg = f"Error generating/storing embedding for candidate {candidate_id}: {str(e)}"
             logger.error(f"(Agent) {error_msg}")
-            await self._update_candidate_embedding_status(candidate_id, False, error_msg)
-            return False
+            # Try to update status with error, pass empty fields and 0 length
+            await self._update_candidate_embedding_status(candidate_id, False, error_msg, [], 0)
+            return False # Indicate failure
 
-    async def _update_candidate_embedding_status(self, candidate_id: str, generated: bool, error_msg: Optional[str], embedding: Optional[List[float]] = None):
-        """ Helper to update embedding status and optionally the embedding vector. """
+    async def _update_candidate_embedding_status(self, 
+                                                 candidate_id: str, 
+                                                 generated: bool, 
+                                                 error_msg: Optional[str], 
+                                                 fields_included: List[str], # New param
+                                                 text_length: int, # New param
+                                                 embedding: Optional[List[float]] = None):
+        """ Helper to update embedding status and optionally the embedding vector and metadata. """
         try:
             fetch_resp = await self.supabase.table('candidates_dev').select('profile_json').eq('id', candidate_id).single().execute()
             if not fetch_resp.data:
@@ -511,25 +572,44 @@ class BrainAgent:
             profile_json = fetch_resp.data.get('profile_json', {})
             if 'processing_status' not in profile_json: profile_json['processing_status'] = {}
 
+            now_iso = datetime.utcnow().isoformat()
+
+            # Update processing status flags
             profile_json['processing_status']['embedding_generated'] = generated
             profile_json['processing_status']['embedding_error'] = error_msg[:200] if error_msg else None
-            profile_json['processing_status']['last_updated'] = datetime.utcnow().isoformat()
+            profile_json['processing_status']['last_updated'] = now_iso
 
+            # Create/Update embedding_metadata
+            embedding_metadata = {
+                 'last_updated': now_iso,
+                 'fields_included': fields_included,
+                 'text_length': text_length,
+                 'model_used': getattr(self.openai_service, 'embedding_model_name', 'unknown') # Safely get model name
+            }
+            profile_json['embedding_metadata'] = embedding_metadata
+
+            # Prepare payload for DB update
             update_payload = {
                 'profile_json': profile_json,
-                'updated_at': datetime.utcnow().isoformat()
+                'updated_at': now_iso
             }
+            # Include embedding vector only on successful generation
             if generated and embedding:
                 update_payload['embedding'] = embedding
+            
+            # Ensure embedding field is set to NULL if generation failed
+            # This prevents keeping a stale embedding if regeneration fails
+            if not generated:
+                 update_payload['embedding'] = None
 
             update_resp = await self.supabase.table('candidates_dev').update(update_payload).eq('id', candidate_id).execute()
 
             if not update_resp.data:
-                logger.error(f"(Agent) Failed DB update for embedding status for {candidate_id}. Response: {update_resp}")
-                return False
+                 logger.error(f"(Agent) Failed DB update for embedding status/metadata for {candidate_id}. Response: {update_resp}")
+                 return False
             return True
         except Exception as e:
-            logger.error(f"(Agent) Exception during embedding status update for {candidate_id}: {e}")
+            logger.error(f"(Agent) Exception during embedding status/metadata update for {candidate_id}: {e}")
             return False
 
     # --- Other Helper Methods ---
@@ -544,8 +624,8 @@ class BrainAgent:
                 profile_json['processing_status']['last_updated'] = datetime.utcnow().isoformat()
                 await self.supabase.table('candidates_dev').update({
                     'profile_json': profile_json,
-                    'updated_at': datetime.utcnow().isoformat()
-                }).eq('id', candidate_id).execute()
+                'updated_at': datetime.utcnow().isoformat()
+            }).eq('id', candidate_id).execute()
         except Exception as e:
             logger.error(f"Failed to update candidate status to '{status}' for {candidate_id}: {e}")
 
@@ -583,7 +663,7 @@ class BrainAgent:
         if process_id in self.state["transactions"]:
             self.state["transactions"][process_id]["steps"].append({
                 "step": step,
-                "status": status,
+            "status": status,
                 "timestamp": datetime.utcnow().isoformat(),
                 "data": data
             })

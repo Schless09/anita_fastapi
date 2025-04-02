@@ -61,7 +61,7 @@ class CandidateService:
                     linkedin_url = f"https://{linkedin_url}"
             else:
                 linkedin_url = None
-
+            
             # Basic profile structure
             profile_json = {
                 'skills': candidate_data.get('skills', []),
@@ -95,7 +95,7 @@ class CandidateService:
                     logger.error(f"Error extracting resume text during initial create for {email}: {str(e)}")
                     profile_json['processing_status']['resume_found'] = False
                 profile_json['resume_text'] = resume_text # Store extracted text (or empty string)
-
+            
             # Prepare data for DB insert
             insert_data = {
                 'id': candidate_id,
@@ -165,7 +165,7 @@ class CandidateService:
                 try: os.unlink(temp_file_path)
                 except OSError: pass
             return ""  # Return empty string on failure
-
+    
     def _deep_merge(self, dict1: Dict, dict2: Dict) -> Dict:
         """
         Deep merge two dictionaries. If keys exist in both, dict2 values take precedence.
