@@ -189,3 +189,90 @@ class JobResponse(JobBase):
 
     class Config:
         from_attributes = True 
+
+# New model definition mirroring the database schema
+class JobDBModel(BaseModel):
+    id: Optional[int] = None # DB generates this, so Optional for creation/input
+    ai_ml_exp_focus: List[str]
+    ai_ml_exp_required: str
+    autonomy_level_required: str
+    career_trajectory: str
+    ci_cd_tools: List[str]
+    coding_proficiency: str
+    collaboration_tools: List[str]
+    company_culture: str
+    company_founded: str # Assuming TEXT stores year or similar text, adjust if date/int
+    company_funding_investors: List[str]
+    company_funding_most_recent: Optional[int] = None
+    company_funding_total: Optional[int] = None
+    company_growth_story: str
+    company_industry_vertical: List[str]
+    company_mission: str
+    company_name: str
+    company_scaling_plans: str
+    company_stage: str
+    company_target_market: List[str]
+    company_team_size: int
+    company_tech_innovation: str
+    company_url: str
+    company_vision: str
+    culture_fit: List[str]
+    deal_breakers: List[str]
+    decision_makers: List[str]
+    disqualifying_traits: List[str]
+    domain_expertise: List[str]
+    education_advanced_degree: str
+    education_required: str
+    equity_range_max: str # Kept as str to match DB `text` type
+    equity_range_min: str # Kept as str to match DB `text` type
+    expected_deliverables: List[str]
+    growth_mindset: str
+    hiring_urgency: str
+    ideal_candidate_profile: str
+    ideal_companies: List[str]
+    independent_work: str # Assuming maps to autonomy level text
+    independent_work_capacity: str # Assuming maps to autonomy level text
+    infrastructure_experience: List[str]
+    interview_process_steps: List[str]
+    job_title: str
+    job_url: str
+    key_responsibilities: List[str]
+    languages: List[str]
+    leadership_required: bool
+    location_city: List[str]
+    location_country: str
+    location_state: List[str]
+    minimum_years_of_experience: int
+    positions_available: int
+    prior_startup_experience: bool
+    product_description: str
+    product_dev_methodology: List[str]
+    product_stage: str
+    product_technical_challenges: List[str]
+    recruiter_pitch_points: List[str]
+    reporting_structure: str
+    role_category: List[str]
+    role_status: str
+    salary_range_max: Optional[int] = None # Assuming int, adjust if needed based on DB values
+    salary_range_min: Optional[int] = None # Assuming int, adjust if needed based on DB values
+    scope_of_impact: List[str]
+    seniority: str
+    skills_must_have: List[str]
+    skills_preferred: List[str]
+    startup_exp: str
+    startup_mindset: List[str]
+    system_design_expectation: str
+    tech_stack_must_haves: List[str]
+    tech_stack_nice_to_haves: List[str]
+    tech_stack_tags: List[str]
+    team_roles: List[str]
+    team_structure: str
+    version_control: List[str]
+    visa_sponsorship: bool
+    work_arrangement: List[str]
+    work_authorization: str
+    embedding: Optional[List[float]] = None # Assuming vector is stored as list of floats
+    embedding_metadata: Optional[Dict[str, Any]] = None
+
+    class Config:
+        from_attributes = True # or orm_mode = True for older Pydantic 

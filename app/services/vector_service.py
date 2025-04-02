@@ -78,35 +78,40 @@ class VectorService:
             text_parts = []
             
             # Add title and company
-            if job_data.get('title'):
-                text_parts.append(f"Title: {job_data['title']}")
-            if job_data.get('company'):
-                text_parts.append(f"Company: {job_data['company']}")
+            if job_data.get('job_title'):
+                text_parts.append(f"Title: {job_data['job_title']}")
+            if job_data.get('company_name'):
+                text_parts.append(f"Company: {job_data['company_name']}")
             
-            # Add description
-            if job_data.get('description'):
-                text_parts.append(f"Description: {job_data['description']}")
+            # Add key job details
+            if job_data.get('key_responsibilities'):
+                text_parts.append(f"Responsibilities: {', '.join(job_data['key_responsibilities'])}")
+            if job_data.get('skills_must_have'):
+                text_parts.append(f"Required Skills: {', '.join(job_data['skills_must_have'])}")
+            if job_data.get('skills_preferred'):
+                text_parts.append(f"Preferred Skills: {', '.join(job_data['skills_preferred'])}")
             
-            # Add requirements
-            if job_data.get('requirements'):
-                text_parts.append(f"Requirements: {', '.join(job_data['requirements'])}")
+            # Add company details
+            if job_data.get('company_mission'):
+                text_parts.append(f"Company Mission: {job_data['company_mission']}")
+            if job_data.get('company_vision'):
+                text_parts.append(f"Company Vision: {job_data['company_vision']}")
+            if job_data.get('company_culture'):
+                text_parts.append(f"Company Culture: {job_data['company_culture']}")
             
-            # Add location and employment type
-            if job_data.get('location'):
-                text_parts.append(f"Location: {job_data['location']}")
-            if job_data.get('employment_type'):
-                text_parts.append(f"Employment Type: {job_data['employment_type']}")
+            # Add role details
+            if job_data.get('role_category'):
+                text_parts.append(f"Role Categories: {', '.join(job_data['role_category'])}")
+            if job_data.get('seniority'):
+                text_parts.append(f"Seniority: {job_data['seniority']}")
+            if job_data.get('scope_of_impact'):
+                text_parts.append(f"Scope of Impact: {', '.join(job_data['scope_of_impact'])}")
             
-            # Add salary range if available
-            if job_data.get('salary_range'):
-                salary = job_data['salary_range']
-                if isinstance(salary, dict):
-                    if salary.get('min') and salary.get('max'):
-                        text_parts.append(f"Salary Range: ${salary['min']} - ${salary['max']}")
-                    elif salary.get('min'):
-                        text_parts.append(f"Minimum Salary: ${salary['min']}")
-                    elif salary.get('max'):
-                        text_parts.append(f"Maximum Salary: ${salary['max']}")
+            # Add technical details
+            if job_data.get('tech_stack_must_haves'):
+                text_parts.append(f"Required Tech Stack: {', '.join(job_data['tech_stack_must_haves'])}")
+            if job_data.get('tech_stack_nice_to_haves'):
+                text_parts.append(f"Preferred Tech Stack: {', '.join(job_data['tech_stack_nice_to_haves'])}")
             
             # Generate embedding from combined text
             text = " | ".join(text_parts)
@@ -117,36 +122,25 @@ class VectorService:
             
             if not response.data:
                 # Create new job
-                await self.supabase.table(self.jobs_table).insert({
-                    "id": job_id,
-                    "title": job_data.get("title", ""),
-                    "company": job_data.get("company", ""),
-                    "description": job_data.get("description", ""),
-                    "requirements": job_data.get("requirements", []),
-                    "location": job_data.get("location", ""),
-                    "employment_type": job_data.get("employment_type", ""),
-                    "salary_range": job_data.get("salary_range", {}),
-                    "profile_json": job_data,
+                insert_data = {
+                    **job_data,
                     "embedding": vector,
-                    "embedding_metadata": job_data.get("embedding_metadata", {}),
-                    "created_at": datetime.utcnow().isoformat(),
-                    "updated_at": datetime.utcnow().isoformat()
-                }).execute()
+                    "embedding_metadata": self._flatten_metadata(job_data),
+                }
+                insert_data_filtered = {k: v for k, v in insert_data.items() if v is not None}
+                await self.supabase.table(self.jobs_table).insert(insert_data_filtered).execute()
             else:
                 # Update existing job
-                await self.supabase.table(self.jobs_table).update({
-                    "title": job_data.get("title", ""),
-                    "company": job_data.get("company", ""),
-                    "description": job_data.get("description", ""),
-                    "requirements": job_data.get("requirements", []),
-                    "location": job_data.get("location", ""),
-                    "employment_type": job_data.get("employment_type", ""),
-                    "salary_range": job_data.get("salary_range", {}),
-                    "profile_json": job_data,
+                # Exclude 'id' from the update payload as it's GENERATED ALWAYS
+                update_payload = {k: v for k, v in job_data.items() if k != 'id'} # Create payload without id
+                update_data = {
+                    **update_payload, # Spread the filtered job data
                     "embedding": vector,
-                    "embedding_metadata": job_data.get("embedding_metadata", {}),
-                    "updated_at": datetime.utcnow().isoformat()
-                }).eq("id", job_id).execute()
+                    "embedding_metadata": self._flatten_metadata(job_data), # Metadata can still use original job_data
+                }
+                # Filter out None values to avoid overwriting existing fields with NULL
+                update_data_filtered = {k: v for k, v in update_data.items() if v is not None}
+                await self.supabase.table(self.jobs_table).update(update_data_filtered).eq("id", job_id).execute()
             
             logger.info(f"Successfully stored embedding for job {job_id}")
             return job_id
@@ -219,11 +213,20 @@ class VectorService:
             for item in rpc_response.data:
                 results.append({
                     "id": item.get("id"),
-                    "title": item.get("title"),
-                    "company": item.get("company"),
-                    "description": item.get("description"),
-                    "similarity": item.get("similarity", 0),
-                    "profile_json": item.get("profile_json", {})
+                    "job_title": item.get("job_title"),
+                    "company_name": item.get("company_name"),
+                    "key_responsibilities": item.get("key_responsibilities", []),
+                    "skills_must_have": item.get("skills_must_have", []),
+                    "skills_preferred": item.get("skills_preferred", []),
+                    "tech_stack_must_haves": item.get("tech_stack_must_haves", []),
+                    "tech_stack_nice_to_haves": item.get("tech_stack_nice_to_haves", []),
+                    "role_category": item.get("role_category", []),
+                    "seniority": item.get("seniority"),
+                    "scope_of_impact": item.get("scope_of_impact", []),
+                    "company_mission": item.get("company_mission"),
+                    "company_vision": item.get("company_vision"),
+                    "company_culture": item.get("company_culture"),
+                    "similarity": item.get("similarity", 0)
                 })
             
             return results

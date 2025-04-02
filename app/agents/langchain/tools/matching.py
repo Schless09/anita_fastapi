@@ -36,7 +36,7 @@ class MatchingTool(BaseTool):
         )
         
         # Initialize vector store
-        self.vector_store = vector_store or VectorStoreTool()
+        self.vector_store = vector_store or VectorStoreTool.get_instance()
 
     def _run(self, operation: str, **kwargs) -> Dict[str, Any]:
         """Run matching operations."""
@@ -63,7 +63,7 @@ class MatchingTool(BaseTool):
         """Async version of matching operations."""
         return self._run(operation, **kwargs)
 
-    def _match_job_candidates(
+    async def _match_job_candidates(
         self,
         job_id: str,
         top_k: int = 5,
@@ -72,7 +72,7 @@ class MatchingTool(BaseTool):
         """Find matching candidates for a job."""
         try:
             # Get job details
-            job_result = self.vector_store._run(
+            job_result = await self.vector_store._arun(
                 "search_jobs",
                 query=f"job_id:{job_id}",
                 top_k=1
@@ -87,7 +87,7 @@ class MatchingTool(BaseTool):
             job_data = job_result["results"][0]
             
             # Find matching candidates
-            candidates_result = self.vector_store._run(
+            candidates_result = await self.vector_store._arun(
                 "search_candidates",
                 query=job_data["content"],
                 top_k=top_k
@@ -100,7 +100,7 @@ class MatchingTool(BaseTool):
             matches = []
             for candidate in candidates_result["results"]:
                 # Analyze match using LLM
-                analysis = self._analyze_match(
+                analysis = await self._analyze_match(
                     job_data["content"],
                     candidate["content"]
                 )
@@ -194,7 +194,7 @@ class MatchingTool(BaseTool):
                 "error": str(e)
             }
 
-    def _analyze_match(
+    async def _analyze_match(
         self,
         job_content: str,
         candidate_content: str
@@ -219,7 +219,7 @@ class MatchingTool(BaseTool):
             
             Return the analysis in JSON format."""
             
-            response = self.llm.invoke(prompt)
+            response = await self.llm.ainvoke(prompt)
             
             # Parse the response
             analysis = parse_llm_json_response(response.content)

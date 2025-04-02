@@ -1,0 +1,15 @@
+INFO:     Will watch for changes in these directories: ['/Users/harrisonfranke/Desktop/repos/anita_fastapi']
+INFO:     Uvicorn running on http://0.0.0.0:8000 (Press CTRL+C to quit)
+INFO:     Started reloader process [46608] using StatReload
+2025-04-02 11:28:58 - app - INFO - [main.py:71] - 🚀 Starting Anita AI with debug logging enabled
+2025-04-02 11:28:58 - app - DEBUG - [main.py:72] - Debug logging is enabled
+2025-04-02 11:28:59 - app - INFO - [main.py:218] - Using Supabase for vector storage...
+2025-04-02 11:28:59 - app - INFO - [main.py:105] - Initializing services...
+2025-04-02 11:28:59 - app.agents.langchain.tools.vector_store - INFO - [vector_store.py:76] - Successfully connected to Supabase
+2025-04-02 11:28:59 - app.agents.brain_agent - INFO - [brain_agent.py:61] - Successfully connected to Supabase
+2025-04-02 11:28:59 - app - INFO - [main.py:117] - ✅ Services initialized successfully
+2025-04-02 11:29:05 - app.routes.webhooks - INFO - [webhooks.py:34] - Received Supabase job insertion webhook.
+2025-04-02 11:29:05 - app.routes.webhooks - INFO - [webhooks.py:55] - Processing webhook for newly inserted job ID: 46
+2025-04-02 11:29:05 - app.services.vector_service - INFO - [vector_service.py:75] - Generating embedding for job 46
+2025-04-02 11:29:06 - app.services.vector_service - INFO - [vector_service.py:145] - Successfully stored embedding for job 46
+2025-04-02 11:29:06 - app.routes.webhooks - INFO - [webhooks.py:63] - Successfully processed webhook and updated job ID: 46

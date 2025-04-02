@@ -110,9 +110,28 @@ class VectorStoreTool(BaseTool):
 
     async def _arun(self, operation: str, **kwargs) -> Dict[str, Any]:
         """Async version of vector store operations."""
-        return self._run(operation, **kwargs)
+        try:
+            if operation == "store_job":
+                return await self._store_job(**kwargs)
+            elif operation == "store_candidate":
+                return await self._store_candidate(**kwargs)
+            elif operation == "search_jobs":
+                return await self._search_jobs(**kwargs)
+            elif operation == "search_candidates":
+                return await self._search_candidates(**kwargs)
+            else:
+                return {
+                    "status": "error",
+                    "error": f"Unknown operation: {operation}"
+                }
+                
+        except Exception as e:
+            return {
+                "status": "error",
+                "error": str(e)
+            }
 
-    def _store_job(self, job_data: Dict[str, Any]) -> Dict[str, Any]:
+    async def _store_job(self, job_data: Dict[str, Any]) -> Dict[str, Any]:
         """Store a job in the vector store."""
         try:
             # Generate embedding and store in Supabase
@@ -123,18 +142,12 @@ class VectorStoreTool(BaseTool):
                     "error": "Job ID is required"
                 }
             
-            # Since this is a synchronous method, we can't use async directly
-            # We'll return a message that the job is being processed
-            # The actual storage will happen asynchronously
-            
-            # Create a task to store the job
-            import asyncio
-            loop = asyncio.get_event_loop()
-            asyncio.ensure_future(self.vector_service.upsert_job(job_id, job_data))
+            # Store the job
+            await self.vector_service.upsert_job(job_id, job_data)
             
             return {
                 "status": "success",
-                "message": f"Job {job_id} is being processed"
+                "message": f"Job {job_id} stored successfully"
             }
             
         except Exception as e:
@@ -143,7 +156,7 @@ class VectorStoreTool(BaseTool):
                 "error": str(e)
             }
 
-    def _store_candidate(self, candidate_data: Dict[str, Any]) -> Dict[str, Any]:
+    async def _store_candidate(self, candidate_data: Dict[str, Any]) -> Dict[str, Any]:
         """Store a candidate in the vector store."""
         try:
             # Generate embedding and store in Supabase
@@ -154,18 +167,12 @@ class VectorStoreTool(BaseTool):
                     "error": "Candidate ID is required"
                 }
             
-            # Since this is a synchronous method, we can't use async directly
-            # We'll return a message that the candidate is being processed
-            # The actual storage will happen asynchronously
-            
-            # Create a task to store the candidate
-            import asyncio
-            loop = asyncio.get_event_loop()
-            asyncio.ensure_future(self.vector_service.upsert_candidate(candidate_id, candidate_data))
+            # Store the candidate
+            await self.vector_service.upsert_candidate(candidate_id, candidate_data)
             
             return {
                 "status": "success",
-                "message": f"Candidate {candidate_id} is being processed"
+                "message": f"Candidate {candidate_id} stored successfully"
             }
             
         except Exception as e:
@@ -174,16 +181,14 @@ class VectorStoreTool(BaseTool):
                 "error": str(e)
             }
 
-    def _search_jobs(self, query: str, top_k: int = 5) -> Dict[str, Any]:
+    async def _search_jobs(self, query: str, top_k: int = 5) -> Dict[str, Any]:
         """Search for jobs using semantic similarity."""
         try:
             # Generate embedding for query
-            query_embedding = self.embeddings.embed_query(query)
+            query_embedding = await self.embeddings.aembed_query(query)
             
             # Query jobs using embedding
-            import asyncio
-            loop = asyncio.get_event_loop()
-            results = loop.run_until_complete(self.vector_service.query_jobs(query_embedding, top_k))
+            results = await self.vector_service.query_jobs(query_embedding, top_k)
             
             # Format results
             formatted_results = [
@@ -208,16 +213,14 @@ class VectorStoreTool(BaseTool):
                 "error": str(e)
             }
 
-    def _search_candidates(self, query: str, top_k: int = 5) -> Dict[str, Any]:
+    async def _search_candidates(self, query: str, top_k: int = 5) -> Dict[str, Any]:
         """Search for candidates using semantic similarity."""
         try:
             # Generate embedding for query
-            query_embedding = self.embeddings.embed_query(query)
+            query_embedding = await self.embeddings.aembed_query(query)
             
             # Query candidates using embedding
-            import asyncio
-            loop = asyncio.get_event_loop()
-            results = loop.run_until_complete(self.vector_service.query_candidates(query_embedding, top_k))
+            results = await self.vector_service.query_candidates(query_embedding, top_k)
             
             # Format results
             formatted_results = [

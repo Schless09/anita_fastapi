@@ -37,15 +37,13 @@ logger = logging.getLogger(__name__)
 class BrainAgent:
     """Orchestrator agent that coordinates other specialized agents."""
     
-    def __init__(self, vector_store):
-        """Initialize the brain agent with a vector store."""
-        self.vector_store = vector_store
+    def __init__(self):
+        """Initialize the brain agent."""
         self._candidate_intake_agent = None
         self._job_matching_agent = None
         self._interview_agent = None
         self._follow_up_agent = None
         self.candidate_service = CandidateService()  # Initialize candidate service
-        self.matching_agent = JobMatchingAgent()  # Initialize matching agent without vector_store
         self.state = {
             "metrics": {
                 "matches_found": 0,
@@ -76,21 +74,21 @@ class BrainAgent:
     def job_matching_agent(self):
         """Lazy load the job matching agent."""
         if self._job_matching_agent is None:
-            self._job_matching_agent = JobMatchingAgent(vector_store=self.vector_store)
+            self._job_matching_agent = JobMatchingAgent()
         return self._job_matching_agent
         
     @property
     def interview_agent(self):
         """Lazy load the interview agent."""
         if self._interview_agent is None:
-            self._interview_agent = InterviewAgent(vector_store=self.vector_store)
+            self._interview_agent = InterviewAgent()
         return self._interview_agent
         
     @property
     def follow_up_agent(self):
         """Lazy load the follow up agent."""
         if self._follow_up_agent is None:
-            self._follow_up_agent = FollowUpAgent(vector_store=self.vector_store)
+            self._follow_up_agent = FollowUpAgent()
         return self._follow_up_agent
     
     async def handle_candidate_submission(self, candidate_data: CandidateCreate) -> Dict[str, Any]:
@@ -369,7 +367,7 @@ class BrainAgent:
                 raise ValueError(f"No profile found for candidate {candidate_id}")
             
             # Use matching agent to find potential matches
-            matches = await self.matching_agent.find_matches(profile)
+            matches = await self.job_matching_agent.find_matches(profile)
             
             # Store matches in the candidate's profile
             profile['matches'] = matches
@@ -397,3 +395,38 @@ class BrainAgent:
                 "status": "error",
                 "error": str(e)
             }
+
+    def _start_transaction(self, process_id: str, transaction_type: str) -> None:
+        """Start a new transaction."""
+        logger.info(f"Started {transaction_type} transaction: {process_id}")
+        self.state["transactions"][process_id] = {
+            "type": transaction_type,
+            "status": "started",
+            "steps": {},
+            "started_at": datetime.utcnow().isoformat()
+        }
+
+    def _update_transaction(self, process_id: str, step: str, status: str, data: Optional[Dict[str, Any]] = None) -> None:
+        """Update a transaction step."""
+        if process_id not in self.state["transactions"]:
+            logger.warning(f"Transaction {process_id} not found")
+            return
+            
+        logger.info(f"Updated transaction {process_id} step {step}: {status}")
+        self.state["transactions"][process_id]["steps"][step] = {
+            "status": status,
+            "data": data,
+            "updated_at": datetime.utcnow().isoformat()
+        }
+
+    def _end_transaction(self, process_id: str, status: str) -> None:
+        """End a transaction."""
+        if process_id not in self.state["transactions"]:
+            logger.warning(f"Transaction {process_id} not found")
+            return
+            
+        logger.info(f"Ended transaction {process_id}: {status}")
+        self.state["transactions"][process_id].update({
+            "status": status,
+            "ended_at": datetime.utcnow().isoformat()
+        })

@@ -54,11 +54,20 @@ $$;
 -- Create function to match jobs based on vector similarity
 CREATE OR REPLACE FUNCTION match_jobs(query_embedding vector, match_threshold float, match_count int)
 RETURNS TABLE(
-    id uuid,
-    title text,
-    company text,
-    description text,
-    profile_json jsonb,
+    id bigint,
+    job_title text,
+    company_name text,
+    key_responsibilities text[],
+    skills_must_have text[],
+    skills_preferred text[],
+    tech_stack_must_haves text[],
+    tech_stack_nice_to_haves text[],
+    role_category text[],
+    seniority text,
+    scope_of_impact text[],
+    company_mission text,
+    company_vision text,
+    company_culture text,
     similarity float
 )
 LANGUAGE plpgsql
@@ -69,8 +78,17 @@ BEGIN
         j.id,
         j.title,
         j.company,
-        j.description,
-        j.profile_json,
+        j.key_responsibilities,
+        j.skills_must_have,
+        j.skills_preferred,
+        j.tech_stack_must_haves,
+        j.tech_stack_nice_to_haves,
+        j.role_category,
+        j.seniority,
+        j.scope_of_impact,
+        j.company_mission,
+        j.company_vision,
+        j.company_culture,
         1 - (j.embedding <=> query_embedding) as similarity
     FROM
         jobs_dev j

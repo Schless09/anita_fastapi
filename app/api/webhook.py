@@ -22,7 +22,7 @@ router = APIRouter()
 candidate_service = CandidateService()
 settings = get_settings()
 vector_service = VectorService()
-brain_agent = BrainAgent(vector_store=vector_service)
+brain_agent = BrainAgent()
 
 # Initialize Retell client
 retell = Retell(api_key=str(settings.retell_api_key))

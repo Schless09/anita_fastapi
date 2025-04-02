@@ -57,6 +57,8 @@ from app.services.openai_service import OpenAIService
 from app.services.vector_service import VectorService
 from app.services.matching_service import MatchingService
 from app.routes.jobs import router as jobs_router
+# Import the new webhook router
+from app.routes.webhooks import router as webhook_jobs_router
 
 # Load environment variables first
 load_dotenv()
@@ -109,7 +111,7 @@ async def startup_event():
         
         # Initialize brain agent
         from app.agents.brain_agent import BrainAgent
-        brain_agent_instance = BrainAgent(vector_store=vector_store)
+        brain_agent_instance = BrainAgent()
         await brain_agent_instance._initialize_async()
         
         logger.info("✅ Services initialized successfully")
@@ -135,6 +137,8 @@ from app.api.webhook import router as webhook_router
 # Include routers
 app.include_router(webhook_router, prefix="/webhook", tags=["webhook"])
 app.include_router(jobs_router, tags=["jobs"])
+# Include the new webhook router
+app.include_router(webhook_jobs_router, prefix="/api/v1", tags=["Webhooks"])
 
 # Dependencies
 async def get_brain_agent():
@@ -197,7 +201,6 @@ class RetellCallStatus(str, Enum):
     ERROR_UNKNOWN = "error_unknown"
 
 class JobMatchRequest(BaseModel):
-    job_id: str
     top_k: Optional[int] = Field(default=5, gt=0, le=100)
 
 class ScopeOfImpact(str, Enum):

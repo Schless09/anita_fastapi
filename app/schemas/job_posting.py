@@ -77,13 +77,6 @@ class RoleStatus(str, Enum):
     INACTIVE = "Inactive"
     CLOSED = "Closed"
 
-class TechBreadth(str, Enum):
-    FRONTEND = "Frontend"
-    BACKEND = "Backend"
-    FULL_STACK = "Full-Stack"
-    INFRA = "Infra"
-    AI_ML = "AI/ML"
-
 class AIMLExpRequired(str, Enum):
     REQUIRED = "Required"
     PREFERRED = "Preferred"
@@ -132,8 +125,8 @@ class JobPosting(BaseModel):
     # Compensation
     salary_range_min: int
     salary_range_max: int
-    equity_range_min: Union[int, str] = "n/a"
-    equity_range_max: Union[int, str] = "n/a"
+    equity_range_min: Union[float, str] = "n/a"
+    equity_range_max: Union[float, str] = "n/a"
     
     # Team Structure
     reporting_structure: str
@@ -142,12 +135,10 @@ class JobPosting(BaseModel):
     
     # Role Details
     role_status: RoleStatus
-    role_category: RoleCategory
+    role_category: List[RoleCategory]
     tech_stack_must_haves: List[str]
     tech_stack_nice_to_haves: List[str]
     tech_stack_tags: List[str]
-    tech_breadth: TechBreadth
-    tech_breadth_requirement: TechBreadth
     minimum_years_of_experience: int
     domain_expertise: List[str]
     ai_ml_exp_required: AIMLExpRequired
@@ -166,7 +157,6 @@ class JobPosting(BaseModel):
     education_advanced_degree: EducationAdvancedDegree
     prior_startup_experience: bool
     startup_exp: str
-    advancement_history_required: bool
     career_trajectory: str
     independent_work_capacity: AutonomyLevel
     independent_work: AutonomyLevel
@@ -180,8 +170,6 @@ class JobPosting(BaseModel):
     product_stage: str
     product_dev_methodology: List[str]
     product_technical_challenges: List[str]
-    product_development_stage: str
-    product_development_methodology: List[str]
     
     # Role Responsibilities
     key_responsibilities: List[str]
@@ -202,9 +190,8 @@ class JobPosting(BaseModel):
     company_growth_story: str
     company_culture: str
     company_scaling_plans: str
-    company_mission_and_impact: str
     company_tech_innovation: str
-    company_industry_vertical: CompanyIndustryVertical
+    company_industry_vertical: List[CompanyIndustryVertical]
     company_target_market: List[TargetMarket]
     
     # Candidate Fit

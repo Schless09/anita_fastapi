@@ -14,7 +14,7 @@ class JobMatchingAgent(BaseAgent):
         super().__init__(model_name, temperature, memory)
         
         # Initialize tools
-        vector_store_tool = VectorStoreTool()  # Create a new VectorStoreTool instance
+        vector_store_tool = VectorStoreTool.get_instance()  # Use singleton instance
         self.tools = [
             vector_store_tool,
             MatchingTool(vector_store=vector_store_tool),
@@ -42,29 +42,44 @@ class JobMatchingAgent(BaseAgent):
     ) -> Dict[str, Any]:
         """Find matching candidates for a job."""
         try:
-            # Get job details
-            job_data = await self.run(f"Get job details for job_id: {job_id}")
-            
-            # Find matching candidates
-            matches = await self.run(
-                f"Find top {top_k} matching candidates for job: {job_data}"
+            # Get job details using vector store tool
+            job_result = await self.tools[0]._arun(
+                "search_jobs",
+                query=f"job_id:{job_id}",
+                top_k=1
             )
             
-            # Filter by minimum score
-            filtered_matches = [
-                match for match in matches
-                if match.get("score", 0) >= min_score
-            ]
+            if job_result["status"] != "success" or not job_result["results"]:
+                return {
+                    "status": "error",
+                    "error": "Job not found"
+                }
             
-            # Generate match report
+            job_data = job_result["results"][0]
+            
+            # Find matching candidates using matching tool
+            matches_result = await self.tools[1]._arun(
+                "match_job_candidates",
+                job_id=job_id,
+                top_k=top_k,
+                min_score=min_score
+            )
+            
+            if matches_result["status"] != "success":
+                return matches_result
+            
+            # Generate match report using LLM
             report = await self.run(
-                f"Generate detailed match report for job {job_id} with {len(filtered_matches)} matches"
+                f"Generate detailed match report for job {job_id} with {len(matches_result['matches'])} matches:\n"
+                f"Job: {job_data}\n"
+                f"Matches: {matches_result['matches']}"
             )
             
             return {
                 "status": "success",
                 "job_id": job_id,
-                "matches": filtered_matches,
+                "job_data": job_data,
+                "matches": matches_result["matches"],
                 "report": report
             }
             
