@@ -6,11 +6,12 @@ from app.services.candidate_service import CandidateService
 from app.config import get_settings
 import traceback
 from typing import Dict, Any
-from fastapi import Request, BackgroundTasks, APIRouter
+from fastapi import Request, BackgroundTasks, APIRouter, Depends
 from fastapi.responses import JSONResponse
 from app.agents.brain_agent import BrainAgent
 from app.services.vector_service import VectorService
 from retell import Retell
+from app.dependencies import get_brain_agent
 
 # Get logger
 logger = logging.getLogger(__name__)
@@ -22,7 +23,6 @@ router = APIRouter()
 candidate_service = CandidateService()
 settings = get_settings()
 vector_service = VectorService()
-brain_agent = BrainAgent()
 
 # Initialize Retell client
 retell = Retell(api_key=str(settings.retell_api_key))
@@ -60,7 +60,11 @@ def extract_call_data(body: Dict[str, Any]) -> Dict[str, Any]:
     return extracted
 
 @router.post("/retell")
-async def handler(request: Request, background_tasks: BackgroundTasks):
+async def handler(
+    request: Request,
+    background_tasks: BackgroundTasks,
+    brain_agent: BrainAgent = Depends(get_brain_agent)
+):
     """Handle Retell webhook events."""
     try:
         payload = await request.json()
@@ -87,7 +91,7 @@ async def handler(request: Request, background_tasks: BackgroundTasks):
         if event_type == 'call_analyzed':
             logger.info(f"🧠 Routing 'call_analyzed' event for candidate {candidate_id} to BrainAgent")
             background_tasks.add_task(
-                brain_agent.handle_call_processed, # Target the correct method
+                brain_agent.handle_call_processed,
                 candidate_id=candidate_id,
                 call_data=call_data
             )
