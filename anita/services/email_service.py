@@ -151,17 +151,20 @@ def send_job_match_email(recipient_email: str, candidate_name: str | None, job_m
         logger.warning(f"No job matches provided for {recipient_email}. Email not sent.")
         return False
 
-    subject = "🔥 Top Job Matches for You at Paraform!"
-    greeting = f"Hi {candidate_name}," if candidate_name else "Hi there,"
+    subject = "🔥 Top matches for you!"
+    
+    # Use only the first name in the greeting
+    first_name = candidate_name.split(' ')[0] if candidate_name else None
+    greeting = f"Hi {first_name}," if first_name else "Hi there,"
 
     # Construct email body
     plain_text_parts = [
         f"{greeting}\n",
-        "Great news! We found some roles at Paraform that look like a strong fit for your profile:\n"
+        "Great news! We found some roles that look like a strong fit for your profile:\n"
     ]
     html_parts = [
         f"<html><body><h2>{greeting}</h2>",
-        "<p>Great news! We found some roles at Paraform that look like a strong fit for your profile:</p><ul>"
+        "<p>Great news! We found some roles that look like a strong fit for your profile:</p><ul>"
     ]
 
     for match in job_matches:
@@ -170,10 +173,10 @@ def send_job_match_email(recipient_email: str, candidate_name: str | None, job_m
         plain_text_parts.append(f"- {title}: {url}")
         html_parts.append(f'<li><a href="{url}">{title}</a></li>')
 
-    plain_text_parts.append("\nWe encourage you to check them out!")
+    plain_text_parts.append("\nWe encourage you to check them out! Please reply to this email if you have any questions.")
     plain_text_parts.append("\n\nBest regards,\nAnita, Your personal career co-pilot")
 
-    html_parts.append("</ul><p>We encourage you to check them out!</p>")
+    html_parts.append("</ul><p>We encourage you to check them out! Please reply to this email if you have any questions.</p>")
     html_parts.append("<p>Best regards,<br>Anita, Your personal career co-pilot</p></body></html>")
 
     plain_text = "\n".join(plain_text_parts)

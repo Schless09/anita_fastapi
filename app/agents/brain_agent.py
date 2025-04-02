@@ -422,35 +422,41 @@ class BrainAgent:
                                             .select('job_id, match_score') \
                                             .eq('candidate_id', candidate_id) \
                                             .gt('match_score', MATCH_SCORE_THRESHOLD) \
+                                            .order('match_score', desc=True) \
                                             .execute()
 
-                                        high_scoring_job_ids = []
+                                        top_job_ids = []
                                         if matches_ids_resp.data:
-                                            high_scoring_job_ids = [match['job_id'] for match in matches_ids_resp.data if 'job_id' in match]
-                                            logger.info(f"Found {len(high_scoring_job_ids)} potential job IDs.")
+                                            # Sort again in Python just to be safe (API order might not be guaranteed?)
+                                            sorted_matches = sorted(matches_ids_resp.data, key=lambda x: x.get('match_score', 0), reverse=True)
+                                            # Take top 3 job IDs
+                                            top_job_ids = [match['job_id'] for match in sorted_matches[:3] if 'job_id' in match]
+                                            logger.info(f"Found {len(matches_ids_resp.data)} matches above threshold. Selected top {len(top_job_ids)} job IDs: {top_job_ids}")
                                         else:
                                              logger.info(f"No matches found above threshold {MATCH_SCORE_THRESHOLD} in initial query.")
 
 
                                         high_scoring_jobs = []
-                                        # Query 2: Get job details for the found IDs
-                                        if high_scoring_job_ids:
-                                            logger.info(f"Fetching details for job IDs: {high_scoring_job_ids}")
+                                        # Query 2: Get job details for the TOP job IDs
+                                        if top_job_ids: # Use the filtered list of IDs
+                                            logger.info(f"Fetching details for top job IDs: {top_job_ids}")
                                             jobs_details_resp = await self.supabase.table('jobs_dev') \
                                                 .select('id, job_title, job_url') \
-                                                .in_('id', high_scoring_job_ids) \
+                                                .in_('id', top_job_ids) \
                                                 .execute()
 
                                             if jobs_details_resp.data:
                                                 # Reconstruct the list with title and url
+                                                # We might want to preserve the original order from top_job_ids if Supabase doesn't
+                                                job_details_map = {job['id']: job for job in jobs_details_resp.data}
                                                 high_scoring_jobs = [
-                                                    {'job_title': job['job_title'], 'job_url': job['job_url']}
-                                                    for job in jobs_details_resp.data 
-                                                    if job.get('job_title') and job.get('job_url') # Ensure data exists
+                                                    {'job_title': job_details_map[job_id].get('job_title'), 'job_url': job_details_map[job_id].get('job_url')}
+                                                    for job_id in top_job_ids
+                                                    if job_id in job_details_map and job_details_map[job_id].get('job_title') and job_details_map[job_id].get('job_url')
                                                 ]
-                                                logger.info(f"Successfully fetched details for {len(high_scoring_jobs)} jobs.")
+                                                logger.info(f"Successfully fetched details for {len(high_scoring_jobs)} top jobs.")
                                             else:
-                                                logger.warning(f"Could not fetch details for job IDs: {high_scoring_job_ids}")
+                                                logger.warning(f"Could not fetch details for top job IDs: {top_job_ids}")
                                         
                                         # 3. Send Email if matches exist (logic remains the same)
                                         if high_scoring_jobs:
