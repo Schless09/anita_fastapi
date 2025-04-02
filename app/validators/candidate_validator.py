@@ -1,4 +1,4 @@
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional
 from pydantic import BaseModel, Field, validator
 from datetime import datetime
 
@@ -31,13 +31,15 @@ class ProfileJson(BaseModel):
 
 class CandidateData(BaseModel):
     full_name: str = Field(..., min_length=1)
-    email: str = Field(..., regex=r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$')
-    phone: str = Field(..., regex=r'^\+?1?\d{9,15}$')
-    linkedin_url: str = Field(..., regex=r'^https://(www\.)?linkedin\.com/in/[\w-]+/?$')
-    github_url: str = Field(..., regex=r'^https://(www\.)?github\.com/[\w-]+/?$')
+    email: str = Field(..., pattern=r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$')
+    phone: str = Field(..., pattern=r'^\+?1?\d{9,15}$')
+    linkedin_url: str = Field(..., pattern=r'^https://(www\.)?linkedin\.com/in/[\w-]+/?$')
+    github_url: str = Field(..., pattern=r'^https://(www\.)?github\.com/[\w-]+/?$')
     profile_json: ProfileJson
     created_at: datetime = Field(default_factory=datetime.utcnow)
     updated_at: datetime = Field(default_factory=datetime.utcnow)
+    resume: Optional[bytes] = None
+    resume_filename: Optional[str] = None
 
     @validator('created_at', 'updated_at')
     def datetime_to_iso(cls, v):

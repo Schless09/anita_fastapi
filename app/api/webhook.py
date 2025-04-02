@@ -63,44 +63,41 @@ def extract_call_data(body: Dict[str, Any]) -> Dict[str, Any]:
 async def handler(request: Request, background_tasks: BackgroundTasks):
     """Handle Retell webhook events."""
     try:
-        # Get the raw payload
         payload = await request.json()
         logger.info(f"📥 Received Retell webhook: {json.dumps(payload, indent=2)}")
-        
-        # Extract call data
+
         call_data = extract_call_data(payload)
         if not call_data:
             logger.error("❌ Failed to extract call data from webhook payload")
-            return {"status": "error", "message": "Invalid webhook payload"}
-            
-        # Get candidate_id from metadata
+            return JSONResponse(status_code=400, content={"status": "error", "message": "Invalid webhook payload"})
+
         candidate_id = call_data.get('metadata', {}).get('candidate_id')
         if not candidate_id:
             logger.error("❌ No candidate_id found in call metadata")
-            return {"status": "error", "message": "No candidate_id in metadata"}
-            
-        # Process based on event type and call status
+            return JSONResponse(status_code=400, content={"status": "error", "message": "No candidate_id in metadata"})
+
         event_type = call_data.get('event')
         call_status = call_data.get('call_status')
-        
+
         logger.info(f"📞 Processing webhook for candidate {candidate_id}")
         logger.info(f"Event type: {event_type}, Call status: {call_status}")
-        
-        # Initialize services
-        candidate_service = CandidateService()
-        
-        # Process call completion
-        if call_status == "ended":
-            logger.info(f"🎯 Processing completed call for candidate {candidate_id}")
-            # Process in background
+
+        # Process completed/ended calls via BrainAgent
+        # Check for 'ended' status OR specific events like 'call_analyzed' if available
+        if call_status == "ended": # Or potentially check event_type == 'call_analyzed' etc.
+            logger.info(f"🧠 Routing completed call for candidate {candidate_id} to BrainAgent")
+            # Ensure brain_agent is initialized (consider dependency injection for FastAPI)
             background_tasks.add_task(
-                candidate_service.process_call_completion,
-                call_data
+                brain_agent.handle_call_processed,
+                candidate_id=candidate_id,
+                call_data=call_data
             )
-            return {"status": "success", "message": "Call completion processing started"}
-            
-        return {"status": "success", "message": "Webhook processed"}
-        
+            return JSONResponse(content={"status": "success", "message": "Call processing delegated to BrainAgent"})
+
+        # Handle other events if necessary (e.g., call_started)
+        logger.info(f"Webhook event '{event_type}' with status '{call_status}' received but not explicitly handled.")
+        return JSONResponse(content={"status": "success", "message": "Webhook received, no action taken for this event/status"})
+
     except Exception as e:
-        logger.error(f"❌ Error processing webhook: {str(e)}")
-        return {"status": "error", "message": str(e)} 
+        logger.error(f"❌ Error processing webhook: {str(e)}\nTraceback: {traceback.format_exc()}")
+        return JSONResponse(status_code=500, content={"status": "error", "message": str(e)}) # Return 500 on unexpected errors 

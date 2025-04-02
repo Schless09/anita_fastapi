@@ -97,43 +97,50 @@ class CandidateIntakeAgent(BaseAgent):
         profile_creation_prompt = PromptTemplate(
             input_variables=["parsed_data", "analysis"],
             template="""Create a comprehensive candidate profile using the parsed data and analysis.
+            Pay close attention to extracting the full name, the title of the MOST RECENT job, and the company of the MOST RECENT job.
+            
             You MUST return a valid JSON object with the following structure:
             {{
-                "basic_info": {{
-                    "name": "string",
-                    "email": "string",
-                    "phone": "string",
-                    "location": "string"
+                \"basic_info\": {{
+                    \"full_name\": \"string (Candidate's full name)\",
+                    \"email\": \"string\",
+                    \"phone\": \"string\",
+                    \"location\": \"string\" 
                 }},
-                "professional_summary": "string",
-                "skills": ["string"],
-                "experience": [
+                \"current_role\": \"string (Title of the most recent job)\", 
+                \"current_company\": \"string (Company of the most recent job)\",
+                \"professional_summary\": \"string\",
+                \"skills\": [\"string\"],
+                \"experience\": [
                     {{
-                        "title": "string",
-                        "company": "string",
-                        "duration": "string",
-                        "description": "string"
+                        \"title\": \"string\",
+                        \"company\": \"string\",
+                        \"duration\": \"string\",
+                        \"description\": \"string\"
+                    }}
+                    # ... include all relevant experiences
+                ],
+                \"education\": [
+                    {{
+                        \"degree\": \"string\",
+                        \"institution\": \"string\",
+                        \"year\": \"string\"
                     }}
                 ],
-                "education": [
-                    {{
-                        "degree": "string",
-                        "institution": "string",
-                        "year": "string"
-                    }}
-                ],
-                "additional_qualifications": ["string"]
+                \"additional_qualifications\": [\"string\"],
+                \"years_of_experience\": number (Attempt to infer total years if possible, otherwise 0)
             }}
             
             Use the following data to create the profile:
             
-            Parsed Data:
+            Parsed Data (May contain structured info):
             {parsed_data}
             
-            Analysis:
+            Analysis (General assessment):
             {analysis}
             
-            Return ONLY the JSON object, no other text."""
+            Prioritize information found in Parsed Data if available. Ensure the most recent job details are correctly identified for current_role and current_company.
+            Return ONLY the JSON object, no other text or explanations."""
         )
         
         self.profile_creation_chain = profile_creation_prompt | self.llm
