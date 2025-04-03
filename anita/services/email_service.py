@@ -8,6 +8,9 @@ from googleapiclient.errors import HttpError
 from google.oauth2.credentials import Credentials
 from google.auth.transport.requests import Request
 import os
+import uuid
+from supabase._async.client import AsyncClient
+import traceback
 
 # Configuration
 SENDER_EMAIL = "anita@recruitcha.com" # Or load from config
@@ -132,15 +135,23 @@ def send_message(service, user_id, message):
         logger.error(f"An unexpected error occurred sending email: {e}")
         return None
 
-def send_job_match_email(recipient_email: str, candidate_name: str | None, job_matches: list[dict]):
+async def send_job_match_email(
+    recipient_email: str, 
+    candidate_name: str | None, 
+    job_matches: list[dict],
+    candidate_id: uuid.UUID,
+    supabase_client: AsyncClient
+):
     """
-    Sends an email to a candidate with their top job matches.
-
+    Sends an email to a candidate with their top job matches and logs the communication.
+    
     Args:
         recipient_email: The email address of the candidate.
         candidate_name: The name of the candidate (used for personalization).
         job_matches: A list of dictionaries, where each dict contains at least
                      'job_title' and 'job_url'.
+        candidate_id: The UUID of the candidate.
+        supabase_client: An initialized async Supabase client instance.
     """
     service = get_gmail_service()
     if not service:
@@ -184,12 +195,40 @@ def send_job_match_email(recipient_email: str, candidate_name: str | None, job_m
 
     message = create_message(SENDER_EMAIL, recipient_email, subject, plain_text, html_content)
 
-    if send_message(service, 'me', message):
+    sent_message_details = send_message(service, 'me', message)
+    if sent_message_details:
         logger.info(f"Successfully sent job match email to {recipient_email}")
+        
+        # Log the communication in the database
+        try:
+            communication_log = {
+                "candidates_id": str(candidate_id),  # Convert UUID to string
+                "type": "email",  # Must be one of: 'email', 'call', 'sms', 'iMessage'
+                "direction": "outbound",  # Must be either 'inbound' or 'outbound'
+                "subject": subject,
+                "content": plain_text,  # Store the plain text version
+                "metadata": {
+                    "message_id": sent_message_details.get('id'),
+                    "recipient": recipient_email,
+                    "html_content": html_content,
+                    "job_matches": job_matches
+                }
+                # timestamp will default to now() in DB
+            }
+            
+            log_resp = await supabase_client.table("communications_dev").insert(communication_log).execute()
+            if hasattr(log_resp, 'data') and log_resp.data:
+                logger.info(f"Successfully logged email communication for candidate {candidate_id}")
+            else:
+                logger.warning(f"Could not log email communication for candidate {candidate_id}. Response: {log_resp}")
+                
+        except Exception as log_err:
+            logger.error(f"Error logging email communication for candidate {candidate_id}: {log_err}")
+            logger.error(f"Traceback: {traceback.format_exc()}")
+        
         return True
-    else:
-        logger.error(f"Failed to send job match email to {recipient_email}")
-        return False
+    
+    return False
 
 # Example Usage (for testing purposes)
 if __name__ == '__main__':

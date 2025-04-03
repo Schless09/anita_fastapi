@@ -624,11 +624,13 @@ class BrainAgent:
                                         # 3. Send Email if matches exist (logic remains the same)
                                         if high_scoring_jobs:
                                             logger.info(f"Found {len(high_scoring_jobs)} jobs with details matching criteria for candidate {candidate_id}. Attempting to send email to {candidate_email}.")
-                                            # Run email sending in background? For now, run synchronously.
-                                            email_sent = send_job_match_email(
+                                            # Call async email function with await and pass needed args
+                                            email_sent = await send_job_match_email(
                                                 recipient_email=candidate_email, 
                                                 candidate_name=candidate_name, 
-                                                job_matches=high_scoring_jobs
+                                                job_matches=high_scoring_jobs,
+                                                candidate_id=candidate_id, # Pass candidate_id
+                                                supabase_client=self.supabase # Pass supabase client instance
                                             )
                                             if email_sent:
                                                 logger.info(f"Successfully queued/sent job match email for candidate {candidate_id}.")

@@ -19,4 +19,16 @@ async def get_vector_store():
             status_code=500, 
             detail="Vector store not initialized"
         )
-    return app.main.vector_store 
+    return app.main.vector_store
+
+async def get_supabase_client():
+    """Dependency function to get the initialized Supabase async client."""
+    # The client is initialized directly in brain_agent, let's get it from there
+    # This assumes brain_agent_instance is initialized and has a .supabase attribute
+    if app.main.brain_agent_instance is None or not hasattr(app.main.brain_agent_instance, 'supabase'):
+        raise HTTPException(
+            status_code=500, 
+            detail="Supabase client not available via initialized BrainAgent"
+        )
+    # Access the client instance stored within the initialized BrainAgent
+    return app.main.brain_agent_instance.supabase 
