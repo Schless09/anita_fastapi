@@ -236,66 +236,67 @@ async def send_job_match_email(
     
     return False
 
-async def send_missed_call_email(
-    recipient_email: str, 
-    candidate_name: str | None, 
-    candidate_id: uuid.UUID,
-    supabase_client: AsyncClient
-):
-    """Sends a 'Sorry I missed you' email if the call dropped early."""
-    settings = get_settings() # Get settings to access base URL
+async def send_missed_call_email(recipient_email: str, candidate_name: str, candidate_id: uuid.UUID, supabase_client):
+    """Sends an email when a call attempt was missed."""
+    thread_id = uuid.uuid4() # New thread for this communication
+    email_subject = "Checking In - Anita Call Attempt"
+    # Use a fallback name if candidate_name is not provided
+    greeting_name = candidate_name.split(' ')[0] if candidate_name else "there"
+
+    # Remove callback URL generation
+    # settings = get_settings()
+    # callback_url = f"{settings.webhook_base_url}/candidates/{candidate_id}/request-callback"
+
+    text_content = f"""
+Hi {greeting_name},
+
+This is Anita, your career advisor.
+
+I tried calling you just now but couldn't connect.
+
+Please reply to this email to let me know a better time to reach you.
+
+Best regards,
+Anita
+"""
+
+    html_content = f"""
+<html>
+<body>
+<p>Hi {greeting_name},</p>
+<p>This is Anita, your career advisor.</p>
+<p>I tried calling you just now but couldn't connect.</p>
+<p>Please reply to this email to let me know a better time to reach you.</p>
+<p>Best regards,<br>Anita</p>
+</body>
+</html>
+"""
+
+    communication_log = {
+        "candidates_id": str(candidate_id),
+        "thread_id": str(thread_id),
+        "type": "email",
+        "direction": "outgoing",
+        "status": "pending", # Will be updated after sending
+        "subject": email_subject,
+        "content": text_content, # Log text content
+        "html_content": html_content, # Log HTML content
+        "recipient_email": recipient_email,
+        "metadata": {"reason": "missed_call"} 
+    }
+
     service = get_gmail_service()
     if not service:
         logger.error("Failed to get Gmail service. Cannot send missed call email.")
         return False
 
-    # Construct the callback URL
-    # Ensure candidate_id is string for URL
-    callback_url = f"{settings.webhook_base_url}/candidates/{str(candidate_id)}/request-callback"
-    logger.info(f"Generated callback URL for {candidate_id}: {callback_url}")
-
-    subject = "Sorry I missed you!"
-    first_name = candidate_name.split(' ')[0] if candidate_name else None
-    greeting = f"Hi {first_name}," if first_name else "Hi there,"
-
-    plain_text = f"""
-{greeting}
-
-I tried calling but it seems I missed you.
-
-No worries! Click here to request a call back when you're available:
-{callback_url}
-
-Best regards,
-Anita, your personal career co-pilot
-""".strip()
-
-    html_content = f"""
-<html><body>
-<p>{greeting}</p>
-<p>I tried calling but it seems I missed you.</p>
-<p>No worries! <a href="{callback_url}">Click here to request a call back</a> when you're available.</p>
-<p>Best regards,<br>Anita, your personal career co-pilot</p>
-</body></html>
-""".strip()
-
-    message = create_message(SENDER_EMAIL, recipient_email, subject, plain_text, html_content)
+    message = create_message(SENDER_EMAIL, recipient_email, email_subject, text_content, html_content)
     sent_message_details = send_message(service, 'me', message)
 
     if sent_message_details:
         logger.info(f"Successfully sent missed call email to {recipient_email}")
         # Log communication
         try:
-            new_thread_id = str(uuid.uuid4())
-            communication_log = {
-                "candidates_id": str(candidate_id),
-                "thread_id": new_thread_id,
-                "type": "email",
-                "direction": "outbound",
-                "subject": subject,
-                "content": plain_text,
-                "metadata": {"message_id": sent_message_details.get('id'), "recipient": recipient_email}
-            }
             log_resp = await supabase_client.table("communications_dev").insert(communication_log).execute()
             if hasattr(log_resp, 'data') and log_resp.data:
                 logger.info(f"Successfully logged missed call email for {candidate_id}")
