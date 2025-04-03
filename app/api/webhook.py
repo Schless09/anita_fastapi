@@ -12,6 +12,8 @@ from app.agents.brain_agent import BrainAgent
 from app.services.vector_service import VectorService
 from retell import Retell
 from app.dependencies import get_brain_agent
+from supabase._async.client import AsyncClient
+from app.dependencies import get_supabase_client
 
 # Get logger
 logger = logging.getLogger(__name__)
@@ -26,6 +28,42 @@ vector_service = VectorService()
 
 # Initialize Retell client
 retell = Retell(api_key=str(settings.retell_api_key))
+
+async def log_call_communication(
+    candidate_id: str,
+    call_data: Dict[str, Any],
+    supabase_client: AsyncClient
+):
+    """Logs the completed call details to the communications table."""
+    logger.info(f"Attempting to log call communication for candidate {candidate_id}")
+    try:
+        communication_log = {
+            "candidates_id": candidate_id,
+            "type": "call",  # Must be one of: 'email', 'call', 'sms', 'iMessage'
+            "direction": "inbound",  # Must be either 'inbound' or 'outbound'
+            "subject": f"Retell Call ({call_data.get('call_id')})",
+            "content": json.dumps(call_data.get('transcript_object', [])),  # Store transcript object as JSON string
+            "metadata": {
+                "call_id": call_data.get('call_id'),
+                "call_status": call_data.get('call_status'),
+                "start_timestamp": call_data.get('start_timestamp'),
+                "end_timestamp": call_data.get('end_timestamp'),
+                "recording_url": call_data.get('recording_url'),
+                "disconnection_reason": call_data.get('disconnection_reason'),
+                "agent_id": call_data.get('agent_id'),
+                "call_analysis": call_data.get('call_analysis', {})  # Include call analysis in metadata
+            }
+            # timestamp defaults to now() in DB
+        }
+        
+        log_resp = await supabase_client.table("communications_dev").insert(communication_log).execute()
+        if hasattr(log_resp, 'data') and log_resp.data:
+            logger.info(f"Successfully logged call communication for candidate {candidate_id}")
+        else:
+            logger.warning(f"Could not log call communication for candidate {candidate_id}. Response: {log_resp}")
+    except Exception as log_err:
+        logger.error(f"Error logging call communication for candidate {candidate_id}: {log_err}")
+        logger.error(f"Traceback: {traceback.format_exc()}")
 
 def extract_call_data(body: Dict[str, Any]) -> Dict[str, Any]:
     """Extract and validate relevant call data from webhook payload."""
@@ -63,7 +101,8 @@ def extract_call_data(body: Dict[str, Any]) -> Dict[str, Any]:
 async def handler(
     request: Request,
     background_tasks: BackgroundTasks,
-    brain_agent: BrainAgent = Depends(get_brain_agent)
+    brain_agent: BrainAgent = Depends(get_brain_agent),
+    supabase_client: AsyncClient = Depends(get_supabase_client)
 ):
     """Handle Retell webhook events."""
     try:
@@ -89,13 +128,21 @@ async def handler(
         # --- Trigger brain agent ONLY on the final analysis event --- 
         # Use 'call_analyzed' as the primary trigger, assuming it contains final data
         if event_type == 'call_analyzed':
-            logger.info(f"🧠 Routing 'call_analyzed' event for candidate {candidate_id} to BrainAgent")
+            logger.info(f"📞 Call analyzed for candidate {candidate_id}. Logging communication and routing to BrainAgent.")
+            # Add task to log the call communication FIRST
+            background_tasks.add_task(
+                log_call_communication,
+                candidate_id=candidate_id,
+                call_data=call_data,
+                supabase_client=supabase_client
+            )
+            # Then add task for BrainAgent processing
             background_tasks.add_task(
                 brain_agent.handle_call_processed,
                 candidate_id=candidate_id,
                 call_data=call_data
             )
-            return JSONResponse(content={"status": "success", "message": "'call_analyzed' processing delegated to BrainAgent"})
+            return JSONResponse(content={"status": "success", "message": "Call logged and processing delegated to BrainAgent"})
         else:
             # Log other events but don't trigger the main processing
             logger.info(f"Webhook event '{event_type}' (Status: '{call_status}') received but not the primary trigger ('call_analyzed'). No action taken.")
