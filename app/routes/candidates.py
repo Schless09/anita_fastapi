@@ -1,7 +1,10 @@
 from fastapi import APIRouter, HTTPException, BackgroundTasks, File, UploadFile, Form, Depends
 from typing import Dict, Any, Optional
+import uuid
+from fastapi.responses import HTMLResponse
 from app.services.candidate_service import CandidateService
 import logging
+import traceback
 from app.agents.brain_agent import BrainAgent
 from app.dependencies import get_brain_agent
 
@@ -69,6 +72,55 @@ async def create_candidate(
         raise e
     except Exception as e:
         logger.error(f"Error processing submission for candidate {candidate_id or email}: {str(e)}")
-        import traceback
         logger.error(f"Traceback: {traceback.format_exc()}")
-        raise HTTPException(status_code=500, detail=f"Internal server error during candidate submission.") 
+        raise HTTPException(status_code=500, detail=f"Internal server error during candidate submission.")
+
+@router.get("/candidates/{candidate_id}/request-callback", response_class=HTMLResponse)
+async def request_candidate_callback(
+    candidate_id: uuid.UUID,
+    brain_agent: BrainAgent = Depends(get_brain_agent)
+):
+    """Endpoint triggered by link in 'missed call' email to reschedule a Retell call."""
+    try:
+        logger.info(f"Received callback request for candidate_id: {candidate_id}")
+        
+        success = await brain_agent.handle_callback_request(str(candidate_id))
+        
+        if success:
+            html_content = """
+            <html>
+                <head><title>Callback Requested</title></head>
+                <body>
+                    <h1>Thank You!</h1>
+                    <p>We've received your request. Anita, our AI assistant, will try calling you again shortly.</p>
+                </body>
+            </html>
+            """
+            return HTMLResponse(content=html_content, status_code=200)
+        else:
+            html_content = """
+            <html>
+                <head><title>Error</title></head>
+                <body>
+                    <h1>Request Failed</h1>
+                    <p>Sorry, we couldn't schedule a callback at this time. Please try again later or contact support.</p>
+                </body>
+            </html>
+            """
+            return HTMLResponse(content=html_content, status_code=500)
+            
+    except HTTPException as e:
+        raise e
+    except Exception as e:
+        logger.error(f"Unexpected error processing callback for candidate {candidate_id}: {str(e)}")
+        logger.error(f"Traceback: {traceback.format_exc()}")
+        html_content = """
+        <html>
+            <head><title>Error</title></head>
+            <body>
+                <h1>Server Error</h1>
+                <p>Sorry, an unexpected error occurred. Please try again later.</p>
+            </body>
+        </html>
+        """
+        return HTMLResponse(content=html_content, status_code=500) 
