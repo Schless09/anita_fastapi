@@ -71,6 +71,52 @@ class CandidateService:
             logger.error(f"Traceback: {traceback.format_exc()}")
             raise HTTPException(status_code=500, detail=f"Error creating candidate: {str(e)}")
 
+    async def create_initial_candidate(self, submission_data: Dict[str, Any]) -> Dict[str, Any]:
+        """Create initial candidate record with basic information."""
+        logger.info(f"Creating initial candidate record for {submission_data['email']}")
+        
+        # Generate a new UUID for the candidate
+        candidate_id = str(uuid.uuid4())
+        
+        # Prepare initial candidate data
+        insert_data = {
+            "id": candidate_id,
+            "first_name": submission_data['first_name'],
+            "last_name": submission_data['last_name'],
+            "email": submission_data['email'],
+            "phone": submission_data['phone'],
+            "linkedin": submission_data.get('linkedin_url'),
+            "status": "submitted",
+            "profile_json": {},
+            "created_at": datetime.utcnow().isoformat(),
+            "updated_at": datetime.utcnow().isoformat(),
+            "is_resume_processed": False,
+            "is_call_completed": False,
+            "is_embedding_generated": False
+        }
+
+        try:
+            # Insert the candidate record
+            response = await self.supabase.table(self.candidates_table_name).insert(insert_data).execute()
+            
+            if not response.data:
+                logger.error(f"Failed to create initial candidate record for {submission_data['email']}")
+                raise HTTPException(
+                    status_code=500,
+                    detail="Failed to create candidate record"
+                )
+            
+            logger.info(f"Successfully created initial candidate record: {candidate_id}")
+            return response.data[0]
+            
+        except Exception as e:
+            logger.error(f"Error creating initial candidate record: {str(e)}")
+            logger.error(f"Traceback: {traceback.format_exc()}")
+            raise HTTPException(
+                status_code=500,
+                detail=f"Error creating candidate record: {str(e)}"
+            )
+
     # REMOVED: process_candidate_submission (replaced by create_initial_candidate + BrainAgent)
     # REMOVED: process_call_completion (functionality moved to BrainAgent.handle_call_processed)
     # REMOVED: _trigger_matchmaking (functionality moved to BrainAgent.handle_call_processed)
