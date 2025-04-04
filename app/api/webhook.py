@@ -91,8 +91,8 @@ async def log_call_communication(
                 "recording_url": call_data.get('recording_url'),
                 "disconnection_reason": call_data.get('disconnection_reason'),
                 "agent_id": call_data.get('agent_id'),
-                "call_analysis": call_data.get('call_analysis', {}),
-                "full_transcript": json.dumps(transcript_object if transcript_object else [])  # Ensure we don't serialize None
+                "call_analysis": call_data.get('call_analysis', {})
+                #"full_transcript": json.dumps(transcript_object if transcript_object else [])  # Ensure we don't serialize None
             },
             "timestamp": datetime.utcnow().isoformat()  # Explicitly set timestamp
         }

@@ -279,7 +279,6 @@ class BrainAgent:
                 # Update candidate with initial data
                 update_data = {
                     "profile_json": profile,  # Use the potentially enhanced profile
-                    "full_name": profile.get("full_name", "Candidate"),  # Update with real name if available
                     "updated_at": datetime.utcnow().isoformat()
                 }
                 await self.supabase.table(self.candidates_table).update(update_data).eq("id", candidate_id).execute()
@@ -298,19 +297,19 @@ class BrainAgent:
             
             try:
                 # Fetch the LATEST candidate data including the updated profile_json from quick extraction
-                call_data_resp = await ( 
+                call_data_resp = await (
                     self.supabase.table(self.candidates_table)
                     .select('profile_json, phone, full_name') # Select necessary fields
                     .eq('id', candidate_id)
                     .single()
                     .execute()
-                ) 
+                )
                 if not call_data_resp.data:
                     raise ValueError("Failed to fetch latest data before scheduling call.")
 
                 call_profile_json = call_data_resp.data.get('profile_json', {}) # Use the (now cleaned) profile_json
                 phone_number = call_data_resp.data.get('phone')
-                db_full_name = call_data_resp.data.get('full_name', '') 
+                db_full_name = call_data_resp.data.get('full_name', '')
                 
                 # Log what we found in the database for debugging
                 logger.info(f"Candidate data for call scheduling - full_name: {db_full_name}, profile: {json.dumps(call_profile_json)[:100]}...")
@@ -321,17 +320,23 @@ class BrainAgent:
                     logger.warning(f"Candidate {candidate_id} missing full_name, using 'Candidate' for Retell.")
 
                 # Extract role/company from profile_json (ensure these keys exist after cleaning)
-                current_role = call_profile_json.get('current_role', '') 
+                current_role = call_profile_json.get('current_role', '')
                 current_company = call_profile_json.get('current_company', '')
 
                 # Log the dynamic variables we're going to use
                 logger.info(f"Using dynamic variables - full_name: {db_full_name}, company: {current_company}, role: {current_role}")
 
+                # Extract first_name from full_name
+                nameParts = db_full_name.split(" ")
+                first_name = nameParts[0] if len(nameParts) > 0 else ""
+
+                # Pass first_name to RetellService
                 call_result = await self.retell_service.schedule_call(
                     candidate_id=candidate_id,
                     dynamic_variables={
-                        'full_name': db_full_name,  # Pass the full name instead of extracting first name here
-                        'email': candidate_email, # Email passed into handler, not from DB profile_json
+                        'first_name': first_name,  # Pass the extracted first name
+                        'full_name': db_full_name,  # Pass the full name
+                        'email': candidate_email,  # Email passed into handler, not from DB profile_json
                         'current_company': current_company if current_company and current_company != 'pending' else '',
                         'current_title': current_role if current_role and current_role != 'pending' else '',
                         'phone': phone_number
