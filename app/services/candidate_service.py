@@ -81,8 +81,7 @@ class CandidateService:
         # Prepare initial candidate data
         insert_data = {
             "id": candidate_id,
-            "first_name": submission_data['first_name'],
-            "last_name": submission_data['last_name'],
+            "name": f"{submission_data['first_name']} {submission_data['last_name']}",  # Combine first and last name
             "email": submission_data['email'],
             "phone": submission_data['phone'],
             "linkedin": submission_data.get('linkedin_url'),
