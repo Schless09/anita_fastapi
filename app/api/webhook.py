@@ -74,12 +74,14 @@ async def log_call_communication(
                 logger.warning(f"Error extracting first words from transcript: {str(e)}")
         transcript_summary["first_words"] = first_words
 
+        # Create communication log record with required fields
         communication_log = {
+            "id": str(uuid.uuid4()),  # Generate a unique ID
             "candidates_id": candidate_id,
-            "thread_id": thread_id_to_log,
+            "thread_id": thread_id_to_log if thread_id_to_log else str(uuid.uuid4()),  # Ensure we always have a thread_id
             "type": "call",
             "direction": "inbound",
-            "subject": f"Retell Call ({call_id})",
+            "subject": f"Retell Call ({call_id})" if call_id else "Retell Call",
             "content": json.dumps(transcript_summary),
             "metadata": {
                 "call_id": call_id,
@@ -90,19 +92,32 @@ async def log_call_communication(
                 "disconnection_reason": call_data.get('disconnection_reason'),
                 "agent_id": call_data.get('agent_id'),
                 "call_analysis": call_data.get('call_analysis', {}),
-                "full_transcript": json.dumps(transcript_object)  # Store full transcript in metadata
-            }
+                "full_transcript": json.dumps(transcript_object if transcript_object else [])  # Ensure we don't serialize None
+            },
+            "timestamp": datetime.utcnow().isoformat()  # Explicitly set timestamp
         }
         
+        logger.info(f"Preparing to insert communication log for candidate {candidate_id}")
+        logger.debug(f"Communication log data: {json.dumps(communication_log, default=str)}")
+        
         table_name = get_table_name("communications")
+        logger.info(f"Using table name: {table_name}")
+        
         log_resp = await supabase_client.table(table_name).insert(communication_log).execute()
+        
         if hasattr(log_resp, 'data') and log_resp.data:
             logger.info(f"Successfully logged call communication for candidate {candidate_id}")
+            logger.debug(f"Supabase response: {log_resp.data}")
         else:
             logger.warning(f"Could not log call communication for candidate {candidate_id}. Response: {log_resp}")
+            if hasattr(log_resp, 'error'):
+                logger.error(f"Supabase error: {log_resp.error}")
     except Exception as log_err:
         logger.error(f"Error logging call communication for candidate {candidate_id}: {log_err}")
         logger.error(f"Traceback: {traceback.format_exc()}")
+        # Try to log the error message that might help debug the issue
+        if 'communication_log' in locals():
+            logger.error(f"Failed communication log object: {json.dumps(communication_log, default=str)}")
 
 def extract_call_data(body: Dict[str, Any]) -> Dict[str, Any]:
     """Extract and validate relevant call data from webhook payload."""
