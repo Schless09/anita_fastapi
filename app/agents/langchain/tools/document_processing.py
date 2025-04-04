@@ -186,6 +186,59 @@ class PDFProcessor(BaseTool):
                 "error": str(e)
             }
 
+    async def process_pdf(self, file_input: Union[str, bytes]) -> Dict[str, Any]:
+        """Process the entire PDF and extract all text content.
+        
+        Args:
+            file_input: Either a file path (str) or PDF binary content (bytes)
+        """
+        try:
+            # Check if input is a file path or binary content
+            if isinstance(file_input, str):
+                # It's a file path
+                logger.info(f"Processing PDF from file path: {file_input}")
+                try:
+                    reader = PdfReader(file_input)
+                except FileNotFoundError as e:
+                    logger.error(f"File not found: {file_input}")
+                    return {
+                        "status": "error",
+                        "error": f"File not found: {str(e)}"
+                    }
+            else:
+                # It's binary content
+                logger.info("Processing PDF from binary content")
+                try:
+                    pdf_stream = io.BytesIO(file_input)
+                    reader = PdfReader(pdf_stream)
+                except Exception as e:
+                    logger.error(f"Error reading PDF from binary content: {str(e)}")
+                    return {
+                        "status": "error",
+                        "error": f"Invalid PDF content: {str(e)}"
+                    }
+            
+            # Extract text from all pages
+            text_content = []
+            for page in reader.pages:
+                text_content.append(page.extract_text())
+            
+            # Combine all text
+            full_text = "\n".join(text_content)
+            
+            return {
+                "status": "success",
+                "text": full_text,
+                "num_pages": len(reader.pages)
+            }
+            
+        except Exception as e:
+            logger.error(f"Error processing PDF: {str(e)}")
+            return {
+                "status": "error",
+                "error": str(e)
+            }
+
 class ResumeParser(BaseTool):
     """Tool for parsing resumes and extracting structured information."""
     
