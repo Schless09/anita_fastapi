@@ -16,51 +16,21 @@ from app.agents.langchain.agents.follow_up_agent import FollowUpAgent
 from app.agents.langchain.agents.interview_agent import InterviewAgent
 from app.agents.langchain.agents.farming_matching_agent import FarmingMatchingAgent
 from app.agents.brain_agent import BrainAgent
-from app.dependencies import get_brain_agent
+from app.dependencies import (
+    get_brain_agent,
+    get_candidate_service,
+    get_job_service,
+    get_matching_service,
+    get_vector_service,
+    get_openai_service,
+    get_retell_service
+)
 from app.config.settings import Settings
 from app.config.supabase import get_supabase_client
 from app.config.utils import get_table_name
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
-
-# Get settings and services
-settings = Settings()
-supabase_client = get_supabase_client()
-retell_service = RetellService(settings=settings)
-openai_service = OpenAIService(settings=settings)
-
-# Get table names
-candidates_table = get_table_name("candidates")
-jobs_table = get_table_name("jobs")
-
-# Initialize services with dependencies
-candidate_service = CandidateService(
-    supabase_client=supabase_client,
-    retell_service=retell_service,
-    openai_service=openai_service,
-    settings=settings
-)
-
-vector_service = VectorService(
-    openai_service=openai_service,
-    supabase_client=supabase_client,
-    candidates_table=candidates_table,
-    jobs_table=jobs_table
-)
-
-job_service = JobService(
-    supabase_client=supabase_client,
-    vector_service=vector_service,
-    openai_service=openai_service
-)
-
-matching_service = MatchingService(
-    openai_service=openai_service,
-    vector_service=vector_service,
-    supabase_client=supabase_client,
-    settings=settings
-)
 
 @router.post("/candidates")
 async def create_candidate(
@@ -71,7 +41,8 @@ async def create_candidate(
     phone: str = Form(...),
     linkedin_url: Optional[str] = Form(None),
     resume: UploadFile = File(...),
-    brain_agent: BrainAgent = Depends(get_brain_agent)
+    brain_agent: BrainAgent = Depends(get_brain_agent),
+    candidate_service: CandidateService = Depends(get_candidate_service)
 ):
     """
     Handle new candidate submission from frontend (multipart/form-data).
