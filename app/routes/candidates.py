@@ -17,17 +17,28 @@ from app.agents.langchain.agents.interview_agent import InterviewAgent
 from app.agents.langchain.agents.farming_matching_agent import FarmingMatchingAgent
 from app.agents.brain_agent import BrainAgent
 from app.dependencies import get_brain_agent
+from app.config.settings import Settings
+from app.config.supabase import get_supabase_client
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
 
-# Initialize services
-candidate_service = CandidateService()
+# Get settings and services
+settings = Settings()
+supabase_client = get_supabase_client()
+retell_service = RetellService()
 openai_service = OpenAIService()
+
+# Initialize services with dependencies
+candidate_service = CandidateService(
+    supabase_client=supabase_client,
+    retell_service=retell_service,
+    openai_service=openai_service,
+    settings=settings
+)
 vector_service = VectorService()
 matching_service = MatchingService()
 job_service = JobService()
-retell_service = RetellService()
 
 @router.post("/candidates")
 async def create_candidate(
