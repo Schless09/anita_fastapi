@@ -16,6 +16,7 @@ from postgrest import AsyncPostgrestClient
 import json
 from app.services.openai_service import OpenAIService
 from app.services.vector_service import VectorService
+import asyncio
 
 logger = logging.getLogger(__name__)
 
@@ -76,6 +77,10 @@ class CandidateIntakeAgent(BaseAgent):
         
         # Initialize Supabase client
         self.supabase: AsyncPostgrestClient = supabase or get_supabase_client()
+        
+        # Store services for background processing
+        self.vector_service = vector_service
+        self.settings = settings
         
         # Set tools list for the agent
         self.tools = [
@@ -203,107 +208,47 @@ class CandidateIntakeAgent(BaseAgent):
             logger.info("\n=== Starting Candidate Intake Process ===")
             logger.info(f"Processing candidate: {candidate_email}")
             
-            # Step 1: Parse Resume
-            logger.info("\nStep 1: 📄 Parsing Resume")
+            # Get candidate's first name from database
+            candidate_data = await self.supabase.table(self.candidates_table).select("first_name").eq("id", candidate_id).execute()
+            if not candidate_data.data:
+                logger.error(f"❌ Candidate not found in database: {candidate_id}")
+                return {
+                    "status": "error",
+                    "error": "Candidate not found in database"
+                }
+            first_name = candidate_data.data[0].get("first_name", "")
+            
+            # Step 1: Quick Extract Essential Info
+            logger.info("\nStep 1: ⚡ Quick Resume Extraction")
             logger.info("----------------------------------------")
             
-            # First convert PDF to text
-            pdf_result = await self.pdf_processor._arun(resume_content)
-            if pdf_result["status"] != "success":
-                logger.error(f"❌ PDF Processing Failed: {pdf_result}")
-                return pdf_result
+            # First do quick extraction of essential info
+            quick_result = self.pdf_processor._quick_extract(resume_content)
+            if quick_result["status"] != "success":
+                logger.error(f"❌ Quick PDF Extraction Failed: {quick_result}")
+                return quick_result
                 
-            # Then parse the text content
-            parse_result = await self.resume_parser._arun(pdf_result["text_content"])
+            # Store essential info immediately
+            essential_info = quick_result["essential_info"]
+            # Add first_name from database to essential_info
+            essential_info["first_name"] = first_name
+            logger.info("✅ Essential info extracted successfully")
             
-            if parse_result["status"] != "success":
-                logger.error(f"❌ Resume Parsing Failed: {parse_result}")
-                return parse_result
-            logger.info("✅ Resume parsed successfully")
-            
-            # Step 2: Analyze Resume
-            logger.info("\nStep 2: 🔍 Analyzing Resume")
-            logger.info("----------------------------------------")
-            analysis_result = await self.resume_analysis_chain.ainvoke(
-                {"resume_text": pdf_result["text_content"]}
-            )
-            
-            if not analysis_result:
-                logger.error("❌ Resume Analysis Failed")
-                return {"status": "error", "error": "Failed to analyze resume"}
-            logger.info("✅ Resume analyzed successfully")
-            
-            # Step 3: Create Profile
-            logger.info("\nStep 3: 👤 Creating Profile")
-            logger.info("----------------------------------------")
-            profile_result = await self.profile_creation_chain.ainvoke(
-                {"parsed_data": parse_result["parsed_data"], "analysis": analysis_result}
-            )
-            logger.info("✅ Profile created successfully")
-            
-            # Step 4: Store in Supabase
-            logger.info("\nStep 4: 💾 Storing in Supabase")
+            # Step 2: Trigger background processing
+            logger.info("\nStep 2: 🚀 Triggering Background Processing")
             logger.info("----------------------------------------")
             
-            # Convert AIMessage to string if needed and parse JSON
-            if hasattr(profile_result, 'content'):
-                profile_result = profile_result.content
+            # Start background processing
+            asyncio.create_task(self._process_full_resume_background(resume_content, candidate_id))
             
-            try:
-                # Try to parse the profile result as JSON
-                if isinstance(profile_result, str):
-                    # Clean the string to ensure it's valid JSON
-                    profile_result = profile_result.strip()
-                    if profile_result.startswith('```json'):
-                        profile_result = profile_result[7:]
-                    if profile_result.endswith('```'):
-                        profile_result = profile_result[:-3]
-                    profile_result = profile_result.strip()
-                    
-                    # Parse the cleaned JSON
-                    profile_result = json.loads(profile_result)
-                    
-                    # Validate the structure
-                    required_fields = ["basic_info", "professional_summary", "skills", "experience", "education"]
-                    for field in required_fields:
-                        if field not in profile_result:
-                            raise ValueError(f"Missing required field: {field}")
-                            
-            except json.JSONDecodeError as e:
-                logger.error(f"❌ Failed to parse profile result as JSON: {str(e)}")
-                logger.error(f"❌ Raw profile result: {profile_result}")
-                return {
-                    "status": "error",
-                    "error": "Failed to parse profile result as JSON"
-                }
-            except ValueError as e:
-                logger.error(f"❌ Invalid profile structure: {str(e)}")
-                logger.error(f"❌ Profile result: {profile_result}")
-                return {
-                    "status": "error",
-                    "error": f"Invalid profile structure: {str(e)}"
-                }
+            logger.info("✅ Background processing triggered")
             
-            # Update candidate profile in Supabase
-            profile_data = {
-                "profile_json": profile_result,
-                "status": "submitted",
-                "updated_at": datetime.utcnow().isoformat()
-            }
-            
-            # Correctly use profile_data for the update
-            await self.supabase.table(self.candidates_table).update({
-                'profile_json': profile_data["profile_json"],
-                'status': profile_data["status"],
-                'updated_at': profile_data["updated_at"]
-            }).eq('id', self.candidate_id).execute()
-            
-            logger.info("✅ Profile stored in Supabase")
-            
+            # Return immediately with essential info
             return {
                 "status": "success",
                 "candidate_id": candidate_id,
-                "profile": profile_result
+                "essential_info": essential_info,
+                "message": "Full resume processing started in background"
             }
             
         except Exception as e:
@@ -313,6 +258,45 @@ class CandidateIntakeAgent(BaseAgent):
                 "status": "error",
                 "error": str(e)
             }
+
+    async def _process_full_resume_background(
+        self,
+        resume_content: bytes,
+        candidate_id: str
+    ) -> None:
+        """Process the full resume in the background."""
+        try:
+            # Update status to processing
+            await self.supabase.table(self.candidates_table).update({
+                "status": "processing",
+                "updated_at": datetime.utcnow().isoformat()
+            }).eq("id", candidate_id).execute()
+
+            # Process the full resume
+            result = await self.pdf_processor.process_pdf(resume_content)
+            if result["status"] != "success":
+                raise Exception(f"Failed to process PDF: {result.get('error')}")
+
+            # Parse the resume
+            parsed_result = await self.resume_parser.parse_resume(result["text"])
+            if parsed_result["status"] != "success":
+                raise Exception(f"Failed to parse resume: {parsed_result.get('error')}")
+
+            # Update status to completed
+            await self.supabase.table(self.candidates_table).update({
+                "status": "completed",
+                "profile_json": parsed_result["profile"],
+                "updated_at": datetime.utcnow().isoformat()
+            }).eq("id", candidate_id).execute()
+
+        except Exception as e:
+            logger.error(f"Error in background resume processing: {str(e)}")
+            # Update status to error
+            await self.supabase.table(self.candidates_table).update({
+                "status": "error",
+                "error_message": str(e),
+                "updated_at": datetime.utcnow().isoformat()
+            }).eq("id", candidate_id).execute()
 
     async def screen_candidate(self, candidate_data: Dict[str, Any]) -> Dict[str, Any]:
         """Screen a candidate based on their data."""
