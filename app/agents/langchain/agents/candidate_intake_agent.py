@@ -209,14 +209,17 @@ class CandidateIntakeAgent(BaseAgent):
             logger.info(f"Processing candidate: {candidate_email}")
             
             # Get candidate's first name from database
-            candidate_data = await self.supabase.table(self.candidates_table).select("first_name").eq("id", candidate_id).execute()
+            candidate_data = await self.supabase.table(self.candidates_table).select("full_name").eq("id", candidate_id).execute()
             if not candidate_data.data:
                 logger.error(f"❌ Candidate not found in database: {candidate_id}")
                 return {
                     "status": "error",
                     "error": "Candidate not found in database"
                 }
-            first_name = candidate_data.data[0].get("first_name", "")
+            full_name = candidate_data.data[0].get("full_name", "")
+            
+            # Extract first name from full name
+            first_name = full_name.split()[0] if full_name else ""
             
             # Step 1: Quick Extract Essential Info
             logger.info("\nStep 1: ⚡ Quick Resume Extraction")
@@ -230,7 +233,8 @@ class CandidateIntakeAgent(BaseAgent):
                 
             # Store essential info immediately
             essential_info = quick_result["essential_info"]
-            # Add first_name from database to essential_info
+            # Add both full_name and first_name to essential_info
+            essential_info["full_name"] = full_name
             essential_info["first_name"] = first_name
             logger.info("✅ Essential info extracted successfully")
             
