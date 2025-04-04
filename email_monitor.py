@@ -1,5 +1,5 @@
 from fastapi import FastAPI, Request, HTTPException
-from agents.interaction_agent import InteractionAgent
+from app.agents.interaction_agent import InteractionAgent
 from typing import Dict, Any
 import json
 import re
