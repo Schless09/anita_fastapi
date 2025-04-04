@@ -2,8 +2,10 @@ from typing import Any, Dict, List, Optional, Type
 from langchain.tools import BaseTool
 from langchain_openai import ChatOpenAI
 from .vector_store import VectorStoreTool
-from pydantic import Field, BaseModel
+from pydantic import Field, BaseModel, PrivateAttr
 from .base import parse_llm_json_response
+from app.services.matching_service import MatchingService
+from app.config.settings import Settings
 import logging
 
 logger = logging.getLogger(__name__)
