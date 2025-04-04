@@ -14,6 +14,7 @@ from retell import Retell
 from app.dependencies import get_brain_agent
 from supabase._async.client import AsyncClient
 from app.dependencies import get_supabase_client
+from app.config import get_table_name
 
 # Get logger
 logger = logging.getLogger(__name__)
@@ -63,7 +64,8 @@ async def log_call_communication(
             }
         }
         
-        log_resp = await supabase_client.table("communications_dev").insert(communication_log).execute()
+        table_name = get_table_name("communications")
+        log_resp = await supabase_client.table(table_name).insert(communication_log).execute()
         if hasattr(log_resp, 'data') and log_resp.data:
             logger.info(f"Successfully logged call communication for candidate {candidate_id}")
         else:

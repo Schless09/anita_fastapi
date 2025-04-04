@@ -6,6 +6,9 @@ from app.config.supabase import get_supabase_client
 from app.services.openai_service import OpenAIService
 import json
 from tenacity import retry, stop_after_attempt, wait_exponential
+from supabase._async.client import AsyncClient
+from pinecone import Pinecone, Index
+from app.config import get_table_name
 
 # Set up logging
 logger = logging.getLogger(__name__)
@@ -22,8 +25,22 @@ class VectorService:
     def __init__(self):
         self.supabase = supabase
         self.openai = openai
-        self.candidates_table = "candidates_dev"
-        self.jobs_table = "jobs_dev"
+        
+        # Pinecone Initialization
+        self.pinecone = Pinecone(api_key=settings.pinecone_api_key, environment=settings.pinecone_environment)
+        self.candidates_index_name = settings.pinecone_candidates_index
+        self.jobs_index_name = settings.pinecone_jobs_index
+        
+        # Ensure indices exist
+        # self._ensure_pinecone_index(self.candidates_index_name)
+        # self._ensure_pinecone_index(self.jobs_index_name)
+
+        # Use get_table_name for table names
+        self.candidates_table = get_table_name("candidates")
+        self.jobs_table = get_table_name("jobs")
+        
+        self.candidates_index: Index = self.pinecone.Index(self.candidates_index_name)
+        self.jobs_index: Index = self.pinecone.Index(self.jobs_index_name)
 
     @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=4, max=10))
     async def generate_embedding(self, text: str) -> List[float]:

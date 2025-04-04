@@ -11,7 +11,8 @@ import os
 import uuid
 from supabase._async.client import AsyncClient
 import traceback
-from app.config import get_settings # Import get_settings
+from app.config import get_settings, get_table_name # Import get_table_name
+import io # Add io import
 
 # Configuration
 SENDER_EMAIL = "anita@recruitcha.com" # Or load from config
@@ -25,44 +26,59 @@ logger = logging.getLogger(__name__)
 def get_gmail_service():
     """Authenticates and returns the Gmail API service client.
     
-    Prioritizes credentials from environment variables for deployment environments (Vercel).
+    Prioritizes credentials from the GMAIL_TOKEN_B64 environment variable for deployment.
     Falls back to token.pkl for local development.
     """
     creds = None
     
     # --- Vercel/Deployment Environment Check ---
     # Check for environment variables typically set in Vercel
-    # VERCEL_ENV is a common indicator, but you might use others
-    is_deployed = os.environ.get('VERCEL') == '1' or os.environ.get('ENV') == 'production' # Add other indicators if needed
+    is_deployed = os.environ.get('VERCEL') == '1' or os.environ.get('ENVIRONMENT') == 'production' # Use ENVIRONMENT
     
     if is_deployed:
-        logger.info("Attempting to load Gmail credentials from environment variables for deployment.")
-        refresh_token = os.environ.get('GMAIL_REFRESH_TOKEN')
-        client_id = os.environ.get('GMAIL_CLIENT_ID')
-        client_secret = os.environ.get('GMAIL_CLIENT_SECRET')
-        token_uri = os.environ.get('GMAIL_TOKEN_URI', 'https://oauth2.googleapis.com/token') # Default token URI
-
-        if refresh_token and client_id and client_secret:
-            try:
-                creds = Credentials(
-                    None, # No access token initially, will be refreshed
-                    refresh_token=refresh_token,
-                    token_uri=token_uri,
-                    client_id=client_id,
-                    client_secret=client_secret,
-                    scopes=SCOPES
-                )
-                # Check if refresh is needed (it likely is initially or if expired)
-                if not creds.valid or creds.expired:
-                     logger.info("Refreshing token using environment variables credentials.")
-                     creds.refresh(Request())
-                     logger.info("Token refreshed successfully (from env vars).")
-            except Exception as e:
-                logger.error(f"Failed to create/refresh credentials from environment variables: {e}")
-                return None # Cannot proceed if env var loading fails in deployed env
-        else:
-            logger.error("Missing required Gmail credentials environment variables (GMAIL_REFRESH_TOKEN, GMAIL_CLIENT_ID, GMAIL_CLIENT_SECRET). Cannot authenticate in deployed environment.")
+        logger.info("Running in deployed environment. Attempting to load Gmail credentials from GMAIL_TOKEN_B64 env var.")
+        token_b64 = os.environ.get("GMAIL_TOKEN_B64")
+        if not token_b64:
+            logger.error("GMAIL_TOKEN_B64 environment variable not found. Cannot authenticate Gmail in deployed environment.")
             return None
+        
+        try:
+            token_bytes = base64.b64decode(token_b64)
+            # Use io.BytesIO to treat bytes as a file-like object for pickle
+            creds = pickle.load(io.BytesIO(token_bytes))
+            logger.info("Successfully loaded credentials from GMAIL_TOKEN_B64.")
+        except (pickle.UnpicklingError, base64.binascii.Error, TypeError) as e:
+            logger.error(f"Failed to decode or unpickle token from GMAIL_TOKEN_B64: {e}")
+            return None
+            
+        # Check if the loaded token needs refreshing (might still be needed)
+        if creds and creds.expired and creds.refresh_token:
+            logger.info("Refreshing token loaded from GMAIL_TOKEN_B64.")
+            try:
+                # We still need client_id/secret for refresh, even when loading token
+                client_id = os.environ.get('GMAIL_CLIENT_ID')
+                client_secret = os.environ.get('GMAIL_CLIENT_SECRET')
+                token_uri = os.environ.get('GMAIL_TOKEN_URI', 'https://oauth2.googleapis.com/token')
+                
+                if not client_id or not client_secret:
+                     logger.error("Missing GMAIL_CLIENT_ID or GMAIL_CLIENT_SECRET env vars needed for token refresh.")
+                     return None # Cannot refresh without these
+                
+                # Manually set the client info on the credentials object before refresh
+                creds.token_uri = token_uri
+                creds.client_id = client_id
+                creds.client_secret = client_secret
+                
+                creds.refresh(Request())
+                logger.info("Token refreshed successfully (originally from GMAIL_TOKEN_B64).")
+                # Note: We cannot easily save the refreshed token back to the env var here.
+                # The refreshed token will only live for the duration of this instance.
+            except Exception as e:
+                logger.error(f"Error refreshing token originally from GMAIL_TOKEN_B64: {e}")
+                # If refresh fails, the existing creds might still work if not expired
+                # Or if they were just loaded and haven't been used yet.
+                # Proceed cautiously. If creds are truly invalid now, service build will fail.
+        
     else:
         # --- Local Development Fallback (using token.pkl) ---
         logger.info("Running in local environment. Attempting to load Gmail credentials from token.pkl.")
@@ -91,7 +107,7 @@ def get_gmail_service():
                 return None # Indicate failure
 
     # --- Build and Return Service --- 
-    if creds:
+    if creds and creds.valid: # Check creds are valid before building service
         try:
             service = build('gmail', 'v1', credentials=creds)
             logger.info("Gmail service built successfully.")
@@ -104,7 +120,7 @@ def get_gmail_service():
             return None
     else:
         # This case should ideally be caught earlier, but serves as a final check
-        logger.error("Failed to obtain valid credentials.")
+        logger.error("Failed to obtain valid credentials after attempting load/refresh.")
         return None
 
 
@@ -222,7 +238,9 @@ async def send_job_match_email(
                 # timestamp will default to now() in DB
             }
             
-            log_resp = await supabase_client.table("communications_dev").insert(communication_log).execute()
+            # Use get_table_name
+            table_name = get_table_name("communications")
+            log_resp = await supabase_client.table(table_name).insert(communication_log).execute()
             if hasattr(log_resp, 'data') and log_resp.data:
                 logger.info(f"Successfully logged email communication for candidate {candidate_id}")
             else:
@@ -263,8 +281,7 @@ async def send_missed_call_email(
 
 I tried calling but it seems I missed you.
 
-No worries! Click here to request a call back when you're available:
-{callback_url}
+No worries! Reply to this email to let me know a better time to reach you.
 
 Best regards,
 Anita, your personal career co-pilot
@@ -274,7 +291,7 @@ Anita, your personal career co-pilot
 <html><body>
 <p>{greeting}</p>
 <p>I tried calling but it seems I missed you.</p>
-<p>No worries! <a href="{callback_url}">Click here to request a call back</a> when you're available.</p>
+<p>No worries! Reply to this email to let me know a better time to reach you.</p>
 <p>Best regards,<br>Anita, your personal career co-pilot</p>
 </body></html>
 """.strip()
@@ -296,7 +313,9 @@ Anita, your personal career co-pilot
                 "content": plain_text,
                 "metadata": {"message_id": sent_message_details.get('id'), "recipient": recipient_email}
             }
-            log_resp = await supabase_client.table("communications_dev").insert(communication_log).execute()
+            # Use get_table_name
+            table_name = get_table_name("communications")
+            log_resp = await supabase_client.table(table_name).insert(communication_log).execute()
             if hasattr(log_resp, 'data') and log_resp.data:
                 logger.info(f"Successfully logged missed call email for {candidate_id}")
             else:
@@ -362,7 +381,9 @@ Anita, your personal career co-pilot
                 "content": plain_text,
                 "metadata": {"message_id": sent_message_details.get('id'), "recipient": recipient_email}
             }
-            log_resp = await supabase_client.table("communications_dev").insert(communication_log).execute()
+            # Use get_table_name
+            table_name = get_table_name("communications")
+            log_resp = await supabase_client.table(table_name).insert(communication_log).execute()
             if hasattr(log_resp, 'data') and log_resp.data:
                 logger.info(f"Successfully logged no matches email for {candidate_id}")
             else:

@@ -24,7 +24,7 @@ from app.services.retell_service import RetellService
 from app.services.openai_service import OpenAIService
 from app.services.vector_service import VectorService
 from app.services.matching_service import MatchingService
-from app.config import get_settings
+from app.config import get_settings, get_table_name
 from app.config.supabase import get_supabase_client
 
 # Set up logging
@@ -55,11 +55,17 @@ class BrainAgent:
         self._follow_up_agent = None
 
         # Initialize needed services
-        self.supabase = get_supabase_client()
+        self.supabase: AsyncClient = get_supabase_client()
         self.candidate_service = CandidateService()
         self.openai_service = OpenAIService()
         self.matching_service = MatchingService()
         self.retell_service = RetellService()
+
+        # Define table names using the helper function
+        self.candidates_table = get_table_name("candidates")
+        self.jobs_table = get_table_name("jobs")
+        self.matches_table = get_table_name("candidate_job_matches")
+        self.communications_table = get_table_name("communications")
 
         # State tracking (remains the same)
         self.state = {
@@ -230,7 +236,7 @@ class BrainAgent:
             }
             
             # Perform the update
-            update_response = await self.supabase.table('candidates_dev').update(update_data).eq('id', candidate_id).execute()
+            update_response = await self.supabase.table(self.candidates_table).update(update_data).eq('id', candidate_id).execute()
 
             if not update_response.data:
                 error_msg = f"Failed to update profile/status in DB for {candidate_id}"
@@ -249,7 +255,7 @@ class BrainAgent:
             try:
                  # Fetch needed data for the call: phone and full_name directly, profile_json for role/company
                  call_data_resp = await ( 
-                     self.supabase.table('candidates_dev')
+                     self.supabase.table(self.candidates_table)
                      .select('profile_json, phone, full_name') # Select necessary fields
                      .eq('id', candidate_id)
                      .single()
@@ -408,7 +414,7 @@ class BrainAgent:
 
             # Fetch candidate email and name early on, needed for potential emails
             try:
-                 candidate_info_resp = await self.supabase.table('candidates_dev')\
+                 candidate_info_resp = await self.supabase.table(self.candidates_table)\
                      .select('email, full_name, profile_json, status')\
                      .eq('id', candidate_id)\
                      .single()\
@@ -515,7 +521,7 @@ class BrainAgent:
                      cleaned_profile_json = self._clean_profile_json(merged_profile_data)
 
                      # Update DB: Save cleaned profile JSON only
-                     profile_update_resp = await self.supabase.table('candidates_dev').update({
+                     profile_update_resp = await self.supabase.table(self.candidates_table).update({
                          'profile_json': cleaned_profile_json,
                      'updated_at': datetime.utcnow().isoformat()
                 }).eq('id', candidate_id).execute()
@@ -581,7 +587,7 @@ class BrainAgent:
                                     'skills_preferred', 'minimum_years_of_experience', 'seniority',
                                     'ideal_candidate_profile', 'product_description', 'job_url' # Add job_url
                                 ]
-                                job_resp = await self.supabase.table('jobs_dev').select(','.join(job_fields_to_select)) \
+                                job_resp = await self.supabase.table(self.jobs_table).select(','.join(job_fields_to_select)) \
                                     .in_('id', job_ids_to_fetch).execute()
                                 if job_resp.data:
                                     job_details_map = {job['id']: job for job in job_resp.data}
@@ -630,7 +636,7 @@ class BrainAgent:
 
                         if match_records:
                             logger.info("DEBUG: Inside match_records block")
-                            upsert_response = await self.supabase.table('candidate_job_matches_dev')\
+                            upsert_response = await self.supabase.table(self.matches_table)\
                                 .upsert(match_records, on_conflict='candidate_id, job_id', ignore_duplicates=False).execute()
                             if hasattr(upsert_response, 'data') or (hasattr(upsert_response, 'status_code') and 200 <= upsert_response.status_code < 300):
                                 logger.info(f"✅ Successfully upserted {len(upsert_response.data)} job matches for candidate {candidate_id}")
@@ -647,13 +653,13 @@ class BrainAgent:
                             logger.info("DEBUG: Inside email logic with valid candidate_email")
                             MATCH_SCORE_THRESHOLD = 0.40
                             # Get top 3 job IDs above threshold
-                            matches_ids_resp = await self.supabase.table('candidate_job_matches_dev').select('job_id, match_score').eq('candidate_id', candidate_id).gt('match_score', MATCH_SCORE_THRESHOLD).order('match_score', desc=True).limit(3).execute()
+                            matches_ids_resp = await self.supabase.table(self.matches_table).select('job_id, match_score').eq('candidate_id', candidate_id).gt('match_score', MATCH_SCORE_THRESHOLD).order('match_score', desc=True).limit(3).execute()
                             top_job_ids = [m['job_id'] for m in matches_ids_resp.data] if matches_ids_resp.data else []
 
                             # Fix indentation for high_scoring_jobs initialization and the following block
                             high_scoring_jobs = [] # Align this with top_job_ids
                             if top_job_ids: # Align this with high_scoring_jobs initialization
-                                jobs_details_resp = await self.supabase.table('jobs_dev').select('id, job_title, job_url').in_('id', top_job_ids).execute()
+                                jobs_details_resp = await self.supabase.table(self.jobs_table).select('id, job_title, job_url').in_('id', top_job_ids).execute()
                                 # Fix indentation for the inner if block
                                 if jobs_details_resp.data: # Indent under the 'if top_job_ids:'
                                     job_details_map = {job['id']: job for job in jobs_details_resp.data}
@@ -745,7 +751,7 @@ class BrainAgent:
             # 1. Fetch required candidate data (email, phone, full_name)
             self._update_transaction(process_id, "fetch_data", "started")
             try:
-                candidate_data_resp = await self.supabase.table('candidates_dev')\
+                candidate_data_resp = await self.supabase.table(self.candidates_table)\
                     .select('email, phone, full_name')\
                     .eq('id', candidate_id)\
                     .single()\
@@ -947,7 +953,7 @@ class BrainAgent:
                 # Do not change the overall 'status' here, let handle_call_processed decide final status
             }
             
-            update_resp = await self.supabase.table('candidates_dev')\
+            update_resp = await self.supabase.table(self.candidates_table)\
                 .update(update_payload)\
                 .eq('id', candidate_id)\
                 .execute()
@@ -991,7 +997,7 @@ class BrainAgent:
             logger.info(f"Also updating flags: {update_flags}")
 
         try:
-            update_response = await self.supabase.table('candidates_dev')\
+            update_response = await self.supabase.table(self.candidates_table)\
                 .update(update_payload)\
                 .eq('id', candidate_id)\
                 .execute()
@@ -1036,7 +1042,7 @@ class BrainAgent:
             update_payload["status"] = "error_embedding"
 
         try:
-            update_response = await self.supabase.table('candidates_dev')\
+            update_response = await self.supabase.table(self.candidates_table)\
                 .update(update_payload)\
                 .eq('id', candidate_id)\
                 .execute()

@@ -3,21 +3,26 @@ import logging
 from app.services.openai_service import OpenAIService
 from app.services.vector_service import VectorService
 from app.config.supabase import get_supabase_client
+from supabase._async.client import AsyncClient
+from app.config import get_settings, get_table_name
+import uuid
 
 logger = logging.getLogger(__name__)
-supabase = get_supabase_client()
 
 class MatchingService:
     def __init__(self):
+        settings = get_settings()
         self.openai_service = OpenAIService()
         self.vector_service = VectorService()
-        self.supabase = supabase
+        self.supabase: AsyncClient = get_supabase_client()
+        self.candidates_table_name = get_table_name("candidates")
     
-    async def match_candidate_to_jobs(self, candidate_id: str, top_k: int = 10) -> List[Dict[str, Any]]:
+    async def match_candidate_to_jobs(self, candidate_id: uuid.UUID, top_k: int = 10) -> List[Dict[str, Any]]:
         """Match a candidate to potential jobs based on their stored embedding."""
+        logger.info(f"Starting job matching for candidate: {candidate_id}")
         try:
             # 1. Fetch candidate's embedding from Supabase
-            response = await self.supabase.table('candidates_dev').select('embedding').eq('id', candidate_id).maybe_single().execute()
+            response = await self.supabase.table(self.candidates_table_name).select('embedding').eq('id', str(candidate_id)).maybe_single().execute()
             
             if not response.data or not response.data.get('embedding'):
                 logger.warning(f"No embedding found for candidate {candidate_id}. Cannot perform matching.")

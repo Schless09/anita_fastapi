@@ -17,6 +17,9 @@ import json
 import asyncio
 from fastapi import HTTPException
 import traceback # Keep for potential error logging if needed elsewhere
+from supabase._async.client import AsyncClient
+from app.config import get_table_name # Import get_table_name
+from app.schemas.candidate import CandidateSubmission, CandidateStatusUpdate
 
 settings = get_settings()
 supabase = get_supabase_client()
@@ -29,7 +32,8 @@ logger = logging.getLogger(__name__)
 
 class CandidateService:
     def __init__(self):
-        self.supabase = supabase
+        self.supabase: AsyncClient = get_supabase_client()
+        self.candidates_table_name = get_table_name("candidates") # Get dynamic table name
         self.retell = retell
         self.openai = openai
         # Remove unused service assignments
@@ -109,7 +113,7 @@ class CandidateService:
                 # Do NOT store resume bytes in DB profile_json anymore
             }
 
-            response = await self.supabase.table('candidates_dev').insert(insert_data).execute()
+            response = await self.supabase.table(self.candidates_table_name).insert(insert_data).execute()
             if not response.data:
                  raise Exception(f"Database insert failed for candidate {email}")
 
@@ -203,7 +207,7 @@ class CandidateService:
             if 'updated_at' not in update_data:
                 update_data['updated_at'] = datetime.utcnow().isoformat()
 
-            response = await self.supabase.table('candidates_dev')\
+            response = await self.supabase.table(self.candidates_table_name)\
                 .update(update_data)\
                 .eq('id', candidate_id)\
                 .execute()
@@ -223,7 +227,7 @@ class CandidateService:
         Basic method to fetch a candidate record.
         """
         try:
-            response = await self.supabase.table('candidates_dev')\
+            response = await self.supabase.table(self.candidates_table_name)\
                 .select('*')\
                 .eq('id', candidate_id)\
                 .maybe_single()\
@@ -236,3 +240,40 @@ class CandidateService:
         except Exception as e:
              logger.error(f"(CandidateService) Error fetching candidate {candidate_id}: {e}")
              return None # Or raise? 
+
+    async def get_candidate_profile_and_status(self, candidate_id: uuid.UUID) -> Dict[str, Any] | None:
+        try:
+            response = await self.supabase.table(self.candidates_table_name)\
+                .select('profile_json, status')\
+                .eq('id', str(candidate_id))\
+                .single()\
+                .execute()
+            if response.data:
+                 return response.data
+            else:
+                 logger.warning(f"(CandidateService) Candidate {candidate_id} not found.")
+                 return None
+        except Exception as e:
+             logger.error(f"(CandidateService) Error fetching candidate profile and status for {candidate_id}: {e}")
+             return None
+
+    async def update_candidate_status_and_profile(self, update: CandidateStatusUpdate) -> Dict[str, Any] | None:
+        update_fields = {
+            'status': update.status,
+            'updated_at': datetime.utcnow().isoformat()
+        }
+
+        try:
+            response = await self.supabase.table(self.candidates_table_name)\
+                .update(update_fields)\
+                .eq('id', str(update.candidate_id))\
+                .execute()
+            if response.data:
+                 logger.info(f"(CandidateService) Successfully updated candidate status and profile for {update.candidate_id}")
+                 return response.data[0]
+            else:
+                 logger.warning(f"(CandidateService) Update candidate status and profile for {update.candidate_id} returned no data. Response: {response}")
+                 return None
+        except Exception as e:
+             logger.error(f"(CandidateService) Error updating candidate status and profile for {update.candidate_id}: {e}")
+             return None 

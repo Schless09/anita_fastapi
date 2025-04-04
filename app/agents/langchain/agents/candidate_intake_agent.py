@@ -9,9 +9,17 @@ import logging
 import traceback
 from langchain.prompts import PromptTemplate
 from datetime import datetime
-from app.config import get_supabase_client
+from app.config import get_supabase_client, get_table_name
+from supabase import AsyncClient
+import json
 
 logger = logging.getLogger(__name__)
+
+# Define CandidateState model
+class CandidateState(BaseModel):
+    profile_json: Any # Or a more specific type if available
+    status: str # Or an Enum if status values are fixed
+    # Add other fields if needed by _save_state
 
 class CandidateIntakeAgent(BaseAgent):
     def __init__(
@@ -19,7 +27,9 @@ class CandidateIntakeAgent(BaseAgent):
         model_name: str = "gpt-4-turbo-preview",
         temperature: float = 0.7,
         memory: Optional[Any] = None,
-        vector_store: Optional[VectorStoreTool] = None
+        vector_store: Optional[VectorStoreTool] = None,
+        candidate_id: str = "",
+        supabase: AsyncClient = None
     ):
         super().__init__(model_name, temperature, memory)
         
@@ -31,7 +41,7 @@ class CandidateIntakeAgent(BaseAgent):
         self.matching_tool = MatchingTool(vector_store=vector_store)
         
         # Initialize Supabase client
-        self.supabase = get_supabase_client()
+        self.supabase = supabase or get_supabase_client()
         
         # Set tools list for the agent
         self.tools = [
@@ -71,6 +81,9 @@ class CandidateIntakeAgent(BaseAgent):
         Always maintain a professional, friendly tone and ensure data privacy and security when discussing candidate information."""
         
         self._initialize_agent(system_message)
+        
+        self.candidate_id = candidate_id
+        self.candidates_table = get_table_name("candidates")
 
     def _initialize_chains(self):
         """Initialize the processing chains."""
@@ -205,7 +218,6 @@ class CandidateIntakeAgent(BaseAgent):
             try:
                 # Try to parse the profile result as JSON
                 if isinstance(profile_result, str):
-                    import json
                     # Clean the string to ensure it's valid JSON
                     profile_result = profile_result.strip()
                     if profile_result.startswith('```json'):
@@ -240,21 +252,17 @@ class CandidateIntakeAgent(BaseAgent):
             
             # Update candidate profile in Supabase
             profile_data = {
-                "email": candidate_email,
-                "profile": profile_result,
-                "processing_status": {
-                    "resume_processed": True,
-                    "call_completed": False,
-                    "last_updated": datetime.utcnow().isoformat()
-                },
-                **(additional_info or {})
+                "profile_json": profile_result,
+                "status": "submitted",
+                "updated_at": datetime.utcnow().isoformat()
             }
             
-            # Store in Supabase
-            await self.supabase.table('candidates_dev').update({
-                'profile_json': profile_data,
-                'updated_at': datetime.utcnow().isoformat()
-            }).eq('id', candidate_id).execute()
+            # Correctly use profile_data for the update
+            await self.supabase.table(self.candidates_table).update({
+                'profile_json': profile_data["profile_json"],
+                'status': profile_data["status"],
+                'updated_at': profile_data["updated_at"]
+            }).eq('id', self.candidate_id).execute()
             
             logger.info("✅ Profile stored in Supabase")
             
@@ -323,4 +331,15 @@ class CandidateIntakeAgent(BaseAgent):
                 },
                 "reason": "Technical error during screening",
                 "dealbreakers": []
-            } 
+            }
+
+    async def _save_state(self, state: CandidateState):
+        try:
+            await self.supabase.table(self.candidates_table).update({
+                'profile_json': json.loads(state.profile_json) if isinstance(state.profile_json, str) else state.profile_json,
+                'status': state.status,
+                'updated_at': datetime.utcnow().isoformat()
+            }).eq('id', self.candidate_id).execute()
+        except Exception as e:
+            logger.error(f"❌ Error saving state: {str(e)}")
+            logger.error(f"❌ Full traceback: {traceback.format_exc()}") 
