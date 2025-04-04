@@ -18,7 +18,7 @@ from contextlib import asynccontextmanager
 import uuid
 import tempfile
 import asyncio
-from retell_sdk import Retell
+from retell import Retell
 
 from app.config import (
     get_settings,
