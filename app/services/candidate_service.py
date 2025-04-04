@@ -78,20 +78,25 @@ class CandidateService:
         # Generate a new UUID for the candidate
         candidate_id = str(uuid.uuid4())
         
+        now = datetime.utcnow()
+        
         # Prepare initial candidate data
         insert_data = {
             "id": candidate_id,
-            "name": f"{submission_data['first_name']} {submission_data['last_name']}",  # Combine first and last name
+            "full_name": f"{submission_data['first_name']} {submission_data['last_name']}",  # Match full_name column
             "email": submission_data['email'],
             "phone": submission_data['phone'],
-            "linkedin": submission_data.get('linkedin_url'),
+            "linkedin_url": submission_data.get('linkedin_url'),  # Match linkedin_url column
             "status": "submitted",
+            "status_last_updated": now.isoformat(),  # Add status_last_updated
             "profile_json": {},
-            "created_at": datetime.utcnow().isoformat(),
-            "updated_at": datetime.utcnow().isoformat(),
+            "created_at": now.isoformat(),
+            "updated_at": now.isoformat(),
             "is_resume_processed": False,
             "is_call_completed": False,
-            "is_embedding_generated": False
+            "is_embedding_generated": False,
+            "responsiveness_score": 0,  # Add default values from schema
+            "responsiveness_label": "Unresponsive"
         }
 
         try:
