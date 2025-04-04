@@ -27,7 +27,6 @@ from app.config import (
     get_sendgrid_client,
     get_sendgrid_webhook_url,
     get_supabase_client,
-    OPENAI_API_KEY,
     SUPABASE_URL,
     SUPABASE_KEY,
     GMAIL_TOKEN_B64,
@@ -108,9 +107,6 @@ embeddings = get_embeddings()
 supabase = get_supabase_client()
 sendgrid = get_sendgrid_client()
 
-# Initialize OpenAI client
-openai.api_key = settings.openai_api_key
-
 @app.on_event("startup")
 async def startup_event():
     """Initialize services on startup."""
@@ -179,9 +175,6 @@ async def health_check():
 VERCEL_PROTECTION_BYPASS = os.getenv('VERCEL_PROTECTION_BYPASS')
 if not VERCEL_PROTECTION_BYPASS:
     raise ValueError("VERCEL_PROTECTION_BYPASS environment variable is not set")
-
-# Initialize OpenAI client
-openai_client = openai.OpenAI(api_key=OPENAI_API_KEY)
 
 class RetellCallStatus(str, Enum):
     CREATED = "created"
