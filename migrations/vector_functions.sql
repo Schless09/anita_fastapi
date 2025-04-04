@@ -94,6 +94,7 @@ BEGIN
         jobs_dev j
     WHERE
         j.embedding IS NOT NULL
+        AND 1 - (j.embedding <=> query_embedding) > match_threshold
     ORDER BY
         j.embedding <=> query_embedding
     LIMIT match_count;

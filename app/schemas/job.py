@@ -201,7 +201,7 @@ class JobDBModel(BaseModel):
     coding_proficiency: str
     collaboration_tools: List[str]
     company_culture: str
-    company_founded: str # Assuming TEXT stores year or similar text, adjust if date/int
+    company_founded: str
     company_funding_investors: List[str]
     company_funding_most_recent: Optional[int] = None
     company_funding_total: Optional[int] = None
@@ -223,15 +223,15 @@ class JobDBModel(BaseModel):
     domain_expertise: List[str]
     education_advanced_degree: str
     education_required: str
-    equity_range_max: str # Kept as str to match DB `text` type
-    equity_range_min: str # Kept as str to match DB `text` type
+    equity_range_max: str
+    equity_range_min: str
     expected_deliverables: List[str]
     growth_mindset: str
     hiring_urgency: str
     ideal_candidate_profile: str
     ideal_companies: List[str]
-    independent_work: str # Assuming maps to autonomy level text
-    independent_work_capacity: str # Assuming maps to autonomy level text
+    independent_work: str
+    independent_work_capacity: str
     infrastructure_experience: List[str]
     interview_process_steps: List[str]
     job_title: str
@@ -253,8 +253,8 @@ class JobDBModel(BaseModel):
     reporting_structure: str
     role_category: List[str]
     role_status: str
-    salary_range_max: Optional[int] = None # Assuming int, adjust if needed based on DB values
-    salary_range_min: Optional[int] = None # Assuming int, adjust if needed based on DB values
+    salary_range_max: int
+    salary_range_min: int
     scope_of_impact: List[str]
     seniority: str
     skills_must_have: List[str]
@@ -271,7 +271,7 @@ class JobDBModel(BaseModel):
     visa_sponsorship: bool
     work_arrangement: List[str]
     work_authorization: str
-    embedding: Optional[List[float]] = None # Assuming vector is stored as list of floats
+    embedding: Optional[List[float]] = None
     embedding_metadata: Optional[Dict[str, Any]] = None
 
     class Config:
