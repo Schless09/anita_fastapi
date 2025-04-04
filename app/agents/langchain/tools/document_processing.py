@@ -9,6 +9,7 @@ from pydantic import Field, BaseModel, PrivateAttr
 from .base import parse_llm_json_response
 from app.config.settings import Settings
 import traceback
+import asyncio
 
 logger = logging.getLogger(__name__)
 
@@ -375,10 +376,23 @@ class ResumeParser(BaseTool):
             
             If any information is not found, use empty strings or empty arrays."""
             
-            response = self.llm.invoke(prompt)
+            try:
+                # Add timeout to LLM call
+                response = await asyncio.wait_for(
+                    self.llm.ainvoke(prompt),
+                    timeout=30.0  # 30 second timeout
+                )
+                logger.info("Successfully received response from LLM")
+            except asyncio.TimeoutError:
+                logger.error("LLM call timed out after 30 seconds")
+                return {
+                    "status": "error",
+                    "error": "LLM processing timed out"
+                }
             
             # Parse the response into structured data
             parsed_data = parse_llm_json_response(response.content)
+            logger.info("Successfully parsed LLM response into structured data")
             
             return {
                 "status": "success",
@@ -387,6 +401,7 @@ class ResumeParser(BaseTool):
             
         except Exception as e:
             logger.error(f"Error parsing resume: {str(e)}")
+            logger.error(f"Full traceback: {traceback.format_exc()}")
             return {
                 "status": "error",
                 "error": str(e)

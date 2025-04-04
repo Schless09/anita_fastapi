@@ -311,19 +311,41 @@ class CandidateIntakeAgent(BaseAgent):
                 logger.info(f"Split text into {len(text_chunks)} chunks")
                 
                 parsed_data = {}
+                max_retries = 3
+                
                 for i, chunk in enumerate(text_chunks):
                     logger.info(f"Processing chunk {i+1}/{len(text_chunks)}")
-                    try:
-                        chunk_result = await self.resume_parser.parse_resume(chunk)
-                        if chunk_result["status"] == "success":
-                            logger.info(f"Successfully parsed chunk {i+1}")
-                            # Merge the parsed data
-                            parsed_data = self._merge_parsed_data(parsed_data, chunk_result["profile"])
-                        else:
-                            logger.warning(f"Failed to parse chunk {i+1}: {chunk_result.get('error', 'Unknown error')}")
-                    except Exception as e:
-                        logger.error(f"Error processing chunk {i+1}: {str(e)}")
-                        continue
+                    retry_count = 0
+                    chunk_success = False
+                    
+                    while retry_count < max_retries and not chunk_success:
+                        try:
+                            chunk_result = await self.resume_parser.parse_resume(chunk)
+                            if chunk_result["status"] == "success":
+                                logger.info(f"Successfully parsed chunk {i+1}")
+                                # Merge the parsed data
+                                parsed_data = self._merge_parsed_data(parsed_data, chunk_result["profile"])
+                                chunk_success = True
+                            else:
+                                error_msg = chunk_result.get("error", "Unknown error")
+                                logger.warning(f"Failed to parse chunk {i+1} (attempt {retry_count + 1}/{max_retries}): {error_msg}")
+                                retry_count += 1
+                                if retry_count < max_retries:
+                                    await asyncio.sleep(1)  # Wait before retrying
+                        except asyncio.TimeoutError:
+                            logger.warning(f"Timeout processing chunk {i+1} (attempt {retry_count + 1}/{max_retries})")
+                            retry_count += 1
+                            if retry_count < max_retries:
+                                await asyncio.sleep(1)  # Wait before retrying
+                        except Exception as e:
+                            logger.error(f"Error processing chunk {i+1}: {str(e)}")
+                            retry_count += 1
+                            if retry_count < max_retries:
+                                await asyncio.sleep(1)  # Wait before retrying
+                    
+                    if not chunk_success:
+                        logger.error(f"Failed to process chunk {i+1} after {max_retries} attempts")
+                        # Continue with next chunk even if this one failed
 
                 logger.info("Completed chunk processing")
                 logger.info(f"Final parsed data contains {len(parsed_data)} fields")
