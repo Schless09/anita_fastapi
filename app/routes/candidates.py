@@ -1,6 +1,8 @@
 from fastapi import APIRouter, HTTPException, BackgroundTasks, File, UploadFile, Form, Depends
 from typing import Dict, Any, Optional
 import uuid
+import logging
+import traceback
 from fastapi.responses import HTMLResponse
 from app.services.candidate_service import CandidateService
 from app.services.openai_service import OpenAIService
