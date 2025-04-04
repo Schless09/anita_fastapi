@@ -23,10 +23,10 @@ class Settings(BaseSettings):
     twilio_auth_token: str
     twilio_phone_number: str
     
-    # SendGrid
-    sendgrid_api_key: str
-    sender_email: str
-    sendgrid_inbound_hostname: str
+    # SendGrid (Optional)
+    sendgrid_api_key: Optional[str] = None
+    sender_email: Optional[str] = None
+    sendgrid_inbound_hostname: Optional[str] = None
     
     # Vercel
     vercel_protection_bypass: str
@@ -48,12 +48,12 @@ class Settings(BaseSettings):
     supabase_key: str
     supabase_service_role_key: str
 
-    # Pinecone
-    pinecone_api_key: str
-    pinecone_environment: str
-    pinecone_candidates_index: str
-    pinecone_jobs_index: str
-    pinecone_call_status_index: str
+    # Pinecone (Optional)
+    pinecone_api_key: Optional[str] = None
+    pinecone_environment: Optional[str] = None
+    pinecone_candidates_index: Optional[str] = None
+    pinecone_jobs_index: Optional[str] = None
+    pinecone_call_status_index: Optional[str] = None
 
     @property
     def webhook_base_url(self) -> str:
