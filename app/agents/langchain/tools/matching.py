@@ -8,6 +8,12 @@ import logging
 
 logger = logging.getLogger(__name__)
 
+class MatchingInput(BaseModel):
+    """Input schema for the matching tool."""
+    candidate_id: str = Field(..., description="The ID of the candidate to match")
+    job_id: Optional[str] = Field(None, description="The ID of a specific job to match against")
+    limit: Optional[int] = Field(5, description="Maximum number of matches to return")
+
 class MatchingTool(BaseTool):
     """Tool for matching candidates to jobs."""
     
