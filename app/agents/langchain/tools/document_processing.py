@@ -107,6 +107,85 @@ class PDFProcessor(BaseTool):
         """Async version of PDF processing."""
         return self._run(file_input)
 
+    def _quick_extract(self, file_input: Union[str, bytes]) -> Dict[str, Any]:
+        """Quickly extract essential information from the first few pages of a PDF.
+        
+        Args:
+            file_input: Either a file path (str) or PDF binary content (bytes)
+        """
+        try:
+            # Check if input is a file path or binary content
+            if isinstance(file_input, str):
+                # It's a file path
+                logger.info(f"Quick extracting from PDF file path: {file_input}")
+                try:
+                    reader = PdfReader(file_input)
+                except FileNotFoundError as e:
+                    logger.error(f"File not found: {file_input}")
+                    return {
+                        "status": "error",
+                        "error": f"File not found: {str(e)}"
+                    }
+            else:
+                # It's binary content
+                logger.info("Quick extracting from PDF binary content")
+                try:
+                    pdf_stream = io.BytesIO(file_input)
+                    reader = PdfReader(pdf_stream)
+                except Exception as e:
+                    logger.error(f"Error reading PDF from binary content: {str(e)}")
+                    return {
+                        "status": "error",
+                        "error": f"Invalid PDF content: {str(e)}"
+                    }
+            
+            # Extract text from first 3 pages only
+            text_content = []
+            for i, page in enumerate(reader.pages):
+                if i >= 3:  # Only process first 3 pages
+                    break
+                text_content.append(page.extract_text())
+            
+            # Combine all text
+            quick_text = "\n".join(text_content)
+            
+            # Use LLM to extract essential info
+            prompt = f"""Extract the following essential information from this resume text (first few pages only):
+            1. Current or most recent job title
+            2. Current or most recent company
+            3. Contact information (email, phone)
+            4. Key skills (top 5-10)
+            
+            Resume text:
+            {quick_text}
+            
+            Return the information in a structured JSON format with these fields:
+            - current_title: Current or most recent job title
+            - current_company: Current or most recent company
+            - email: Email address
+            - phone: Phone number
+            - skills: Array of key skills
+            
+            If any information is not found, use empty strings or empty arrays."""
+            
+            response = self.llm.invoke(prompt)
+            
+            # Parse the response into structured data
+            essential_info = parse_llm_json_response(response.content)
+            
+            return {
+                "status": "success",
+                "essential_info": essential_info,
+                "num_pages_processed": min(3, len(reader.pages))
+            }
+            
+        except Exception as e:
+            logger.error(f"Error in quick PDF extraction: {str(e)}")
+            return {
+                "status": "error",
+                "error": str(e)
+            }
+
 class ResumeParser(BaseTool):
     """Tool for parsing resumes and extracting structured information."""
     
