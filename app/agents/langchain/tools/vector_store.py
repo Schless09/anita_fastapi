@@ -1,4 +1,4 @@
-from typing import Any, Dict, List, Optional, Literal, ClassVar
+from typing import Any, Dict, List, Optional, Literal, ClassVar, Type
 from langchain.tools import BaseTool
 from langchain_openai import ChatOpenAI, OpenAIEmbeddings
 from langchain.docstore.document import Document
@@ -8,6 +8,8 @@ import logging
 from pydantic import Field, PrivateAttr, BaseModel
 from .base import parse_llm_json_response
 from app.services.vector_service import VectorService
+from app.config import get_table_name
+import traceback
 
 logger = logging.getLogger(__name__)
 
@@ -18,6 +20,10 @@ class VectorStoreInput(BaseModel):
     candidate_data: Optional[Dict[str, Any]] = None
     query: Optional[str] = None
     top_k: Optional[int] = Field(default=5, ge=1, le=100)
+
+class JobSearchInput(BaseModel):
+    query: str = Field(description="Semantic query based on candidate preferences, skills, and experience.")
+    # Add filters later if needed
 
 class VectorStoreTool(BaseTool):
     """Tool for managing vector store operations. Implements singleton pattern."""
@@ -36,6 +42,7 @@ class VectorStoreTool(BaseTool):
     embeddings: OpenAIEmbeddings = Field(default=None)
     llm: ChatOpenAI = Field(default=None)
     vector_service: VectorService = Field(default=None)
+    jobs_table: str = Field(default=None)
     
     class Config:
         """Configuration for this pydantic object."""
@@ -67,6 +74,9 @@ class VectorStoreTool(BaseTool):
             
             # Set initialized using PrivateAttr
             object.__setattr__(self, '_initialized', True)
+            
+            # Get dynamic table name
+            self.jobs_table = get_table_name("jobs")
     
     async def _initialize_async(self):
         """Initialize async components."""
@@ -278,4 +288,51 @@ class VectorStoreTool(BaseTool):
             return await self.vector_service.query_jobs(query_vector, top_k)
         except Exception as e:
             logger.error(f"Error querying jobs: {e}")
-            raise 
+            raise
+
+    async def search_jobs(self, query: str) -> List[Dict[str, Any]]:
+        """Search for jobs using semantic similarity."""
+        try:
+            # Generate embedding for query
+            query_embedding = await self.embeddings.aembed_query(query)
+            
+            # Search Pinecone job index
+            search_results = self.vector_service.jobs_index.query(
+                vector=query_embedding,
+                top_k=5, # Adjust top_k as needed
+                include_metadata=True 
+            )
+            
+            # Extract job IDs and scores
+            matches = search_results.get('matches', [])
+            job_ids = [match['id'] for match in matches]
+            scores_map = {match['id']: match['score'] for match in matches}
+
+            if not job_ids:
+                return [{"message": "No matching jobs found in vector store."}]
+
+            # Fetch full job details from Supabase using job_ids
+            # Use the dynamic table name attribute
+            response = await self.vector_service.supabase.table(self.jobs_table).select("*").in_('id', job_ids).execute()
+
+            if response.data:
+                # Combine Supabase data with Pinecone scores
+                detailed_jobs = []
+                for job in response.data:
+                    job_id = job.get('id')
+                    score = scores_map.get(job_id)
+                    if score is not None:
+                        job['match_score'] = score # Add score to the job data
+                        detailed_jobs.append(job)
+                # Sort by score descending
+                detailed_jobs.sort(key=lambda x: x.get('match_score', 0), reverse=True)
+                logger.info(f"Found {len(detailed_jobs)} detailed jobs from vector search.")
+                return detailed_jobs
+            else:
+                logger.warning(f"Vector search found job IDs {job_ids}, but failed to fetch details from Supabase.")
+                return [{"message": "Found matches in vector store but failed to fetch details."}]
+
+        except Exception as e:
+            logger.error(f"Error during vector store job search: {e}")
+            logger.error(traceback.format_exc())
+            return [{"error": f"An internal error occurred during job search: {str(e)}"}] 

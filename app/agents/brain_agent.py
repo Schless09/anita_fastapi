@@ -24,7 +24,7 @@ from app.services.retell_service import RetellService
 from app.services.openai_service import OpenAIService
 from app.services.vector_service import VectorService
 from app.services.matching_service import MatchingService
-from app.config import get_settings
+from app.config import get_settings, get_table_name
 from app.config.supabase import get_supabase_client
 
 # Set up logging
@@ -39,7 +39,7 @@ from dotenv import load_dotenv
 from fastapi import HTTPException
 from supabase._async.client import AsyncClient, create_client
 
-from anita.services.email_service import send_job_match_email
+from anita.services.email_service import send_job_match_email, send_missed_call_email, send_no_matches_email
 
 logger = logging.getLogger(__name__)
 
@@ -55,11 +55,17 @@ class BrainAgent:
         self._follow_up_agent = None
 
         # Initialize needed services
-        self.supabase = get_supabase_client()
+        self.supabase: AsyncClient = get_supabase_client()
         self.candidate_service = CandidateService()
         self.openai_service = OpenAIService()
         self.matching_service = MatchingService()
         self.retell_service = RetellService()
+
+        # Define table names using the helper function
+        self.candidates_table = get_table_name("candidates")
+        self.jobs_table = get_table_name("jobs")
+        self.matches_table = get_table_name("candidate_job_matches")
+        self.communications_table = get_table_name("communications")
 
         # State tracking (remains the same)
         self.state = {
@@ -129,6 +135,31 @@ class BrainAgent:
             self._follow_up_agent = FollowUpAgent()
         return self._follow_up_agent
     
+    def _clean_profile_json(self, profile_data: Dict[str, Any]) -> Dict[str, Any]:
+        """Removes fields that should not be stored in the profile_json column."""
+        if not isinstance(profile_data, dict):
+            logger.warning(f"Attempted to clean non-dict data: {type(profile_data)}")
+            return {} # Return empty dict if input is not a dict
+
+        cleaned_data = profile_data.copy()
+        # Keys to remove
+        keys_to_remove = [
+            'basic_info',
+            'email', # Remove top-level email if present
+            'processing_status',
+            'embedding_metadata'
+        ]
+        for key in keys_to_remove:
+            cleaned_data.pop(key, None) # Remove key if it exists
+
+        # Also remove basic_info if nested within 'profile'
+        # Use .get() for safety in case 'profile' key doesn't exist or isn't a dict
+        profile_nested = cleaned_data.get('profile')
+        if isinstance(profile_nested, dict):
+             profile_nested.pop('basic_info', None)
+        
+        return cleaned_data
+    
     async def handle_candidate_submission(self, candidate_id: str, candidate_email: str, resume_content: Optional[bytes] = None) -> Dict[str, Any]:
         """
         Handle initial candidate data processing (e.g., resume parsing) via agent.
@@ -137,6 +168,8 @@ class BrainAgent:
         """
         process_id = f"initial_submission_{candidate_id}_{datetime.utcnow().isoformat()}"
         self._start_transaction(process_id, "candidate_submission")
+        resume_processed_flag = False # Initialize flag
+        current_status = 'submitted' # Default initial status
         try:
             logger.info(f"\n=== Processing Initial Submission for Candidate ID: {candidate_id} ===")
             self._update_transaction(process_id, "resume_processing", "started")
@@ -155,7 +188,7 @@ class BrainAgent:
                     logger.error(f"❌ Resume processing failed for {candidate_id}: {error_msg}")
                     self._update_transaction(process_id, "resume_processing", "failed", {"error": error_msg})
                     extracted_profile = {}
-                    resume_processed_flag = False
+                    # resume_processed_flag remains False
                 else:
                     extracted_profile = intake_result["profile"]
                     resume_processed_flag = True
@@ -164,79 +197,94 @@ class BrainAgent:
             else:
                 logger.info(f"No resume content provided for {candidate_id}, skipping agent processing.")
                 extracted_profile = {}
-                resume_processed_flag = False
+                # resume_processed_flag remains False
                 self._update_transaction(process_id, "resume_processing", "skipped")
 
-            # Step 2: Update Profile in Supabase (merge with existing if necessary)
-            logger.info(f"\nStep 2: 💾 Updating Profile in DB")
+            # Step 2: Update Profile and Status Columns in Supabase
+            logger.info(f"\nStep 2: 💾 Updating Profile & Status in DB")
             logger.info("----------------------------------------")
             self._update_transaction(process_id, "profile_update", "started")
 
-            # Fetch existing profile to merge
-            existing_profile_resp = await self.supabase.table('candidates_dev').select('profile_json').eq('id', candidate_id).single().execute()
-            existing_profile = existing_profile_resp.data.get('profile_json', {}) if existing_profile_resp.data else {}
+            # Fetch existing profile JSON to merge (optional, merge logic can be complex)
+            # For simplicity here, we'll assume extracted_profile is the primary source for profile_json content
+            # If merging is critical, fetch existing profile_json and merge carefully
+            # existing_profile_resp = await self.supabase.table('candidates_dev').select('profile_json').eq('id', candidate_id).single().execute()
+            # existing_profile = existing_profile_resp.data.get('profile_json', {}) if existing_profile_resp.data else {}
+            # merged_profile = existing_profile.copy()
+            # merged_profile.update(extracted_profile) # Prioritize extracted data
 
-            # Merge extracted profile with existing, prioritizing extracted data
-            merged_profile = existing_profile.copy()
-            merged_profile.update(extracted_profile)
+            # Clean the extracted profile before saving
+            cleaned_profile_json = self._clean_profile_json(extracted_profile) 
 
-            # Ensure processing_status exists and update it
-            if 'processing_status' not in merged_profile:
-                merged_profile['processing_status'] = {}
-            merged_profile['processing_status'].update({
-                'resume_processed': resume_processed_flag,
-                'last_updated': datetime.utcnow().isoformat(),
-                'call_completed': merged_profile['processing_status'].get('call_completed', False),
-                'embedding_generated': merged_profile['processing_status'].get('embedding_generated', False),
-                'status': merged_profile['processing_status'].get('status', 'submitted')
-            })
+            # Prepare data for the new status columns
+            now_utc = datetime.utcnow()
+            status_update_data = {
+                "is_resume_processed": resume_processed_flag,
+                "status": current_status, # Set initial status
+                "status_last_updated": now_utc.isoformat(),
+                 # Keep other flags as default or update if needed based on initial submission logic
+                # "is_call_completed": False, 
+                # "is_embedding_generated": False,
+                # "embedding_error": None, 
+                "updated_at": now_utc.isoformat() # Also update the main updated_at
+            }
 
+            # Combine data for the update operation
             update_data = {
-                "profile_json": merged_profile,
-                "updated_at": datetime.utcnow().isoformat()
+                "profile_json": cleaned_profile_json,
+                **status_update_data # Unpack the status fields
             }
             
-            update_response = await self.supabase.table('candidates_dev').update(update_data).eq('id', candidate_id).execute()
+            # Perform the update
+            update_response = await self.supabase.table(self.candidates_table).update(update_data).eq('id', candidate_id).execute()
 
             if not update_response.data:
-                error_msg = f"Failed to update profile in DB for {candidate_id}"
+                error_msg = f"Failed to update profile/status in DB for {candidate_id}"
                 logger.error(f"❌ {error_msg}")
                 self._update_transaction(process_id, "profile_update", "failed", {"error": error_msg})
                 self._end_transaction(process_id, "failed")
                 raise Exception(error_msg)
 
-            logger.info(f"✅ Candidate {candidate_id} profile updated in Supabase.")
+            logger.info(f"✅ Candidate {candidate_id} profile and status updated in Supabase.")
             self._update_transaction(process_id, "profile_update", "completed")
 
-            # Step 3: Schedule Retell Call
+            # Step 3: Schedule Retell Call (Code remains largely the same, but fetch needed data)
             logger.info(f"\nStep 3: 📞 Scheduling Retell Call")
             logger.info("----------------------------------------")
             self._update_transaction(process_id, "call_scheduling", "started")
             try:
-                 # Fetch the LATEST profile data AFTER agent processing and DB update
-                 latest_profile_resp = await self.supabase.table('candidates_dev').select('profile_json, phone').eq('id', candidate_id).single().execute()
-                 if not latest_profile_resp.data:
-                      raise ValueError("Failed to fetch latest profile before scheduling call.")
+                 # Fetch needed data for the call: phone and full_name directly, profile_json for role/company
+                 call_data_resp = await ( 
+                     self.supabase.table(self.candidates_table)
+                     .select('profile_json, phone, full_name') # Select necessary fields
+                     .eq('id', candidate_id)
+                     .single()
+                     .execute()
+                 ) 
+                 if not call_data_resp.data:
+                      raise ValueError("Failed to fetch latest data before scheduling call.")
 
-                 latest_profile = latest_profile_resp.data.get('profile_json', {})
-                 phone_number = latest_profile_resp.data.get('phone')
+                 call_profile_json = call_data_resp.data.get('profile_json', {}) # Use the (now cleaned) profile_json
+                 phone_number = call_data_resp.data.get('phone')
+                 db_full_name = call_data_resp.data.get('full_name', '') 
 
                  if not phone_number:
-                      raise ValueError("Cannot schedule call, phone number missing from latest fetch.")
+                      raise ValueError("Cannot schedule call, phone number missing.")
+                 if not db_full_name:
+                     logger.warning(f"Candidate {candidate_id} missing full_name, using 'Candidate' for Retell.")
 
-                 # Extract details from the LATEST fetched profile, accessing nested full_name
-                 full_name = latest_profile.get('basic_info', {}).get('full_name', '') # Correctly access nested name
-                 current_role = latest_profile.get('current_role', '') # This should be top-level based on agent prompt
-                 current_company = latest_profile.get('current_company', '') # This should be top-level
+
+                 # Extract role/company from profile_json (ensure these keys exist after cleaning)
+                 current_role = call_profile_json.get('current_role', '') 
+                 current_company = call_profile_json.get('current_company', '') 
 
                  call_result = await self.retell_service.schedule_call(
                       candidate_id=candidate_id,
                       dynamic_variables={
-                           # Use latest fetched data with fallbacks
-                           'first_name': full_name.split(' ')[0] if full_name else 'Candidate',
-                           'email': candidate_email, # Email is passed into the handler
+                           'first_name': db_full_name.split(' ')[0] if db_full_name else 'Candidate',
+                           'email': candidate_email, # Email passed into handler, not from DB profile_json
                            'current_company': current_company if current_company and current_company != 'pending' else '',
-                           'current_title': current_role if current_role and current_role != 'pending' else '', # Use empty string fallback
+                           'current_title': current_role if current_role and current_role != 'pending' else '',
                            'phone': phone_number
                       }
                  )
@@ -299,7 +347,7 @@ class BrainAgent:
             f"Provide the analysis in the specified JSON format."
         )
 
-        logger.info("Attempting to generate match reason/tags via OpenAI...")
+        logger.info("Generating match reason/tags via OpenAI...")
         try:
             # Use the ChatCompletions endpoint
             response = openai.chat.completions.create(
@@ -354,97 +402,165 @@ class BrainAgent:
         """
         process_id = f"call_processed_{candidate_id}_{datetime.utcnow().isoformat()}"
         self._start_transaction(process_id, "call_processing")
-        final_process_status = "error_processing_call" # Default final status in case of unexpected exit
+        final_process_status = "error_processing_call" # Default final status
+        current_profile_for_processing = {} # Initialize
+        matches = [] # Initialize matches
+        embedding_success = False # Initialize embedding flag
+        candidate_email = None # Initialize
+        candidate_name = None # Initialize
 
         try:
             logger.info(f"\n=== Processing Incoming Call Event for Candidate ID: {candidate_id} ===")
 
-            # --- Refined Status Check --- 
-            pre_check_response = await self.supabase.table('candidates_dev').select('profile_json').eq('id', candidate_id).single().execute()
-            if not pre_check_response.data:
-                logger.error(f"(Agent Pre-Check) Could not find candidate profile for {candidate_id}. Aborting call processing.")
-                self._end_transaction(process_id, "failed", "Candidate not found")
-                return {"status": "error", "reason": "Candidate not found"}
+            # Fetch candidate email and name early on, needed for potential emails
+            try:
+                 candidate_info_resp = await self.supabase.table(self.candidates_table)\
+                     .select('email, full_name, profile_json, status')\
+                     .eq('id', candidate_id)\
+                     .single()\
+                     .execute()
+                 
+                 if not candidate_info_resp.data:
+                      logger.error(f"(Agent Pre-Check) Could not find candidate {candidate_id}. Aborting call processing.")
+                      self._end_transaction(process_id, "failed", "Candidate not found")
+                      return {"status": "error", "reason": "Candidate not found"}
             
-            current_profile_for_check = pre_check_response.data.get('profile_json', {})
-            current_status = current_profile_for_check.get('processing_status', {}).get('status')
+                 # Store fetched data
+                 candidate_email = candidate_info_resp.data.get('email')
+                 candidate_name = candidate_info_resp.data.get('full_name')
+                 current_db_status = candidate_info_resp.data.get('status')
+                 current_profile_for_processing = candidate_info_resp.data.get('profile_json', {}) # Get existing profile
+                 
+                 if not candidate_email: # Log warning if email is missing
+                      logger.warning(f"(Agent Pre-Check) Candidate {candidate_id} missing email address. Cannot send follow-up emails.")
 
-            # Exit if already completed, failed, OR if another process is already working on it
-            terminal_or_processing_statuses = ['completed', 'call_missed_or_failed', 'error_processing_call', 'processing_call']
-            if current_status in terminal_or_processing_statuses:
-                 logger.info(f"(Agent Check) Candidate {candidate_id} status is '{current_status}'. Skipping call processing for this trigger.")
-                 self._end_transaction(process_id, "skipped", f"Already processed/processing: {current_status}")
-                 return {"status": "skipped", "reason": f"Already processed/processing: {current_status}"} # Exit early
-            logger.info(f"(Agent Check) Candidate {candidate_id} status is '{current_status}'. Proceeding.")
+            except Exception as fetch_err:
+                 logger.error(f"(Agent Pre-Check) Error fetching initial candidate data for {candidate_id}: {fetch_err}")
+                 self._end_transaction(process_id, "failed", "DB error fetching candidate")
+                 return {"status": "error", "reason": "DB error fetching candidate"}
             
-            # --- Set 'processing' Status IMMEDIATELY ---
+            # --- Refined Status Check --- 
+            terminal_or_processing_statuses = ['completed', 'call_missed_or_failed', 'error_processing_call', 'processing_call', 'error_embedding']
+            if current_db_status in terminal_or_processing_statuses:
+                 logger.info(f"(Agent Check) Candidate {candidate_id} status is '{current_db_status}'. Skipping call processing trigger.")
+                 self._end_transaction(process_id, "skipped", f"(Agent Check) Candidate {candidate_id} status is '{current_db_status}'. Proceeding.")
+                 return {"status": "skipped", "reason": f"(Agent Check) Candidate {candidate_id} status is '{current_db_status}'. Proceeding."} 
+            logger.info(f"(Agent Check) Candidate {candidate_id} status is '{current_db_status}'. Proceeding.")
+            
+            # --- Set 'processing_call' Status IMMEDIATELY in DB column ---
             logger.info(f"Setting status to 'processing_call' for {candidate_id}")
             await self._update_candidate_status(candidate_id, 'processing_call')
             # --- End Status Lock ---
 
-            # 1. Check for Transcript
+            # 1a. Check Call Status First
+            call_status = call_data.get('call_status')
+            MISSED_CALL_STATUSES = {"registered", "error"} # Statuses indicating no conversation happened
+
+            if call_status in MISSED_CALL_STATUSES:
+                logger.warning(f"Call for {candidate_id} had status: '{call_status}'. Treating as missed call.")
+                self._update_transaction(process_id, "call_status_check", "failed", {"reason": f"Call status: {call_status}"})
+                final_process_status = 'call_missed_or_failed' 
+                # Trigger missed call email HERE before returning (if email exists)
+                if candidate_email:
+                    logger.info(f"Attempting to send missed call email to {candidate_email} due to call_status: {call_status}")
+                    try:
+                        await send_missed_call_email(
+                            recipient_email=candidate_email, 
+                            candidate_name=candidate_name, 
+                            candidate_id=uuid.UUID(candidate_id), # Ensure UUID type
+                            supabase_client=self.supabase
+                        )
+                    except Exception as email_err:
+                        logger.error(f"Error sending missed call email (triggered by call_status): {email_err}")
+                # Status gets updated in finally block
+                return {"status": "stopped", "reason": f"Call status: {call_status}"}
+            else:
+                 logger.info(f"Call for {candidate_id} has status '{call_status}'. Proceeding to transcript check.")
+                 self._update_transaction(process_id, "call_status_check", "completed")
+
+            # 1b. Check for Transcript (Fallback if status was ok, e.g., 'ended' with immediate hangup)
             transcript = call_data.get('transcript')
             if not transcript or not transcript.strip():
-                logger.warning(f"No valid transcript found for call {call_data.get('call_id')} (Candidate: {candidate_id}).")
+                logger.warning(f"No valid transcript for call {call_data.get('call_id')} (Candidate: {candidate_id}). Status was '{call_status}'. Treating as missed call.")
                 self._update_transaction(process_id, "transcript_check", "failed", {"reason": "No transcript"})
-                final_process_status = 'call_missed_or_failed' # Set final status for finally block
-                return {"status": "stopped", "reason": "No transcript"} # Exit before embedding/matching
-            logger.info(f"Transcript found for call {call_data.get('call_id')}. Proceeding.")
+                final_process_status = 'call_missed_or_failed' 
+                # Trigger missed call email HERE before returning (if email exists)
+                if candidate_email:
+                    logger.info(f"Attempting to send missed call email to {candidate_email} due to empty transcript (status: {call_status}).")
+                    try:
+                        await send_missed_call_email(
+                            recipient_email=candidate_email, 
+                            candidate_name=candidate_name, 
+                            candidate_id=uuid.UUID(candidate_id), # Ensure UUID type
+                            supabase_client=self.supabase
+                        )
+                    except Exception as email_err:
+                         logger.error(f"Error sending missed call email (triggered by empty transcript): {email_err}")
+                # Status gets updated in finally block
+                return {"status": "stopped", "reason": "No transcript"} 
             self._update_transaction(process_id, "transcript_check", "completed")
             
             # --- Main Processing Block --- 
-            # Define merged_profile here before the block
-            merged_profile = current_profile_for_check # Start with the profile we already fetched
-            embedding_success = False
-            matches = []
+            merged_profile_data = current_profile_for_processing 
             
-            # 2. Analyze Transcript & Merge Profile (Wrap in try/except)
+            # 2. Analyze Transcript & Update Profile/Status
             self._update_transaction(process_id, "profile_update", "started")
-            logger.info(f"Analyzing transcript and merging profile for {candidate_id}")
+            logger.info(f"Analyzing transcript and updating profile/status for {candidate_id}")
             try:
                 extracted_info = await self.openai_service.extract_transcript_info(transcript)
                 if not extracted_info:
-                     logger.warning(f"No information extracted from transcript for {candidate_id}. Profile will not be updated with transcript data.")
+                     logger.warning(f"No information extracted from transcript for {candidate_id}. Profile JSON not updated.")
+                     # Still need to mark call as completed
+                     call_completed_flag = True
                 else:
-                     merged_profile = self._deep_merge(merged_profile, extracted_info)
-                     logger.info(f"Successfully merged transcript info for {candidate_id}")
+                     # Deep merge extracted info into the existing profile data
+                     merged_profile_data = self._deep_merge(merged_profile_data, extracted_info)
+                     logger.info(f"Successfully merged transcript info into profile data for {candidate_id}")
 
-                # Update processing status within the merged profile dictionary
-                if 'processing_status' not in merged_profile: merged_profile['processing_status'] = {}
-                merged_profile['processing_status'].update({
-                     # Keep 'processing_call' until the very end
-                     'call_completed': True,
-                     'last_updated': datetime.utcnow().isoformat()
-                })
+                     # Clean the merged profile JSON before saving
+                     cleaned_profile_json = self._clean_profile_json(merged_profile_data)
 
-                # Save merged profile (without changing final status yet)
-                update_resp = await self.supabase.table('candidates_dev').update({
-                     'profile_json': merged_profile,
+                     # Update DB: Save cleaned profile JSON only
+                     profile_update_resp = await self.supabase.table(self.candidates_table).update({
+                         'profile_json': cleaned_profile_json,
                      'updated_at': datetime.utcnow().isoformat()
                 }).eq('id', candidate_id).execute()
-                if not update_resp.data:
-                     raise Exception("Failed to save merged profile to database.")
+
+                     if not profile_update_resp.data:
+                          logger.error("Failed to save cleaned/merged profile JSON to database.")
+                          # Don't raise Exception here, allow process to continue but log error
+                          # We can still try embedding with the un-updated profile
+                     else:
+                         logger.info(f"Successfully updated profile_json for {candidate_id}")
+                     
+                     call_completed_flag = True # Mark call completed as info was processed
+                
+                # Update the is_call_completed flag in the database
+                if call_completed_flag:
+                    await self._update_candidate_status(candidate_id, 'processing_call', update_flags={'is_call_completed': True})
+                
                 self._update_transaction(process_id, "profile_update", "completed")
             except Exception as profile_err:
-                 logger.error(f"Error analyzing transcript or updating profile for {candidate_id}: {profile_err}")
+                 logger.error(f"Error during transcript analysis or profile update for {candidate_id}: {profile_err}")
                  self._update_transaction(process_id, "profile_update", "failed", {"error": str(profile_err)})
-                 # final_process_status will be set to error_processing_call in outer except/finally
-                 raise profile_err # Re-raise to outer handler
+                 # Let the outer error handler catch this and set final status
+                 raise profile_err
 
             # 3. Generate & Store Embedding
             self._update_transaction(process_id, "embedding", "started")
             logger.info(f"Generating embedding for {candidate_id}")
-            # Use the updated merged_profile for embedding generation
-            embedding_success = await self._generate_and_store_embedding(candidate_id, merged_profile) 
+            # Pass the merged data (potentially updated with transcript info)
+            embedding_success = await self._generate_and_store_embedding(candidate_id, merged_profile_data)
             if not embedding_success:
                  logger.error(f"Embedding generation/storage failed for {candidate_id}. Matchmaking will be skipped.")
                  self._update_transaction(process_id, "embedding", "failed", {"reason": "Embedding function returned false"})
-                 # Let process finish, final status determined later
+                 final_process_status = 'error_embedding' # _update_candidate_embedding_status sets this in DB
             else:
                 self._update_transaction(process_id, "embedding", "completed")
                 self.state["metrics"]["embeddings_generated"] += 1
+                final_process_status = 'completed' # Default success if embedding works
 
-            # 4. Trigger Matchmaking (Only if embedding succeeded)
+            # 4. Trigger Matchmaking & Appropriate Email (Only if embedding succeeded)
             if embedding_success:
                 self._update_transaction(process_id, "matchmaking", "started")
                 logger.info(f"Triggering matchmaking for {candidate_id}")
@@ -453,233 +569,256 @@ class BrainAgent:
                     logger.info(f"Found {len(matches)} potential matches for {candidate_id}")
                     self.state["metrics"]["matches_found"] += len(matches)
 
+                    logger.info(f"DEBUG: About to check matches condition. matches={bool(matches)}")
                     if matches:
+                        logger.info("DEBUG: Inside matches block")
                         self._update_transaction(process_id, "match_storage", "started")
-                        match_records = []
-                        # Extract all unique job IDs needed
+                        # Store matches in database...
+                        # Prepare candidate text for matching (using merged data) - Moved here
+                        candidate_text_for_match, _ = self._prepare_candidate_text_for_embedding(merged_profile_data)
+                        
+                        # Fetch job details... - Moved here
                         job_ids_to_fetch = list(set(match.get("job_id") for match in matches if match.get("job_id") is not None))
-
-                        # Fetch job details (multiple relevant fields) in bulk
                         job_details_map = {}
                         if job_ids_to_fetch:
                             try:
-                                # Fetch multiple relevant columns for context
                                 job_fields_to_select = [
-                                    'id',
-                                    'job_title',
-                                    'key_responsibilities', # list
-                                    'skills_must_have',     # list
-                                    'skills_preferred',     # list
-                                    'minimum_years_of_experience', # int/str
-                                    'seniority', # enum/str
-                                    'ideal_candidate_profile', # text
-                                    'product_description' # text
+                                    'id', 'job_title', 'key_responsibilities', 'skills_must_have',
+                                    'skills_preferred', 'minimum_years_of_experience', 'seniority',
+                                    'ideal_candidate_profile', 'product_description', 'job_url' # Add job_url
                                 ]
-                                logger.info(f"Fetching details for {len(job_ids_to_fetch)} job IDs: {job_ids_to_fetch}")
-                                job_resp = await self.supabase.table('jobs_dev').select(','.join(job_fields_to_select)) \
+                                job_resp = await self.supabase.table(self.jobs_table).select(','.join(job_fields_to_select)) \
                                     .in_('id', job_ids_to_fetch).execute()
-
                                 if job_resp.data:
-                                    # Store the whole job data dictionary
                                     job_details_map = {job['id']: job for job in job_resp.data}
-                                    logger.info(f"Fetched details for {len(job_details_map)} jobs.")
                                 else:
-                                    logger.warning(f"Could not fetch details for job IDs: {job_ids_to_fetch}. Response: {job_resp}")
+                                    logger.warning(f"Could not fetch details for job IDs: {job_ids_to_fetch}")
                             except Exception as db_err:
                                 logger.error(f"Error fetching job details: {db_err}")
-                                logger.error(f"Traceback: {traceback.format_exc()}")
-                                # Proceed without job text if fetching fails
 
+                        match_records = []
                         for match in matches:
                             job_id = match.get("job_id")
                             similarity_score = match.get("similarity")
-                            if job_id is None or similarity_score is None:
-                                logger.warning(f"Skipping match storage due to missing job_id or score: {match}")
-                                continue
+                            if job_id is None or similarity_score is None: continue
 
                             job_data = job_details_map.get(job_id)
                             job_text = ""
                             if job_data:
-                                # Construct job_text from multiple fields
-                                parts = []
-                                if job_data.get('job_title'): parts.append(f"Job Title: {job_data['job_title']}")
-                                if job_data.get('seniority'): parts.append(f"Seniority: {job_data['seniority']}")
-                                if job_data.get('minimum_years_of_experience'): parts.append(f"Min Experience: {job_data['minimum_years_of_experience']} years")
-                                if job_data.get('key_responsibilities'): parts.append(f"Responsibilities: {', '.join(job_data['key_responsibilities'])}")
-                                if job_data.get('skills_must_have'): parts.append(f"Must-Have Skills: {', '.join(job_data['skills_must_have'])}")
-                                if job_data.get('skills_preferred'): parts.append(f"Preferred Skills: {', '.join(job_data['skills_preferred'])}")
-                                if job_data.get('product_description'): parts.append(f"Product: {job_data['product_description']}")
-                                if job_data.get('ideal_candidate_profile'): parts.append(f"Ideal Candidate: {job_data['ideal_candidate_profile']}")
-                                job_text = "\n".join(parts)
-                            else:
-                                logger.warning(f"No job details found for job_id {job_id} in fetched data.")
-
-
-                            # Generate match reason and tags
+                                parts = [
+                                    f"Job Title: {job_data.get('job_title')}" if job_data.get('job_title') else None,
+                                    f"Seniority: {job_data.get('seniority')}" if job_data.get('seniority') else None,
+                                    f"Min Experience: {job_data.get('minimum_years_of_experience')} years" if job_data.get('minimum_years_of_experience') is not None else None,
+                                    f"Responsibilities: {', '.join(job_data.get('key_responsibilities', []))}" if job_data.get('key_responsibilities') else None,
+                                    f"Must-Have Skills: {', '.join(job_data.get('skills_must_have', []))}" if job_data.get('skills_must_have') else None,
+                                    f"Preferred Skills: {', '.join(job_data.get('skills_preferred', []))}" if job_data.get('skills_preferred') else None,
+                                    f"Product: {job_data.get('product_description')}" if job_data.get('product_description') else None,
+                                    f"Ideal Candidate: {job_data.get('ideal_candidate_profile')}" if job_data.get('ideal_candidate_profile') else None
+                                ]
+                                job_text = "\n".join(filter(None, parts))
+                            
                             reason_tags_data = None
-                            if job_text and merged_profile:
+                            if job_text and candidate_text_for_match:
                                 reason_tags_data = await self._generate_match_reason_and_tags(
-                                    candidate_text=merged_profile,
+                                    candidate_text=candidate_text_for_match,
                                     job_text=job_text,
                                     match_score=similarity_score
                                 )
-                            else:
-                                logger.warning(f"Skipping reason generation for job {job_id} due to missing candidate or job text.")
 
-
-                            match_record = {
+                            match_records.append({
                                 "candidate_id": candidate_id,
                                 "job_id": job_id,
                                 "match_score": similarity_score,
-                                # Add reason and tags if generated
                                 "match_reason": reason_tags_data.get("match_reason") if reason_tags_data else None,
                                 "match_tags": reason_tags_data.get("match_tags") if reason_tags_data else None
-                            }
-                            match_records.append(match_record)
+                            })
+
 
                         if match_records:
-                            logger.debug(f"Attempting to insert/upsert {len(match_records)} match records into candidate_job_matches_dev")
-                            # Use the correct table name with _dev suffix
-                            insert_response = await self.supabase.table('candidate_job_matches_dev')\
-                                .upsert(match_records, \
-                                        on_conflict='candidate_id, job_id', # Specify conflict columns
-                                        ignore_duplicates=False # Make sure scores/reasons are updated
-                                        ) \
-                                .execute()
-                            # Check response status
-                            # Note: Checking insert_response needs care, Supabase async might differ
-                            # Let's assume success if no exception is raised for now, or check status code if available.
-                            # Example check (adapt based on actual Supabase async client behavior):
-                            if hasattr(insert_response, 'data') or (hasattr(insert_response, 'status_code') and 200 <= insert_response.status_code < 300):
-                                logger.info(f"✅ Successfully upserted {len(insert_response.data)} job matches for candidate {candidate_id}")
-                                self._update_transaction(process_id, "match_storage", "completed", {"count": len(insert_response.data)})
-
-                                # --- Start Email Logic ---
-                                try:
-                                    logger.info(f"Checking for high-scoring matches (>0.90) for candidate {candidate_id} to send email.")
-                                    
-                                    # 1. Get Candidate Email and Name
-                                    candidate_info_resp = await self.supabase.table('candidates_dev')\
-                                        .select('email', 'full_name')\
-                                        .eq('id', candidate_id)\
-                                        .limit(1)\
-                                        .execute()
-
-                                    candidate_email = None
-                                    candidate_name = None
-                                    if candidate_info_resp.data:
-                                        candidate_email = candidate_info_resp.data[0].get('email')
-                                        candidate_name = candidate_info_resp.data[0].get('full_name') # Assuming 'full_name'
-                                    
-                                    if not candidate_email:
-                                        logger.warning(f"Could not find email for candidate {candidate_id}. Cannot send job match email.")
-                                    else:
-                                        # Define threshold before use
-                                        MATCH_SCORE_THRESHOLD = 0.40 # Lowered threshold for testing
-                                        
-                                        # 2. Get High-Scoring Job Matches (Title and URL) - Using two queries
-                                        logger.info(f"Fetching high-scoring match job IDs (>{MATCH_SCORE_THRESHOLD}) for candidate {candidate_id}.")
-                                        
-                                        # Query 1: Get job IDs with scores above the threshold
-                                        matches_ids_resp = await self.supabase.table('candidate_job_matches_dev') \
-                                            .select('job_id, match_score') \
-                                            .eq('candidate_id', candidate_id) \
-                                            .gt('match_score', MATCH_SCORE_THRESHOLD) \
-                                            .order('match_score', desc=True) \
-                                            .execute()
-
-                                        top_job_ids = []
-                                        if matches_ids_resp.data:
-                                            # Sort again in Python just to be safe (API order might not be guaranteed?)
-                                            sorted_matches = sorted(matches_ids_resp.data, key=lambda x: x.get('match_score', 0), reverse=True)
-                                            # Take top 3 job IDs
-                                            top_job_ids = [match['job_id'] for match in sorted_matches[:3] if 'job_id' in match]
-                                            logger.info(f"Found {len(matches_ids_resp.data)} matches above threshold. Selected top {len(top_job_ids)} job IDs: {top_job_ids}")
-                                        else:
-                                             logger.info(f"No matches found above threshold {MATCH_SCORE_THRESHOLD} in initial query.")
-
-
-                                        high_scoring_jobs = []
-                                        # Query 2: Get job details for the TOP job IDs
-                                        if top_job_ids: # Use the filtered list of IDs
-                                            logger.info(f"Fetching details for top job IDs: {top_job_ids}")
-                                            jobs_details_resp = await self.supabase.table('jobs_dev') \
-                                                .select('id, job_title, job_url') \
-                                                .in_('id', top_job_ids) \
-                                                .execute()
-
-                                            if jobs_details_resp.data:
-                                                # Reconstruct the list with title and url
-                                                # We might want to preserve the original order from top_job_ids if Supabase doesn't
-                                                job_details_map = {job['id']: job for job in jobs_details_resp.data}
-                                                high_scoring_jobs = [
-                                                    {'job_title': job_details_map[job_id].get('job_title'), 'job_url': job_details_map[job_id].get('job_url')}
-                                                    for job_id in top_job_ids
-                                                    if job_id in job_details_map and job_details_map[job_id].get('job_title') and job_details_map[job_id].get('job_url')
-                                                ]
-                                                logger.info(f"Successfully fetched details for {len(high_scoring_jobs)} top jobs.")
-                                            else:
-                                                logger.warning(f"Could not fetch details for top job IDs: {top_job_ids}")
-                                        
-                                        # 3. Send Email if matches exist (logic remains the same)
-                                        if high_scoring_jobs:
-                                            logger.info(f"Found {len(high_scoring_jobs)} jobs with details matching criteria for candidate {candidate_id}. Attempting to send email to {candidate_email}.")
-                                            # Call async email function with await and pass needed args
-                                            email_sent = await send_job_match_email(
-                                                recipient_email=candidate_email, 
-                                                candidate_name=candidate_name, 
-                                                job_matches=high_scoring_jobs,
-                                                candidate_id=candidate_id, # Pass candidate_id
-                                                supabase_client=self.supabase # Pass supabase client instance
-                                            )
-                                            if email_sent:
-                                                logger.info(f"Successfully queued/sent job match email for candidate {candidate_id}.")
-                                            else:
-                                                logger.error(f"Failed to send job match email for candidate {candidate_id}.")
-                                        else:
-                                            logger.info(f"No high-scoring matches (>0.90) found for candidate {candidate_id}. Skipping email.")
-
-                                except Exception as email_err:
-                                    logger.error(f"Error during email sending logic for candidate {candidate_id}: {email_err}")
-                                    logger.error(f"Traceback: {traceback.format_exc()}")
-                                    # Log error but don't stop the overall process
-                                # --- End Email Logic ---
-
+                            logger.info("DEBUG: Inside match_records block")
+                            upsert_response = await self.supabase.table(self.matches_table)\
+                                .upsert(match_records, on_conflict='candidate_id, job_id', ignore_duplicates=False).execute()
+                            if hasattr(upsert_response, 'data') or (hasattr(upsert_response, 'status_code') and 200 <= upsert_response.status_code < 300):
+                                logger.info(f"✅ Successfully upserted {len(upsert_response.data)} job matches for candidate {candidate_id}")
+                                self._update_transaction(process_id, "match_storage", "completed", {"count": len(upsert_response.data)})
                             else:
-                                logger.error(f"Failed to upsert job matches for candidate {candidate_id}. Response: {insert_response}")
-                                self._update_transaction(process_id, "match_storage", "failed", {"error": "DB upsert failed", "response": str(insert_response)})
+                                logger.error(f"Failed to upsert job matches for candidate {candidate_id}. Response: {upsert_response}")
+                                self._update_transaction(process_id, "match_storage", "failed", {"error": "DB upsert failed"})
+
+                    # Email logic - Correctly indented after the 'if matches:' block finishes
+                    logger.info(f"DEBUG: About to start email logic. candidate_email={bool(candidate_email)}")
+                    # Add the try block back for email logic
+                    try:
+                        if candidate_email:
+                            logger.info("DEBUG: Inside email logic with valid candidate_email")
+                            MATCH_SCORE_THRESHOLD = 0.40
+                            # Get top 3 job IDs above threshold
+                            matches_ids_resp = await self.supabase.table(self.matches_table).select('job_id, match_score').eq('candidate_id', candidate_id).gt('match_score', MATCH_SCORE_THRESHOLD).order('match_score', desc=True).limit(3).execute()
+                            top_job_ids = [m['job_id'] for m in matches_ids_resp.data] if matches_ids_resp.data else []
+
+                            # Fix indentation for high_scoring_jobs initialization and the following block
+                            high_scoring_jobs = [] # Align this with top_job_ids
+                            if top_job_ids: # Align this with high_scoring_jobs initialization
+                                jobs_details_resp = await self.supabase.table(self.jobs_table).select('id, job_title, job_url').in_('id', top_job_ids).execute()
+                                # Fix indentation for the inner if block
+                                if jobs_details_resp.data: # Indent under the 'if top_job_ids:'
+                                    job_details_map = {job['id']: job for job in jobs_details_resp.data}
+                                    high_scoring_jobs = [
+                                        {'job_title': job_details_map[job_id].get('job_title'), 'job_url': job_details_map[job_id].get('job_url')}
+                                        for job_id in top_job_ids if job_id in job_details_map and job_details_map[job_id].get('job_title') and job_details_map[job_id].get('job_url')
+                                    ]
+                            
+                            # Fix indentation for the if high_scoring_jobs block
+                            if high_scoring_jobs: # Align this with 'if top_job_ids:'
+                                logger.info(f"Attempting to send job match email to {candidate_email} for {len(high_scoring_jobs)} jobs.")
+                                await send_job_match_email(
+                                    recipient_email=candidate_email, 
+                                    candidate_name=candidate_name, 
+                                    job_matches=high_scoring_jobs,
+                                    candidate_id=uuid.UUID(candidate_id), # Ensure UUID 
+                                    supabase_client=self.supabase
+                                )
+                            # Fix indentation for the else block (sending no matches email)
+                            else: # Align this with 'if high_scoring_jobs:'
+                                # No jobs met threshold for the email OR no matches were found initially
+                                logger.info(f"No high-scoring jobs found or initial match count was zero. Attempting to send 'no matches' email to {candidate_email}.")
+                                await send_no_matches_email(
+                                    recipient_email=candidate_email, 
+                                    candidate_name=candidate_name, 
+                                    candidate_id=uuid.UUID(candidate_id), # Ensure UUID
+                                    supabase_client=self.supabase
+                                )
+                        # Fix indentation for the else block (no candidate email)
+                        else: # Align this with 'if candidate_email:'
+                            logger.warning(f"Could not find email for candidate {candidate_id} to send post-match email.")
+                    # Add the except block for the email try
+                    except Exception as email_err: # Align this with 'try:'
+                        logger.error(f"Error during email sending logic for {candidate_id}: {email_err}")
+                        # Don't re-raise, just log the error and continue
 
                     self._update_transaction(process_id, "matchmaking", "completed")
+                # Add the except block for the matchmaking try
                 except Exception as match_err:
                     logger.error(f"Error during matchmaking or storing matches for {candidate_id}: {match_err}")
                     logger.error(f"Traceback: {traceback.format_exc()}")
                     self._update_transaction(process_id, "matchmaking", "failed", {"error": str(match_err)})
-                    # Don't set final status to error here, let it be completed if embedding worked
+                    # If matchmaking fails, the overall process status remains as determined by embedding
+                    # final_process_status doesn't change here
             else:
                  logger.warning(f"Skipping matchmaking for {candidate_id} due to embedding failure.")
                  self._update_transaction(process_id, "matchmaking", "skipped", {"reason": "Embedding failed"})
+                 # final_process_status is already 'error_embedding'
             
-            # If we reached here without a major error being raised
-            final_process_status = 'completed'
-            logger.info(f"\n=== ✅ Call Processing Workflow Succeeded for {candidate_id} ===")
-            return {"status": "completed", "matches_found": len(matches)}
+            # final_process_status is now 'completed' or 'error_embedding'
+            logger.info(f"\n=== ✅ Call Processing Finished for {candidate_id} with status: {final_process_status} ====")
+            return {"status": final_process_status, "matches_found": len(matches)}
             
-        # Outer except block catches errors raised from within the main processing block
         except Exception as e:
-            final_process_status = 'error_processing_call' # Ensure status reflects the error
+            # Catch errors from profile update or other unhandled exceptions
+            final_process_status = 'error_processing_call' # Set specific error status
             error_msg = f"Unhandled error during call processing for {candidate_id}: {str(e)}"
             logger.error(f"❌ {error_msg}")
             logger.error(f"❌ Full traceback: {traceback.format_exc()}")
             self._update_transaction(process_id, "error", "failed", {"error": error_msg})
+            # Status will be updated in finally block
             return {"status": "error", "error": error_msg}
 
         finally:
-            # --- Ensure final status is set --- 
-            logger.info(f"Updating final status to '{final_process_status}' for candidate {candidate_id}.")
-            await self._update_candidate_status(candidate_id, final_process_status)
+            # --- Ensure final status is set in DB --- 
+            logger.info(f"Updating final status to '{final_process_status}' for candidate {candidate_id} in finally block.")
+            final_flags = {
+                'is_call_completed': True # Call was processed (even if transcript was empty or error occurred)
+            }
+            # Set embedding flag based on the determined final status
+            if final_process_status == 'completed':
+                 final_flags['is_embedding_generated'] = True 
+            elif final_process_status in ['error_embedding', 'error_processing_call', 'call_missed_or_failed']:
+                 final_flags['is_embedding_generated'] = False # Ensure it's false if embedding failed or wasn't reached
+            
+            # Update the final status and relevant flags
+            await self._update_candidate_status(candidate_id, final_process_status, update_flags=final_flags)
             self._end_transaction(process_id, final_process_status)
             logger.info(f"Transaction {process_id} ended with status: {final_process_status}")
             # --- End Final Status Update ---
+
+    async def handle_callback_request(self, candidate_id: str) -> bool:
+        """Handles a request from a candidate (via link click) to reschedule a call."""
+        process_id = f"callback_request_{candidate_id}_{datetime.utcnow().isoformat()}"
+        self._start_transaction(process_id, "callback_request")
+        try:
+            logger.info(f"Handling callback request for candidate: {candidate_id}")
+            
+            # 1. Fetch required candidate data (email, phone, full_name)
+            self._update_transaction(process_id, "fetch_data", "started")
+            try:
+                candidate_data_resp = await self.supabase.table(self.candidates_table)\
+                    .select('email, phone, full_name')\
+                    .eq('id', candidate_id)\
+                    .single()\
+                    .execute()
+                
+                if not candidate_data_resp.data:
+                    logger.error(f"Callback request failed: Candidate {candidate_id} not found.")
+                    self._update_transaction(process_id, "fetch_data", "failed", {"error": "Candidate not found"})
+                    self._end_transaction(process_id, "failed")
+                    return False # Indicate failure to the endpoint handler
+                
+                candidate_email = candidate_data_resp.data.get('email')
+                phone_number = candidate_data_resp.data.get('phone')
+                db_full_name = candidate_data_resp.data.get('full_name')
+                
+                if not phone_number:
+                    logger.error(f"Callback request failed: Phone number missing for candidate {candidate_id}.")
+                    self._update_transaction(process_id, "fetch_data", "failed", {"error": "Phone number missing"})
+                    self._end_transaction(process_id, "failed")
+                    return False
+                if not candidate_email:
+                     logger.warning(f"Callback request: Email missing for candidate {candidate_id}. Proceeding without it.")
+                if not db_full_name:
+                     logger.warning(f"Callback request: Full name missing for candidate {candidate_id}. Using fallback.")
+
+                self._update_transaction(process_id, "fetch_data", "completed")
+
+            except Exception as db_err:
+                logger.error(f"Callback request failed: DB error fetching data for {candidate_id}: {db_err}")
+                self._update_transaction(process_id, "fetch_data", "failed", {"error": str(db_err)})
+                self._end_transaction(process_id, "failed")
+                return False
+            
+            # 2. Schedule the Retell call using the fetched data
+            #    Reusing the logic from handle_candidate_submission's step 3
+            logger.info(f"Attempting to schedule new call for candidate {candidate_id} via callback request.")
+            self._update_transaction(process_id, "call_scheduling", "started")
+            try:
+                 call_result = await self.retell_service.schedule_call(
+                      candidate_id=candidate_id,
+                      dynamic_variables={
+                           'first_name': db_full_name.split(' ')[0] if db_full_name else 'Candidate',
+                           'email': candidate_email if candidate_email else '', # Pass email if available
+                           # Assuming role/company aren't needed/available for a simple callback
+                           'current_company': '',
+                           'current_title': '',
+                           'phone': phone_number
+                      }
+                 )
+                 call_id = call_result.get("call_id", "unknown")
+                 logger.info(f"✅ Retell call re-scheduled via callback for {candidate_id}: {call_id}")
+                 self._update_transaction(process_id, "call_scheduling", "completed", {"call_id": call_id})
+                 self._end_transaction(process_id, "completed")
+                 return True # Indicate success to the endpoint handler
+
+            except Exception as call_err:
+                 logger.error(f"❌ Error re-scheduling Retell call via callback for {candidate_id}: {call_err}")
+                 self._update_transaction(process_id, "call_scheduling", "failed", {"error": str(call_err)})
+                 self._end_transaction(process_id, "failed")
+                 return False
+                 
+        except Exception as outer_err:
+            # Catch any unexpected errors in the overall handling
+            logger.error(f"Unexpected error in handle_callback_request for {candidate_id}: {outer_err}")
+            self._update_transaction(process_id, "error", "failed", {"error": str(outer_err)})
+            self._end_transaction(process_id, "error")
+            return False
 
     # --- Embedding Helper Methods (Moved from CandidateService) ---
     def _prepare_candidate_text_for_embedding(self, profile_json: Dict[str, Any]) -> Tuple[str, List[str]]:
@@ -777,136 +916,147 @@ class BrainAgent:
         # Return text and the list of fields used
         return full_text, list(set(fields_included)) # Use set to ensure uniqueness
 
-    async def _generate_and_store_embedding(self, candidate_id: str, profile_json_for_embedding: Dict[str, Any]) -> bool:
-        """Generates embedding from profile data and updates the candidate record.
+    async def _generate_and_store_embedding(self, candidate_id: str, profile_data_for_embedding: Dict[str, Any]) -> bool:
+        """Generates embedding from profile data and updates the candidate record using new helpers.
            Returns True on success, False on failure.
         """
         try:
             logger.info(f"(Agent) Generating embedding for candidate {candidate_id}")
-            # Get text AND fields used
-            candidate_text, fields_included = self._prepare_candidate_text_for_embedding(profile_json_for_embedding)
-            text_length = len(candidate_text) # Get length for metadata
+            candidate_text, fields_included = self._prepare_candidate_text_for_embedding(profile_data_for_embedding)
+            text_length = len(candidate_text)
 
             if not candidate_text:
                 logger.warning(f"(Agent) No text content for candidate {candidate_id}. Skipping embedding.")
-                # Pass empty fields list and 0 length on failure
-                await self._update_candidate_embedding_status(candidate_id, False, "No content for embedding", [], 0)
-                return False # Indicate failure
-
-            embedding = await self.openai_service.generate_embedding(candidate_text)
-
-            # Update status, passing the embedding vector AND metadata fields
-            success = await self._update_candidate_embedding_status(candidate_id, True, None, fields_included, text_length, embedding)
-
-            if success:
-                 logger.info(f"✅ (Agent) Successfully generated and stored embedding for {candidate_id}")
-                 return True
-            else:
-                 logger.error(f"(Agent) Failed attempt to store embedding for {candidate_id}.")
-                 # Try to update status with failure details, pass metadata that was *attempted*
-                 await self._update_candidate_embedding_status(candidate_id, False, "Failed to store embedding", fields_included, text_length)
-                 return False # Indicate failure
-            
-        except Exception as e:
-            error_msg = f"Error generating/storing embedding for candidate {candidate_id}: {str(e)}"
-            logger.error(f"(Agent) {error_msg}")
-            # Try to update status with error, pass empty fields and 0 length
-            await self._update_candidate_embedding_status(candidate_id, False, error_msg, [], 0)
-            return False # Indicate failure
-
-    async def _update_candidate_embedding_status(self, 
-                                                 candidate_id: str, 
-                                                 generated: bool, 
-                                                 error_msg: Optional[str], 
-                                                 fields_included: List[str], # New param
-                                                 text_length: int, # New param
-                                                 embedding: Optional[List[float]] = None):
-        """ Helper to update embedding status and optionally the embedding vector and metadata. """
-        try:
-            fetch_resp = await self.supabase.table('candidates_dev').select('profile_json').eq('id', candidate_id).single().execute()
-            if not fetch_resp.data:
-                logger.error(f"(Agent) Cannot update embedding status; candidate {candidate_id} not found.")
+                await self._update_candidate_embedding_status(
+                    candidate_id, success=False, error_message="No content for embedding"
+                )
                 return False
 
-            profile_json = fetch_resp.data.get('profile_json', {})
-            if 'processing_status' not in profile_json: profile_json['processing_status'] = {}
-
-            now_iso = datetime.utcnow().isoformat()
-
-            # Update processing status flags
-            profile_json['processing_status']['embedding_generated'] = generated
-            profile_json['processing_status']['embedding_error'] = error_msg[:200] if error_msg else None
-            profile_json['processing_status']['last_updated'] = now_iso
-
-            # Create/Update embedding_metadata
-            embedding_metadata = {
-                 'last_updated': now_iso,
+            embedding_vector = await self.openai_service.generate_embedding(candidate_text)
+            
+            # Prepare metadata dictionary
+            embedding_metadata_dict = {
+                'last_updated': datetime.utcnow().isoformat(),
                  'fields_included': fields_included,
                  'text_length': text_length,
-                 'model_used': getattr(self.openai_service, 'embedding_model_name', 'unknown') # Safely get model name
+                'model_used': getattr(self.openai_service, 'embedding_model_name', 'unknown')
             }
-            profile_json['embedding_metadata'] = embedding_metadata
 
-            # Prepare payload for DB update
+            # Update embedding column AND metadata column
             update_payload = {
-                'profile_json': profile_json,
-                'updated_at': now_iso
+                'embedding': embedding_vector,
+                'embedding_metadata': embedding_metadata_dict,
+                'is_embedding_generated': True, # Mark as success
+                'embedding_error': None, # Clear any previous error
+                'updated_at': datetime.utcnow().isoformat(),
+                'status_last_updated': datetime.utcnow().isoformat()
+                # Do not change the overall 'status' here, let handle_call_processed decide final status
             }
-            # Include embedding vector only on successful generation
-            if generated and embedding:
-                update_payload['embedding'] = embedding
             
-            # Ensure embedding field is set to NULL if generation failed
-            # This prevents keeping a stale embedding if regeneration fails
-            if not generated:
-                 update_payload['embedding'] = None
-
-            update_resp = await self.supabase.table('candidates_dev').update(update_payload).eq('id', candidate_id).execute()
+            update_resp = await self.supabase.table(self.candidates_table)\
+                .update(update_payload)\
+                .eq('id', candidate_id)\
+                .execute()
 
             if not update_resp.data:
-                 logger.error(f"(Agent) Failed DB update for embedding status/metadata for {candidate_id}. Response: {update_resp}")
+                 logger.error(f"(Agent) Failed DB update for embedding vector/metadata for {candidate_id}.")
+                 # Update status to reflect embedding failure
+                 await self._update_candidate_embedding_status(
+                     candidate_id, success=False, error_message="Failed to store embedding vector/metadata"
+                 )
                  return False
+            else:
+                logger.info(f"✅ (Agent) Successfully generated and stored embedding vector and metadata for {candidate_id}")
+                # Update status to reflect embedding success (separate call)
+                await self._update_candidate_embedding_status(
+                    candidate_id, success=True, metadata=embedding_metadata_dict
+                )
             return True
+            
         except Exception as e:
-            logger.error(f"(Agent) Exception during embedding status/metadata update for {candidate_id}: {e}")
+            error_msg = f"(Agent) Error generating/storing embedding for candidate {candidate_id}: {str(e)}"
+            logger.error(f"{error_msg}")
+            await self._update_candidate_embedding_status(
+                candidate_id, success=False, error_message=error_msg
+            )
             return False
 
-    # --- Other Helper Methods ---
-    async def _update_candidate_status(self, candidate_id: str, status: str):
-        """ Safely update only the processing_status.status field. """
+    async def _update_candidate_status(self, candidate_id: str, status: str, update_flags: Optional[Dict[str, bool]] = None):
+        """Updates the status and related flags in the dedicated DB columns."""
+        logger.info(f"Updating status for {candidate_id} to: {status}")
+        now_utc = datetime.utcnow()
+        update_payload = {
+            "status": status,
+            "status_last_updated": now_utc.isoformat(),
+            "updated_at": now_utc.isoformat() # Keep main updated_at fresh
+        }
+        
+        # Add boolean flags if provided (e.g., is_call_completed)
+        if update_flags:
+            update_payload.update(update_flags)
+            logger.info(f"Also updating flags: {update_flags}")
+
         try:
-            fetch_resp = await self.supabase.table('candidates_dev').select('profile_json').eq('id', candidate_id).single().execute()
-            if fetch_resp.data:
-                profile_json = fetch_resp.data.get('profile_json', {})
-                if 'processing_status' not in profile_json: profile_json['processing_status'] = {}
-                profile_json['processing_status']['status'] = status
-                profile_json['processing_status']['last_updated'] = datetime.utcnow().isoformat()
-                await self.supabase.table('candidates_dev').update({
-                    'profile_json': profile_json,
-                'updated_at': datetime.utcnow().isoformat()
-            }).eq('id', candidate_id).execute()
+            update_response = await self.supabase.table(self.candidates_table)\
+                .update(update_payload)\
+                .eq('id', candidate_id)\
+                .execute()
+
+            if not update_response.data:
+                 # Log error but don't raise, as status update might not be critical path
+                 logger.error(f"Failed to update status columns for {candidate_id} to {status}")
+            else:
+                 logger.info(f"Successfully updated status columns for {candidate_id} to {status}")
+
         except Exception as e:
-            logger.error(f"Failed to update candidate status to '{status}' for {candidate_id}: {e}")
+            logger.error(f"Error updating status columns for {candidate_id}: {str(e)}")
+            logger.error(f"Traceback: {traceback.format_exc()}")
 
-    def _deep_merge(self, dict1: Dict, dict2: Dict) -> Dict:
-        """ Deep merge two dictionaries, handling nested dicts and lists (unique append). """
-        result = dict1.copy()
-        for key, value in dict2.items():
-            if isinstance(value, dict) and key in result and isinstance(result[key], dict):
-                # Recursively merge dictionaries
-                result[key] = self._deep_merge(result[key], value)
-            elif isinstance(value, list) and key in result and isinstance(result[key], list):
-                # Append unique items from dict2's list to dict1's list
-                existing_list = result[key]
-                existing_list.extend(item for item in value if item not in existing_list)
-                result[key] = existing_list
-            elif value is not None:
-                # Overwrite or add the value if it's not None
-                # Handles cases where key not in result or result[key] is not dict/list
-                result[key] = value
-            # If value is None, we implicitly keep dict1's value
-        return result
+    async def _update_candidate_embedding_status(
+        self,
+        candidate_id: str,
+        success: bool,
+        metadata: Optional[Dict[str, Any]] = None,
+        error_message: Optional[str] = None
+    ):
+        """Updates embedding status using dedicated DB columns."""
+        logger.info(f"Updating embedding status for {candidate_id}. Success: {success}")
+        now_utc = datetime.utcnow()
+        update_payload = {
+            "is_embedding_generated": success,
+            "embedding_error": error_message if not success else None,
+            "status_last_updated": now_utc.isoformat(),
+            "updated_at": now_utc.isoformat()
+        }
 
+        # Add metadata column update only if successful and metadata is provided
+        if success and metadata:
+            update_payload["embedding_metadata"] = metadata
+        elif not success:
+             # Explicitly set metadata to null if embedding failed
+             update_payload["embedding_metadata"] = None 
+        # If success is True but metadata is None, we don't add/change the embedding_metadata column
+
+        # If embedding failed, also set the main status to 'error_embedding'
+        if not success:
+            update_payload["status"] = "error_embedding"
+
+        try:
+            update_response = await self.supabase.table(self.candidates_table)\
+                .update(update_payload)\
+                .eq('id', candidate_id)\
+                .execute()
+
+            if not update_response.data:
+                logger.error(f"Failed to update embedding status columns for {candidate_id}")
+            else:
+                logger.info(f"Successfully updated embedding status columns for {candidate_id}")
+
+        except Exception as e:
+            logger.error(f"Error updating embedding status columns for {candidate_id}: {str(e)}")
+            logger.error(f"Traceback: {traceback.format_exc()}")
+
+    # --- Transaction Tracking Methods ---
     def _start_transaction(self, process_id: str, transaction_type: str) -> None:
         self.state["transactions"][process_id] = {
             "type": transaction_type,
@@ -937,3 +1087,18 @@ class BrainAgent:
             logger.info(f"Ending transaction {process_id} with status: {status}")
         else:
             logger.warning(f"Attempted to end non-existent transaction: {process_id}")
+
+    # --- Deep Merge Utility (if needed) ---
+    def _deep_merge(self, dict1: Dict, dict2: Dict) -> Dict:
+        # Keep the deep merge utility as it's used in the modified handle_call_processed
+        result = dict1.copy()
+        for key, value in dict2.items():
+            if isinstance(value, dict) and key in result and isinstance(result[key], dict):
+                result[key] = self._deep_merge(result[key], value)
+            elif isinstance(value, list) and key in result and isinstance(result[key], list):
+                existing_list = result[key]
+                existing_list.extend(item for item in value if item not in existing_list)
+                result[key] = existing_list
+            elif value is not None:
+                 result[key] = value
+        return result

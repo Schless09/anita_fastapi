@@ -9,7 +9,7 @@ class Settings(BaseSettings):
     # OpenAI
     openai_api_key: str
     openai_model: str = "gpt-4-turbo-preview"
-    openai_temperature: float = 0.7
+    openai_temperature: float = 0.5
     
     # Retell
     retell_agent_id: str
@@ -47,6 +47,7 @@ class Settings(BaseSettings):
     # Supabase
     supabase_url: str
     supabase_key: str
+    supabase_service_role_key: str
 
     # Pinecone
     pinecone_api_key: str
@@ -78,4 +79,10 @@ class Settings(BaseSettings):
 
 @lru_cache()
 def get_settings() -> Settings:
-    return Settings() 
+    return Settings()
+
+def get_table_name(base_name: str) -> str:
+    """Returns the full table name with environment suffix (_dev or _prod)."""
+    settings = get_settings()
+    suffix = "_prod" if settings.environment == "production" else "_dev"
+    return f"{base_name}{suffix}" 

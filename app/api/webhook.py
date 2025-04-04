@@ -14,6 +14,7 @@ from retell import Retell
 from app.dependencies import get_brain_agent
 from supabase._async.client import AsyncClient
 from app.dependencies import get_supabase_client
+from app.config import get_table_name
 
 # Get logger
 logger = logging.getLogger(__name__)
@@ -37,26 +38,34 @@ async def log_call_communication(
     """Logs the completed call details to the communications table."""
     logger.info(f"Attempting to log call communication for candidate {candidate_id}")
     try:
+        call_id = call_data.get('call_id')
+        if not call_id:
+            logger.warning(f"Missing call_id in call_data for candidate {candidate_id}. Cannot set thread_id.")
+            thread_id_to_log = None
+        else:
+            thread_id_to_log = call_id
+
         communication_log = {
             "candidates_id": candidate_id,
-            "type": "call",  # Must be one of: 'email', 'call', 'sms', 'iMessage'
-            "direction": "inbound",  # Must be either 'inbound' or 'outbound'
-            "subject": f"Retell Call ({call_data.get('call_id')})",
-            "content": json.dumps(call_data.get('transcript_object', [])),  # Store transcript object as JSON string
+            "thread_id": thread_id_to_log,
+            "type": "call",
+            "direction": "inbound",
+            "subject": f"Retell Call ({call_id})",
+            "content": json.dumps(call_data.get('transcript_object', [])),
             "metadata": {
-                "call_id": call_data.get('call_id'),
+                "call_id": call_id,
                 "call_status": call_data.get('call_status'),
                 "start_timestamp": call_data.get('start_timestamp'),
                 "end_timestamp": call_data.get('end_timestamp'),
                 "recording_url": call_data.get('recording_url'),
                 "disconnection_reason": call_data.get('disconnection_reason'),
                 "agent_id": call_data.get('agent_id'),
-                "call_analysis": call_data.get('call_analysis', {})  # Include call analysis in metadata
+                "call_analysis": call_data.get('call_analysis', {})
             }
-            # timestamp defaults to now() in DB
         }
         
-        log_resp = await supabase_client.table("communications_dev").insert(communication_log).execute()
+        table_name = get_table_name("communications")
+        log_resp = await supabase_client.table(table_name).insert(communication_log).execute()
         if hasattr(log_resp, 'data') and log_resp.data:
             logger.info(f"Successfully logged call communication for candidate {candidate_id}")
         else:
