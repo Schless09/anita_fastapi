@@ -207,13 +207,18 @@ class BrainAgent:
             logger.info("\nStep 1: 📝 Initial Data Processing")
             logger.info("----------------------------------------")
             
-            # Create initial candidate record
+            # Create initial candidate record with required fields
             candidate_data = {
                 "id": candidate_id,
                 "email": candidate_email,
+                "full_name": "Candidate",  # Default name until we get the real one
                 "status": "processing",
                 "created_at": datetime.utcnow().isoformat(),
-                "updated_at": datetime.utcnow().isoformat()
+                "updated_at": datetime.utcnow().isoformat(),
+                "is_resume_processed": False,
+                "is_call_completed": False,
+                "is_embedding_generated": False,
+                "profile_json": {}  # Initialize empty profile
             }
             
             # Insert into database
@@ -252,6 +257,7 @@ class BrainAgent:
                 # Update candidate with initial data
                 update_data = {
                     "profile_json": parsed_data["profile"],
+                    "full_name": parsed_data["profile"].get("full_name", "Candidate"),  # Update with real name if available
                     "updated_at": datetime.utcnow().isoformat()
                 }
                 await self.supabase.table(self.candidates_table).update(update_data).eq("id", candidate_id).execute()
