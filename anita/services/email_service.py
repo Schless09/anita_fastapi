@@ -15,7 +15,7 @@ from app.config.settings import get_settings, get_table_name # Import from setti
 import io # Add io import
 
 # Configuration
-SENDER_EMAIL = "anita@recruitcha.com" # Or load from config
+SENDER_EMAIL = os.environ.get('GMAIL_USER', "anita@recruitcha.com")  # Use GMAIL_USER as sender email
 TOKEN_PICKLE_PATH = 'token.pkl'
 CREDENTIALS_JSON_PATH = 'credentials.json' # Needed for refresh
 SCOPES = ['https://www.googleapis.com/auth/gmail.send']

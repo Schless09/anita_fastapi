@@ -306,7 +306,7 @@ class CandidateIntakeAgent(BaseAgent):
                 
                 # Parse the resume in chunks to avoid timeout
                 logger.info("Starting chunked text processing")
-                text_chunks = self._chunk_text(result["text"])
+                text_chunks = self._chunk_text(result["text_content"])
                 logger.info(f"Split text into {len(text_chunks)} chunks")
                 
                 parsed_data = {}
