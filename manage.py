@@ -11,7 +11,7 @@ import socket
 import threading
 
 # Set up logging
-logging.basicConfig(level=logging.INFO, format='%(levelname)s: %(message)s')
+logging.basicConfig(level=logging.INFO, format='%(levelname)s [%(filename)s:%(lineno)d] - %(message)s')
 logger = logging.getLogger(__name__)
 
 def stream_output(process):
@@ -188,7 +188,7 @@ def start():
         # Configure logging
         logging.basicConfig(
             level=logging.INFO,
-            format='%(levelname)s: %(message)s'
+            format='%(levelname)s [%(filename)s:%(lineno)d] - %(message)s'
         )
         
         logger.info("Starting server on port 8000...")

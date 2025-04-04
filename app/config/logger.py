@@ -17,7 +17,7 @@ def setup_logging():
     console_handler.setLevel(logging.INFO)
     
     # Create formatter
-    formatter = logging.Formatter('%(levelname)s: %(message)s')
+    formatter = logging.Formatter('%(levelname)s [%(filename)s:%(lineno)d] - %(message)s')
     console_handler.setFormatter(formatter)
     
     # Add handler to root logger
