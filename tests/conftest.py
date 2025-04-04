@@ -32,18 +32,6 @@ def mock_supabase():
     return mock
 
 @pytest.fixture
-def mock_pinecone():
-    """Create a mock Pinecone client."""
-    mock = AsyncMock()
-    mock.upsert.return_value = {"status": "success"}
-    mock.query.return_value = {
-        "matches": [
-            {"id": "test-id", "score": 0.9}
-        ]
-    }
-    return mock
-
-@pytest.fixture
 def mock_openai():
     """Create a mock OpenAI client."""
     mock = AsyncMock()
@@ -80,7 +68,7 @@ def test_job_data() -> Dict[str, Any]:
     }
 
 @pytest.fixture
-def mock_brain_agent(mock_supabase, mock_pinecone, mock_openai):
+def mock_brain_agent(mock_supabase, mock_openai):
     """Create a mock BrainAgent with mocked dependencies."""
     agent = BrainAgent()
     agent.candidate_service = AsyncMock()

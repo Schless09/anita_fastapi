@@ -316,7 +316,7 @@ class VectorStoreTool(BaseTool):
             response = await self.vector_service.supabase.table(self.jobs_table).select("*").in_('id', job_ids).execute()
 
             if response.data:
-                # Combine Supabase data with Pinecone scores
+                # Combine Supabase data with similarity scores (already included from RPC)
                 detailed_jobs = []
                 for job in response.data:
                     job_id = job.get('id')
