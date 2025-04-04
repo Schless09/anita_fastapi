@@ -27,14 +27,6 @@ from app.config import (
     get_sendgrid_client,
     get_sendgrid_webhook_url,
     get_supabase_client,
-    SUPABASE_URL,
-    SUPABASE_KEY,
-    GMAIL_TOKEN_B64,
-    GMAIL_CLIENT_ID,
-    GMAIL_CLIENT_SECRET,
-    RETELL_API_KEY,
-    RETELL_WEBHOOK_SECRET,
-    ENVIRONMENT
 )
 
 from app.agents.langchain.agents.candidate_intake_agent import CandidateIntakeAgent
