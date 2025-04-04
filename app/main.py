@@ -108,6 +108,9 @@ embeddings = get_embeddings()
 supabase = get_supabase_client()
 sendgrid = get_sendgrid_client()
 
+# Initialize OpenAI client
+openai.api_key = settings.openai_api_key
+
 @app.on_event("startup")
 async def startup_event():
     """Initialize services on startup."""
@@ -171,11 +174,6 @@ async def health_check():
             "agents": list(agents.keys())
         }
     }
-
-# Configure OpenAI
-OPENAI_API_KEY = os.getenv('OPENAI_API_KEY')
-if not OPENAI_API_KEY:
-    raise ValueError("OPENAI_API_KEY environment variable is not set")
 
 # Get Vercel protection bypass secret
 VERCEL_PROTECTION_BYPASS = os.getenv('VERCEL_PROTECTION_BYPASS')
