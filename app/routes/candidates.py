@@ -3,13 +3,29 @@ from typing import Dict, Any, Optional
 import uuid
 from fastapi.responses import HTMLResponse
 from app.services.candidate_service import CandidateService
-import logging
-import traceback
+from app.services.openai_service import OpenAIService
+from app.services.vector_service import VectorService
+from app.services.matching_service import MatchingService
+from app.services.job_service import JobService
+from app.services.retell_service import RetellService
+from app.agents.langchain.agents.candidate_intake_agent import CandidateIntakeAgent
+from app.agents.langchain.agents.job_matching_agent import JobMatchingAgent
+from app.agents.langchain.agents.follow_up_agent import FollowUpAgent
+from app.agents.langchain.agents.interview_agent import InterviewAgent
+from app.agents.langchain.agents.farming_matching_agent import FarmingMatchingAgent
 from app.agents.brain_agent import BrainAgent
 from app.dependencies import get_brain_agent
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
+
+# Initialize services
+candidate_service = CandidateService()
+openai_service = OpenAIService()
+vector_service = VectorService()
+matching_service = MatchingService()
+job_service = JobService()
+retell_service = RetellService()
 
 @router.post("/candidates")
 async def create_candidate(
