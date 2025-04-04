@@ -167,6 +167,9 @@ class PDFProcessor(BaseTool):
             quick_text = "\n".join(text_content)
             logger.info(f"Total extracted text length: {len(quick_text)} characters")
             
+            # Log the extracted text for debugging
+            logger.info(f"Extracted text for LLM: {quick_text[:200]}...")  # Log first 200 characters
+            
             if not quick_text.strip():
                 logger.error("No text content was extracted from the PDF")
                 return {
@@ -179,24 +182,22 @@ class PDFProcessor(BaseTool):
             prompt = f"""Extract the following essential information from this resume text (first few pages only):
             1. Current or most recent job title
             2. Current or most recent company
-            3. Contact information (email, phone)
-            4. Key skills (top 5-10)
             
             Resume text:
             {quick_text}
             
             Return the information in a structured JSON format with these fields:
-            - current_title: Current or most recent job title
+            - current_role: Current or most recent job title
             - current_company: Current or most recent company
-            - email: Email address
-            - phone: Phone number
-            - skills: Array of key skills
             
             If any information is not found, use empty strings or empty arrays."""
             
             try:
                 response = self.llm.invoke(prompt)
                 logger.info("Successfully received response from LLM")
+                
+                # Log the LLM response for debugging
+                logger.info(f"LLM response: {response.content}")
                 
                 # Parse the response into structured data
                 essential_info = parse_llm_json_response(response.content)

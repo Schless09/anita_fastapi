@@ -244,52 +244,48 @@ class BrainAgent:
             
             # Use PDFProcessor for quick extraction
             try:
-                quick_result = await self.pdf_processor._arun(resume_content)
+                # Call _quick_extract instead of _arun -> parse_resume
+                quick_result = self.pdf_processor._quick_extract(resume_content)
                 if quick_result["status"] != "success":
                     raise ValueError(f"Quick extraction failed: {quick_result.get('error', 'Unknown error')}")
                 
-                # Parse the extracted text
-                parsed_data = await self.resume_parser.parse_resume(quick_result["text_content"])
-                if parsed_data["status"] != "success":
-                    raise ValueError(f"Resume parsing failed: {parsed_data.get('error', 'Unknown error')}")
+                essential_info = quick_result.get("essential_info", {})
                 
-                # Log what was extracted from the resume
-                profile = parsed_data.get("profile", {})
-                logger.info(f"Extracted profile data: Name: {profile.get('full_name', 'Not found')}, " + 
-                            f"Current role: {profile.get('current_role', 'Not found')}, " +
-                            f"Current company: {profile.get('current_company', 'Not found')}")
+                # Extract ONLY current_role and current_company
+                extracted_role = essential_info.get('current_role', '')
+                extracted_company = essential_info.get('current_company', '')
                 
-                # Check if basic_info structure is present and extract full_name from there if needed
-                if not profile.get("full_name") and profile.get("basic_info", {}).get("full_name"):
-                    profile["full_name"] = profile["basic_info"]["full_name"]
-                    logger.info(f"Using full_name from basic_info: {profile['full_name']}")
+                # Log what was extracted quickly
+                logger.info(f"Quickly Extracted: Role: {extracted_role or 'Not found'}, " + 
+                            f"Company: {extracted_company or 'Not found'}")
                 
-                # Ensure current_role and current_company are set at top level
-                if profile.get("experience") and isinstance(profile.get("experience"), list) and len(profile.get("experience")) > 0:
-                    # Get most recent experience (first in the list)
-                    most_recent = profile["experience"][0]
-                    if not profile.get("current_role") and most_recent.get("title"):
-                        profile["current_role"] = most_recent.get("title")
-                        logger.info(f"Setting current_role from experience: {profile['current_role']}")
-                    
-                    if not profile.get("current_company") and most_recent.get("company"):
-                        profile["current_company"] = most_recent.get("company")
-                        logger.info(f"Setting current_company from experience: {profile['current_company']}")
-                
-                # Update candidate with initial data
+                # Update candidate with ONLY role and company initially
+                # The full profile will be populated by the background task
                 update_data = {
-                    "profile_json": profile,  # Use the potentially enhanced profile
+                    "profile_json": {
+                        "current_role": extracted_role,
+                        "current_company": extracted_company
+                    },
                     "updated_at": datetime.utcnow().isoformat()
                 }
-                await self.supabase.table(self.candidates_table).update(update_data).eq("id", candidate_id).execute()
+                update_res = await self.supabase.table(self.candidates_table).update(update_data).eq("id", candidate_id).execute()
+                if not update_res.data:
+                     logger.warning(f"Quick extraction DB update returned no data for candidate {candidate_id}")
+                     # Decide if this should be a hard failure? For now, log and continue.
                 
-                logger.info("✅ Quick resume extraction completed")
+                logger.info("✅ Quick resume extraction completed and essential info stored.")
                 self._update_transaction(process_id, "quick_extraction", "completed")
+
+                # Trigger background processing for the full resume details
+                logger.info("🚀 Triggering background task for full resume processing...")
+                asyncio.create_task(self._process_full_resume_background(resume_content, candidate_id))
+                logger.info("✅ Background task triggered.")
                 
             except Exception as e:
-                logger.error(f"❌ Quick extraction failed: {str(e)}")
+                logger.error(f"❌ Quick extraction or background task trigger failed: {str(e)}")
+                logger.error(traceback.format_exc()) # Log full traceback for quick extraction errors
                 self._update_transaction(process_id, "quick_extraction", "failed", {"error": str(e)})
-                # Continue with background processing even if quick extraction failed
+                # Continue with call scheduling even if quick extraction failed, might use limited data
             
             # Step 3: Schedule Retell Call
             logger.info("\nStep 3: 📞 Scheduling Retell Call")
@@ -365,6 +361,76 @@ class BrainAgent:
             logger.error(f"Traceback: {traceback.format_exc()}")
             self._end_transaction(process_id, "failed", {"error": str(e)})
             raise
+
+    async def _process_full_resume_background(self, resume_content: bytes, candidate_id: str):
+        """Process the full resume content in the background."""
+        try:
+            logger.info(f"BACKGROUND: Starting full resume processing for {candidate_id}")
+            
+            # 1. Get full text using pdf_processor
+            # Assuming pdf_processor has a method like `process_pdf` or similar to get full text
+            # Let's use `_arun` for now, assuming it returns full text if called directly? 
+            # Re-check document_processing.py: It has `process_pdf`, let's use that.
+            full_text_result = await self.pdf_processor.process_pdf(resume_content)
+            if full_text_result["status"] != "success":
+                raise ValueError(f"Background PDF processing failed: {full_text_result.get('error', 'Unknown error')}")
+            full_text = full_text_result.get("text") # Check key in process_pdf, yes it's 'text'
+            
+            if not full_text:
+                raise ValueError("Background PDF processing yielded no text content.")
+
+            # 2. Parse full text using resume_parser
+            logger.info(f"BACKGROUND: Parsing full text ({len(full_text)} chars) for {candidate_id}")
+            parsed_data_result = await self.resume_parser.parse_resume(full_text)
+            if parsed_data_result["status"] != "success":
+                raise ValueError(f"Background resume parsing failed: {parsed_data_result.get('error', 'Unknown error')}")
+            
+            profile = parsed_data_result.get("parsed_data", {}) # Use 'parsed_data' key
+            logger.info(f"BACKGROUND: Successfully parsed full resume for {candidate_id}. Found keys: {list(profile.keys())}")
+
+            # 3. Apply fallback logic if needed (optional, but keeps existing behavior for now)
+            if profile.get("experience") and isinstance(profile.get("experience"), list) and len(profile.get("experience")) > 0:
+                # Ensure experience items are dictionaries
+                experience_list = [exp for exp in profile["experience"] if isinstance(exp, dict)]
+                if experience_list: # Check if list is not empty after filtering
+                    most_recent = experience_list[0]
+                    if not profile.get("current_role") and most_recent.get("title"):
+                        profile["current_role"] = most_recent.get("title")
+                        logger.info(f"BACKGROUND: Setting current_role from experience: {profile['current_role']}")
+                    if not profile.get("current_company") and most_recent.get("company"):
+                        profile["current_company"] = most_recent.get("company")
+                        logger.info(f"BACKGROUND: Setting current_company from experience: {profile['current_company']}")
+                else:
+                    logger.warning(f"BACKGROUND: Experience list for {candidate_id} was empty or contained non-dict items.")
+            else:
+                logger.info(f"BACKGROUND: No experience data found or fallback not needed for {candidate_id}.")
+
+            # 4. Update database with full profile_json
+            logger.info(f"BACKGROUND: Updating database for {candidate_id} with full profile.")
+            update_data = {
+                "profile_json": profile,
+                "is_resume_processed": True,
+                "updated_at": datetime.utcnow().isoformat()
+            }
+            update_result = await self.supabase.table(self.candidates_table).update(update_data).eq("id", candidate_id).execute()
+            
+            if not update_result.data:
+                logger.warning(f"BACKGROUND: DB update after full parsing returned no data for {candidate_id}")
+            else:
+                logger.info(f"BACKGROUND: ✅ Successfully updated profile_json for {candidate_id}")
+
+        except Exception as e:
+            logger.error(f"BACKGROUND: ❌ Error processing full resume for {candidate_id}: {str(e)}")
+            logger.error(f"BACKGROUND: Traceback: {traceback.format_exc()}")
+            # Optionally update status to indicate background processing failure
+            try:
+                await self.supabase.table(self.candidates_table).update({
+                    "status": "processing_error", # Or a specific 'background_processing_failed' status
+                    "updated_at": datetime.utcnow().isoformat(),
+                    "is_resume_processed": False # Indicate failure
+                }).eq("id", candidate_id).execute()
+            except Exception as db_err:
+                logger.error(f"BACKGROUND: ❌ Failed to update status to error for {candidate_id}: {db_err}")
 
     async def _generate_match_reason_and_tags(
         self, 
