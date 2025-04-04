@@ -354,19 +354,42 @@ class ResumeParser(BaseTool):
             text_content: The text content of the resume
         """
         try:
-            # Use LLM to extract structured information - SIMPLIFIED PROMPT FOR TESTING
-            prompt = f"""From this resume text, extract ONLY the following information:
-            1. Work Experience (include company, title, dates, and key responsibilities)
-            2. Skills (list of all technical skills mentioned)
+            # Use LLM to extract structured information based on the desired profile_json structure
+            prompt = f"""Analyze the following resume text and extract the specified information.
             
             Resume text:
             {text_content}
             
-            Return the information in a structured JSON format with these fields:
-            - work_experience: Array of objects with company, title, dates, responsibilities
-            - skills: Array of skill strings
+            Return ONLY a valid JSON object with the following structure and fields. 
+            Use the specified types (string, array of strings, array of objects). 
+            If information for a field is not found, use an appropriate empty value (empty string "", empty array [], or 0 for years_of_experience).
             
-            If any information is not found, use empty arrays."""
+            {{
+              "skills": ["string"],  // List of technical skills
+              "education": [
+                {{
+                  "year": "string", // Year of graduation (if found, else "")
+                  "degree": "string",
+                  "institution": "string"
+                }}
+              ],
+              "experience": [
+                {{
+                  "title": "string",
+                  "company": "string",
+                  "duration": "string", // Dates worked (e.g., "Nov 2021 – Present")
+                  "description": "string" // Key responsibilities/achievements
+                }}
+              ],
+              "current_role": "string", // Title of the most recent job
+              "current_company": "string", // Company of the most recent job
+              "years_of_experience": 0, // Attempt to infer total years, default to 0
+              "professional_summary": "string", // A brief summary if available
+              "additional_qualifications": [] // List of any other relevant qualifications (e.g., certifications, languages)
+            }}
+            
+            Focus on accurately extracting data into the defined fields. Ensure the output is strictly a JSON object.
+            """
             
             try:
                 # Add timeout to LLM call

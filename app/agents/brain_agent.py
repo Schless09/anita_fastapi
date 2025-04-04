@@ -388,7 +388,7 @@ class BrainAgent:
             if parsed_data_result["status"] != "success":
                 raise ValueError(f"Background resume parsing failed: {parsed_data_result.get('error', 'Unknown error')}")
             
-            profile = parsed_data_result.get("parsed_data", {}) # Use 'parsed_data' key
+            profile = parsed_data_result.get("profile", {}) 
             logger.info(f"BACKGROUND: Successfully parsed full resume for {candidate_id}. Found keys: {list(profile.keys())}")
 
             # 3. Apply fallback logic if needed (optional, but keeps existing behavior for now)
