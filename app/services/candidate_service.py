@@ -2,7 +2,8 @@ from typing import Dict, Any, Optional, List
 import uuid
 import base64
 from datetime import datetime
-from app.config import get_settings
+from app.config.settings import Settings
+from app.config.utils import get_table_name
 from app.config.supabase import get_supabase_client
 from app.services.retell_service import RetellService
 from app.services.openai_service import OpenAIService
@@ -18,24 +19,20 @@ import asyncio
 from fastapi import HTTPException
 import traceback # Keep for potential error logging if needed elsewhere
 from supabase._async.client import AsyncClient
-from app.config.settings import get_table_name # Import from settings
 from app.schemas.candidate import CandidateCreate, CandidateStatusUpdate
 
-settings = get_settings()
-supabase = get_supabase_client()
-retell = RetellService()
-openai = OpenAIService()
-# Remove unused service initializations
-# vector_service = VectorService()
-# matching = MatchingService()
 logger = logging.getLogger(__name__)
 
 class CandidateService:
-    def __init__(self):
-        self.supabase: AsyncClient = get_supabase_client()
-        self.candidates_table_name = get_table_name("candidates") # Get dynamic table name
-        self.retell = retell
-        self.openai = openai
+    def __init__(self, 
+                 supabase_client: AsyncClient, 
+                 retell_service: RetellService, 
+                 openai_service: OpenAIService, 
+                 settings: Settings):
+        self.supabase: AsyncClient = supabase_client # Use injected client
+        self.candidates_table_name = get_table_name("candidates") # Use injected settings
+        self.retell = retell_service # Use injected service
+        self.openai = openai_service # Use injected service
         # Remove unused service assignments
         # self.vector_service = vector_service
         # self.matching = matching

@@ -11,6 +11,7 @@ from langchain.prompts import PromptTemplate
 from datetime import datetime
 from app.config.supabase import get_supabase_client
 from app.config.utils import get_table_name
+from app.config.settings import Settings
 from postgrest import AsyncPostgrestClient
 import json
 from app.services.openai_service import OpenAIService

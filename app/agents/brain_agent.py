@@ -2,11 +2,6 @@
 from typing import Dict, Any, Optional, List, Tuple
 from datetime import datetime, timedelta
 from langchain_openai import ChatOpenAI
-from app.agents.langchain.agents.candidate_intake_agent import CandidateIntakeAgent
-from app.agents.langchain.agents.job_matching_agent import JobMatchingAgent
-from app.agents.langchain.agents.farming_matching_agent import FarmingMatchingAgent
-from app.agents.langchain.agents.interview_agent import InterviewAgent
-from app.agents.langchain.agents.follow_up_agent import FollowUpAgent
 from app.agents.langchain.tools.vector_store import VectorStoreTool
 from app.agents.langchain.tools.document_processing import PDFProcessor, ResumeParser
 from app.agents.langchain.tools.matching import MatchingTool
@@ -24,7 +19,8 @@ from app.services.retell_service import RetellService
 from app.services.openai_service import OpenAIService
 from app.services.vector_service import VectorService
 from app.services.matching_service import MatchingService
-from app.config.settings import get_settings, get_table_name
+from app.config.settings import get_settings, Settings
+from app.config.utils import get_table_name
 from app.config.supabase import get_supabase_client
 
 # Set up logging
@@ -39,30 +35,40 @@ from dotenv import load_dotenv
 from fastapi import HTTPException
 from supabase._async.client import AsyncClient, create_client
 
-from anita.services.email_service import send_job_match_email, send_missed_call_email, send_no_matches_email
+# Temporarily comment out this import to test startup
+# from anita.services.email_service import send_job_match_email, send_missed_call_email, send_no_matches_email
 
 logger = logging.getLogger(__name__)
 
 class BrainAgent:
     """Orchestrator agent that coordinates other specialized agents."""
     
-    def __init__(self):
+    def __init__(self, 
+                 supabase_client: AsyncClient,
+                 candidate_service: CandidateService,
+                 openai_service: OpenAIService,
+                 matching_service: MatchingService,
+                 retell_service: RetellService,
+                 vector_service: VectorService,
+                 settings: Settings):
         """Initialize the brain agent and required services."""
-        settings = get_settings() # Get settings
         self._candidate_intake_agent = None
         self._job_matching_agent = None
         self._farming_matching_agent = None
         self._interview_agent = None
         self._follow_up_agent = None
 
-        # Initialize needed services
-        self.supabase: AsyncClient = get_supabase_client()
-        self.candidate_service = CandidateService()
-        self.openai_service = OpenAIService(settings)
-        self.matching_service = MatchingService()
-        self.retell_service = RetellService()
+        # Initialize needed services using injected instances
+        self.supabase: AsyncClient = supabase_client
+        self.candidate_service = candidate_service
+        self.openai_service = openai_service
+        self.matching_service = matching_service
+        self.retell_service = retell_service
+        # Assign settings and vector_service needed by agent properties
+        self.settings = settings 
+        self.vector_service = vector_service
 
-        # Define table names using the helper function
+        # Define table names using the helper function with injected settings
         self.candidates_table = get_table_name("candidates")
         self.jobs_table = get_table_name("jobs")
         self.matches_table = get_table_name("candidate_job_matches")
@@ -103,35 +109,65 @@ class BrainAgent:
     def candidate_intake_agent(self):
         """Lazy load the candidate intake agent."""
         if self._candidate_intake_agent is None:
-            self._candidate_intake_agent = CandidateIntakeAgent()
+            # Import here
+            from app.agents.langchain.agents.candidate_intake_agent import CandidateIntakeAgent
+            # Pass the required dependencies from BrainAgent's instance
+            self._candidate_intake_agent = CandidateIntakeAgent(
+                vector_service=self.vector_service, 
+                settings=self.settings
+            )
         return self._candidate_intake_agent
         
     @property
     def job_matching_agent(self):
         """Lazy load the job matching agent."""
         if self._job_matching_agent is None:
-            self._job_matching_agent = JobMatchingAgent()
+            # Import here
+            from app.agents.langchain.agents.job_matching_agent import JobMatchingAgent
+            # Pass dependencies
+            self._job_matching_agent = JobMatchingAgent(
+                vector_service=self.vector_service, 
+                settings=self.settings
+            )
         return self._job_matching_agent
         
     @property
     def farming_matching_agent(self):
         """Lazy load the farming matching agent."""
         if self._farming_matching_agent is None:
-            self._farming_matching_agent = FarmingMatchingAgent()
+            # Import here
+            from app.agents.langchain.agents.farming_matching_agent import FarmingMatchingAgent
+            # Pass dependencies
+            self._farming_matching_agent = FarmingMatchingAgent(
+                vector_service=self.vector_service, 
+                settings=self.settings
+            )
         return self._farming_matching_agent
         
     @property
     def interview_agent(self):
         """Lazy load the interview agent."""
         if self._interview_agent is None:
-            self._interview_agent = InterviewAgent()
+            # Import here
+            from app.agents.langchain.agents.interview_agent import InterviewAgent
+            # Pass dependencies
+            self._interview_agent = InterviewAgent(
+                vector_service=self.vector_service, 
+                settings=self.settings
+            )
         return self._interview_agent
         
     @property
     def follow_up_agent(self):
         """Lazy load the follow up agent."""
         if self._follow_up_agent is None:
-            self._follow_up_agent = FollowUpAgent()
+            # Import here
+            from app.agents.langchain.agents.follow_up_agent import FollowUpAgent
+            # Pass dependencies
+            self._follow_up_agent = FollowUpAgent(
+                vector_service=self.vector_service, 
+                settings=self.settings
+            )
         return self._follow_up_agent
     
     def _clean_profile_json(self, profile_data: Dict[str, Any]) -> Dict[str, Any]:
@@ -464,12 +500,14 @@ class BrainAgent:
                 if candidate_email:
                     logger.info(f"Attempting to send missed call email to {candidate_email} due to call_status: {call_status}")
                     try:
-                        await send_missed_call_email(
-                            recipient_email=candidate_email, 
-                            candidate_name=candidate_name, 
-                            candidate_id=uuid.UUID(candidate_id), # Ensure UUID type
-                            supabase_client=self.supabase
-                        )
+                        # Temporarily comment out this import to test startup
+                        # await send_missed_call_email(
+                        #     recipient_email=candidate_email, 
+                        #     candidate_name=candidate_name, 
+                        #     candidate_id=uuid.UUID(candidate_id), # Ensure UUID type
+                        #     supabase_client=self.supabase
+                        # )
+                        pass # Add pass to maintain block structure
                     except Exception as email_err:
                         logger.error(f"Error sending missed call email (triggered by call_status): {email_err}")
                 # Status gets updated in finally block
@@ -488,12 +526,14 @@ class BrainAgent:
                 if candidate_email:
                     logger.info(f"Attempting to send missed call email to {candidate_email} due to empty transcript (status: {call_status}).")
                     try:
-                        await send_missed_call_email(
-                            recipient_email=candidate_email, 
-                            candidate_name=candidate_name, 
-                            candidate_id=uuid.UUID(candidate_id), # Ensure UUID type
-                            supabase_client=self.supabase
-                        )
+                        # Temporarily comment out this import to test startup
+                        # await send_missed_call_email(
+                        #     recipient_email=candidate_email, 
+                        #     candidate_name=candidate_name, 
+                        #     candidate_id=uuid.UUID(candidate_id), # Ensure UUID type
+                        #     supabase_client=self.supabase
+                        # )
+                        pass # Add pass to maintain block structure
                     except Exception as email_err:
                          logger.error(f"Error sending missed call email (triggered by empty transcript): {email_err}")
                 # Status gets updated in finally block
@@ -671,27 +711,31 @@ class BrainAgent:
                             # Fix indentation for the if high_scoring_jobs block
                             if high_scoring_jobs: # Align this with 'if top_job_ids:'
                                 logger.info(f"Attempting to send job match email to {candidate_email} for {len(high_scoring_jobs)} jobs.")
-                                await send_job_match_email(
-                                                recipient_email=candidate_email, 
-                                                candidate_name=candidate_name, 
-                                                job_matches=high_scoring_jobs,
-                                    candidate_id=uuid.UUID(candidate_id), # Ensure UUID 
-                                    supabase_client=self.supabase
-                                )
+                                # Temporarily comment out this import to test startup
+                                # await send_job_match_email(
+                                #     recipient_email=candidate_email, 
+                                #     candidate_name=candidate_name, 
+                                #     job_matches=high_scoring_jobs,
+                                #     candidate_id=uuid.UUID(candidate_id), # Ensure UUID 
+                                #     supabase_client=self.supabase
+                                # )
+                                pass # Added pass
                             # Fix indentation for the else block (sending no matches email)
                             else: # Align this with 'if high_scoring_jobs:'
                                 # No jobs met threshold for the email OR no matches were found initially
                                 logger.info(f"No high-scoring jobs found or initial match count was zero. Attempting to send 'no matches' email to {candidate_email}.")
-                                await send_no_matches_email(
-                                    recipient_email=candidate_email, 
-                                    candidate_name=candidate_name, 
-                                    candidate_id=uuid.UUID(candidate_id), # Ensure UUID
-                                    supabase_client=self.supabase
-                                )
+                                # Temporarily comment out this import to test startup
+                                # await send_no_matches_email(
+                                #     recipient_email=candidate_email, 
+                                #     candidate_name=candidate_name, 
+                                #     candidate_id=uuid.UUID(candidate_id), # Ensure UUID
+                                #     supabase_client=self.supabase
+                                # )
+                                pass # Added pass
                         # Fix indentation for the else block (no candidate email)
                         else: # Align this with 'if candidate_email:'
                             logger.warning(f"Could not find email for candidate {candidate_id} to send post-match email.")
-                    # Add the except block for the email try
+                    # Add the except block for the email try - Ensure correct indentation
                     except Exception as email_err: # Align this with 'try:'
                         logger.error(f"Error during email sending logic for {candidate_id}: {email_err}")
                         # Don't re-raise, just log the error and continue

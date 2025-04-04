@@ -3,7 +3,8 @@ from typing import Dict, Any
 from app.services.candidate_service import CandidateService
 from app.services.job_service import JobService
 from app.config import get_settings, get_supabase_client
-from app.config.settings import Settings, get_table_name
+from app.config.settings import Settings
+from app.config.utils import get_table_name
 from app.services.openai_service import OpenAIService
 from app.services.vector_service import VectorService
 from supabase._async.client import AsyncClient

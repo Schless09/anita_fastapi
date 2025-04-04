@@ -1,43 +1,28 @@
 from typing import Dict, Any, Optional, List
 from datetime import datetime
 import logging
-from app.config import get_settings
+from app.config.settings import Settings
+from app.config.utils import get_table_name
 from app.config.supabase import get_supabase_client
 from app.services.openai_service import OpenAIService
 import json
 from tenacity import retry, stop_after_attempt, wait_exponential
 from supabase._async.client import AsyncClient
 # from pinecone import Pinecone, Index # Remove Pinecone import
-from app.config.settings import get_table_name
 
 # Set up logging
 logger = logging.getLogger(__name__)
-
-settings = get_settings()
-supabase = get_supabase_client()
-openai = OpenAIService(settings)
 
 class VectorService:
     """
     Service for vector operations using Supabase with pgvector.
     Handles embedding generation, storage, and similarity search.
     """
-    def __init__(self):
-        self.supabase = supabase
-        self.openai = openai
-        
-        # Remove Pinecone Initialization
-        # self.pinecone = Pinecone(api_key=settings.pinecone_api_key, environment=settings.pinecone_environment)
-        # self.candidates_index_name = settings.pinecone_candidates_index
-        # self.jobs_index_name = settings.pinecone_jobs_index
-        
-        # Ensure indices exist
-        # self._ensure_pinecone_index(self.candidates_index_name)
-        # self._ensure_pinecone_index(self.jobs_index_name)
-
-        # Use get_table_name for table names
-        self.candidates_table = get_table_name("candidates")
-        self.jobs_table = get_table_name("jobs")
+    def __init__(self, openai_service: OpenAIService, supabase_client: AsyncClient, candidates_table: str, jobs_table: str):
+        self.supabase = supabase_client
+        self.openai = openai_service
+        self.candidates_table = candidates_table
+        self.jobs_table = jobs_table
         
         # Remove Pinecone Index objects
         # self.candidates_index: Index = self.pinecone.Index(self.candidates_index_name)

@@ -4,17 +4,21 @@ from app.services.openai_service import OpenAIService
 from app.services.vector_service import VectorService
 from app.config.supabase import get_supabase_client
 from supabase._async.client import AsyncClient
-from app.config.settings import get_settings, get_table_name
+from app.config.settings import get_settings, Settings
+from app.config.utils import get_table_name
 import uuid
 
 logger = logging.getLogger(__name__)
 
 class MatchingService:
-    def __init__(self):
-        settings = get_settings()
-        self.openai_service = OpenAIService()
-        self.vector_service = VectorService()
-        self.supabase: AsyncClient = get_supabase_client()
+    def __init__(self, 
+                 openai_service: OpenAIService, 
+                 vector_service: VectorService, 
+                 supabase_client: AsyncClient, 
+                 settings: Settings):
+        self.openai_service = openai_service
+        self.vector_service = vector_service
+        self.supabase: AsyncClient = supabase_client
         self.candidates_table_name = get_table_name("candidates")
     
     async def match_candidate_to_jobs(self, candidate_id: uuid.UUID, top_k: int = 10) -> List[Dict[str, Any]]:
