@@ -49,8 +49,18 @@ vector_service = VectorService(
     jobs_table=jobs_table
 )
 
-matching_service = MatchingService()
-job_service = JobService()
+job_service = JobService(
+    supabase_client=supabase_client,
+    vector_service=vector_service,
+    openai_service=openai_service
+)
+
+matching_service = MatchingService(
+    openai_service=openai_service,
+    vector_service=vector_service,
+    supabase_client=supabase_client,
+    settings=settings
+)
 
 @router.post("/candidates")
 async def create_candidate(
