@@ -1,4 +1,4 @@
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Type
 from langchain.tools import BaseTool
 from langchain_openai import ChatOpenAI
 from datetime import datetime, timedelta
@@ -9,17 +9,29 @@ import os
 # from google.auth.transport.requests import Request
 # import pickle
 from app.config import get_settings # Removed get_sendgrid_client
-from pydantic import Field
+from pydantic import Field, BaseModel, PrivateAttr
 from .base import parse_llm_json_response
 import logging # Added logger
+from sendgrid import SendGridAPIClient
 
 logger = logging.getLogger(__name__) # Added logger
 
 class EmailTool(BaseTool):
-    """Tool for handling email communications (currently only generation)."""
+    """Tool for sending emails."""
     
-    name = "email"
-    description = "Handle email communications (generation only currently)"
+    name: str = "email"
+    description: str = """Useful for sending emails to candidates or recruiters.
+    Input should be a JSON string with the following fields:
+    - to: Email address of the recipient
+    - subject: Subject of the email
+    - body: Content of the email
+    - cc: (optional) List of CC recipients
+    - bcc: (optional) List of BCC recipients
+    """
+    args_schema: Type[BaseModel] = EmailInput
+    return_direct: bool = True
+    _settings: Settings = PrivateAttr()
+    _sendgrid_client: SendGridAPIClient = PrivateAttr()
     # Define fields that will be set in __init__
     llm: ChatOpenAI = Field(default=None)
     settings: Any = Field(default=None) # Store settings
