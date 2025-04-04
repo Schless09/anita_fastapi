@@ -24,13 +24,12 @@ class Settings(BaseSettings):
     twilio_phone_number: str
     
     # SendGrid
-    sendgrid_api_key: Optional[str] = None
+    sendgrid_api_key: str
     sender_email: str
-    sendgrid_inbound_hostname: Optional[str] = None
-    sendgrid_webhook_url: Optional[str] = None
+    sendgrid_inbound_hostname: str
     
     # Vercel
-    vercel_protection_bypass: Optional[str] = None
+    vercel_protection_bypass: str
     
     # Slack
     slack_app_id: str
@@ -50,11 +49,11 @@ class Settings(BaseSettings):
     supabase_service_role_key: str
 
     # Pinecone
-    pinecone_api_key: Optional[str] = None
-    pinecone_environment: Optional[str] = None
-    pinecone_candidates_index: Optional[str] = None
-    pinecone_jobs_index: Optional[str] = None
-    pinecone_call_status_index: Optional[str] = None
+    pinecone_api_key: str
+    pinecone_environment: str
+    pinecone_candidates_index: str
+    pinecone_jobs_index: str
+    pinecone_call_status_index: str
 
     @property
     def webhook_base_url(self) -> str:
@@ -76,7 +75,6 @@ class Settings(BaseSettings):
     
     class Config:
         env_file = ".env"
-        case_sensitive = False
 
 @lru_cache()
 def get_settings() -> Settings:
