@@ -18,8 +18,8 @@ import asyncio
 from fastapi import HTTPException
 import traceback # Keep for potential error logging if needed elsewhere
 from supabase._async.client import AsyncClient
-from app.config import get_table_name # Import get_table_name
-from app.schemas.candidate import CandidateSubmission, CandidateStatusUpdate
+from app.config.settings import get_table_name # Import from settings
+from app.schemas.candidate import CandidateCreate, CandidateStatusUpdate
 
 settings = get_settings()
 supabase = get_supabase_client()
@@ -40,95 +40,38 @@ class CandidateService:
         # self.vector_service = vector_service
         # self.matching = matching
 
-    async def create_initial_candidate(self, candidate_data: Dict[str, Any]) -> Dict[str, Any]:
-        """
-        Creates the initial candidate record in the database.
-        Extracts resume text if provided, but performs minimal processing.
-        Does NOT generate embedding.
-        Returns essential data like ID, email, and resume bytes for BrainAgent.
-        """
+    async def create_candidate(self, submission: CandidateCreate) -> Dict[str, Any]:
+        logger.info(f"Creating candidate with email: {submission.email}")
+        # Build insert data dictionary
+        insert_data = {
+            "id": str(submission.id),  # Ensure id is string
+            "name": submission.name,
+            "email": submission.email,
+            "phone": submission.phone_number, # Use corrected field name
+            "linkedin": str(submission.linkedin) if submission.linkedin else None,
+            "status": "submitted", # Initial status
+            "profile_json": {}, # Initialize empty profile
+            "created_at": datetime.utcnow().isoformat(),
+            "updated_at": datetime.utcnow().isoformat(),
+            # Add other default fields as necessary
+            "is_resume_processed": False,
+            "is_call_completed": False,
+            "is_embedding_generated": False
+        }
+        # Note: Resume content is handled separately (upload to storage)
+
         try:
-            candidate_id = candidate_data.get('id', str(uuid.uuid4()))
-            first_name = candidate_data.get('first_name', '')
-            last_name = candidate_data.get('last_name', '')
-            email = candidate_data.get('email', '')
-            phone = candidate_data.get('phone', '')
-            linkedin_url = candidate_data.get('linkedin_url')
-            resume_content_bytes = candidate_data.get('resume_content') # Keep as bytes
-
-            if not email:
-                 raise ValueError("Email is required to create a candidate.")
-
-            # Handle linkedin_url formatting
-            if linkedin_url and linkedin_url.strip():
-                if not linkedin_url.startswith(('http://', 'https://')):
-                    linkedin_url = f"https://{linkedin_url}"
-            else:
-                linkedin_url = None
-            
-            # Basic profile structure
-            profile_json = {
-                'skills': candidate_data.get('skills', []),
-                'current_role': 'pending', # Default placeholder
-                'current_company': 'pending', # Default placeholder
-                'education': [], 'experience': [], 'industries': [],
-                'next_steps': '', 'tech_stack': [], 'career_goals': [],
-                'company_stage': '', 'deal_breakers': [], 'candidate_tags': [],
-                'additional_notes': '', 'role_preferences': [],
-                'skills_to_develop': [], 'previous_companies': [], 'preferred_locations': [],
-                'salary_expectations': {'max': 0, 'min': 0},
-                'willing_to_relocate': False,
-                'years_of_experience': 0,
-                'processing_status': { # Minimal initial status
-                    'status': 'submitted',
-                    'last_updated': datetime.utcnow().isoformat(),
-                    'resume_processed': False,
-                    'call_completed': False,
-                    'embedding_generated': False
-                }
-                # Add other fields initialized to defaults if needed...
-            }
-
-            # Extract resume text if content exists
-            resume_text = ''
-            if resume_content_bytes:
-                try:
-                    resume_text = await self._extract_text_from_pdf(resume_content_bytes)
-                    profile_json['processing_status']['resume_found'] = True # Indicate resume was present
-                except Exception as e:
-                    logger.error(f"Error extracting resume text during initial create for {email}: {str(e)}")
-                    profile_json['processing_status']['resume_found'] = False
-                profile_json['resume_text'] = resume_text # Store extracted text (or empty string)
-            
-            # Prepare data for DB insert
-            insert_data = {
-                'id': candidate_id,
-                'full_name': f"{first_name} {last_name}".strip(),
-                'phone': phone,
-                'email': email,
-                'linkedin_url': linkedin_url,
-                'profile_json': profile_json,
-                'created_at': datetime.utcnow().isoformat(),
-                'updated_at': datetime.utcnow().isoformat(),
-                # Do NOT store resume bytes in DB profile_json anymore
-            }
-
             response = await self.supabase.table(self.candidates_table_name).insert(insert_data).execute()
-            if not response.data:
-                 raise Exception(f"Database insert failed for candidate {email}")
-
-            logger.info(f"Successfully created initial record for candidate {candidate_id} ({email})")
-
-            # Return data needed for BrainAgent processing
-            return {
-                'id': candidate_id,
-                'email': email,
-                'resume_content_bytes': resume_content_bytes # Pass resume content for agent
-            }
-
+            if response.data:
+                logger.info(f"Successfully created candidate: {submission.id}")
+                # Add resume upload logic here if needed
+                return response.data[0]
+            else:
+                logger.error(f"Failed to create candidate {submission.email}. Response: {response}")
+                raise Exception(f"Database insert failed for candidate {submission.email}")
         except Exception as e:
-            logger.error(f"Error creating initial candidate ({candidate_data.get('email', 'N/A')}): {str(e)}")
-            # Consider specific exception types if needed
+            logger.error(f"Error creating candidate {submission.email}: {e}")
+            logger.error(f"Traceback: {traceback.format_exc()}")
             raise HTTPException(status_code=500, detail=f"Error creating candidate: {str(e)}")
 
     # REMOVED: process_candidate_submission (replaced by create_initial_candidate + BrainAgent)

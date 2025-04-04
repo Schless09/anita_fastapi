@@ -14,7 +14,7 @@ from retell import Retell
 from app.dependencies import get_brain_agent
 from supabase._async.client import AsyncClient
 from app.dependencies import get_supabase_client
-from app.config import get_table_name
+from app.config.settings import get_table_name
 
 # Get logger
 logger = logging.getLogger(__name__)

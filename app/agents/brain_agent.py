@@ -24,7 +24,7 @@ from app.services.retell_service import RetellService
 from app.services.openai_service import OpenAIService
 from app.services.vector_service import VectorService
 from app.services.matching_service import MatchingService
-from app.config import get_settings, get_table_name
+from app.config.settings import get_settings, get_table_name
 from app.config.supabase import get_supabase_client
 
 # Set up logging
@@ -422,9 +422,11 @@ class BrainAgent:
                  
                  if not candidate_info_resp.data:
                       logger.error(f"(Agent Pre-Check) Could not find candidate {candidate_id}. Aborting call processing.")
+                      # Fix indentation here
                       self._end_transaction(process_id, "failed", "Candidate not found")
                       return {"status": "error", "reason": "Candidate not found"}
-            
+                 # else (implied): continue if candidate was found
+                 # Fix indentation for storing data (should be outside the inner if, inside the try)
                  # Store fetched data
                  candidate_email = candidate_info_resp.data.get('email')
                  candidate_name = candidate_info_resp.data.get('full_name')
@@ -434,6 +436,7 @@ class BrainAgent:
                  if not candidate_email: # Log warning if email is missing
                       logger.warning(f"(Agent Pre-Check) Candidate {candidate_id} missing email address. Cannot send follow-up emails.")
 
+            # Fix indentation for except (should align with the 'try' above)
             except Exception as fetch_err:
                  logger.error(f"(Agent Pre-Check) Error fetching initial candidate data for {candidate_id}: {fetch_err}")
                  self._end_transaction(process_id, "failed", "DB error fetching candidate")
@@ -662,9 +665,9 @@ class BrainAgent:
                                 jobs_details_resp = await self.supabase.table(self.jobs_table).select('id, job_title, job_url').in_('id', top_job_ids).execute()
                                 # Fix indentation for the inner if block
                                 if jobs_details_resp.data: # Indent under the 'if top_job_ids:'
-                                    job_details_map = {job['id']: job for job in jobs_details_resp.data}
-                                    high_scoring_jobs = [
-                                        {'job_title': job_details_map[job_id].get('job_title'), 'job_url': job_details_map[job_id].get('job_url')}
+                                                job_details_map = {job['id']: job for job in jobs_details_resp.data}
+                                                high_scoring_jobs = [
+                                                    {'job_title': job_details_map[job_id].get('job_title'), 'job_url': job_details_map[job_id].get('job_url')}
                                         for job_id in top_job_ids if job_id in job_details_map and job_details_map[job_id].get('job_title') and job_details_map[job_id].get('job_url')
                                     ]
                             
@@ -672,9 +675,9 @@ class BrainAgent:
                             if high_scoring_jobs: # Align this with 'if top_job_ids:'
                                 logger.info(f"Attempting to send job match email to {candidate_email} for {len(high_scoring_jobs)} jobs.")
                                 await send_job_match_email(
-                                    recipient_email=candidate_email, 
-                                    candidate_name=candidate_name, 
-                                    job_matches=high_scoring_jobs,
+                                                recipient_email=candidate_email, 
+                                                candidate_name=candidate_name, 
+                                                job_matches=high_scoring_jobs,
                                     candidate_id=uuid.UUID(candidate_id), # Ensure UUID 
                                     supabase_client=self.supabase
                                 )
