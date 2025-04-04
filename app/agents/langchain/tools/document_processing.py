@@ -325,6 +325,9 @@ class ResumeParser(BaseTool):
             
             response = self.llm.invoke(prompt)
             
+            # Log the raw LLM response before parsing
+            logger.info(f"Raw LLM response for resume parsing: {response.content}")
+            
             # Parse the response into structured data
             parsed_data = parse_llm_json_response(response.content)
             
@@ -351,31 +354,19 @@ class ResumeParser(BaseTool):
             text_content: The text content of the resume
         """
         try:
-            # Use LLM to extract structured information
-            prompt = f"""Extract the following information from this resume text:
-            1. Contact Information
-            2. Professional Summary
-            3. Work Experience (include company, title, dates, and key responsibilities)
-            4. Education (include institution, degree, dates, and relevant coursework)
-            5. Skills (categorized by type)
-            6. Certifications
-            7. Projects (if any)
-            8. Languages (if any)
+            # Use LLM to extract structured information - SIMPLIFIED PROMPT FOR TESTING
+            prompt = f"""From this resume text, extract ONLY the following information:
+            1. Work Experience (include company, title, dates, and key responsibilities)
+            2. Skills (list of all technical skills mentioned)
             
             Resume text:
             {text_content}
             
             Return the information in a structured JSON format with these fields:
-            - contact_info: Object with email, phone, location, etc.
-            - professional_summary: String
             - work_experience: Array of objects with company, title, dates, responsibilities
-            - education: Array of objects with institution, degree, dates, coursework
-            - skills: Object with categories as keys and arrays of skills as values
-            - certifications: Array of certification objects
-            - projects: Array of project objects (if any)
-            - languages: Array of language objects (if any)
+            - skills: Array of skill strings
             
-            If any information is not found, use empty strings or empty arrays."""
+            If any information is not found, use empty arrays."""
             
             try:
                 # Add timeout to LLM call

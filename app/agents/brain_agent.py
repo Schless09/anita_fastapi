@@ -379,6 +379,9 @@ class BrainAgent:
             if not full_text:
                 raise ValueError("Background PDF processing yielded no text content.")
 
+            # Log the full text before sending to parser
+            logger.info(f"BACKGROUND: Full text extracted ({len(full_text)} chars). Snippet: {full_text[:500]}...") # Log snippet
+
             # 2. Parse full text using resume_parser
             logger.info(f"BACKGROUND: Parsing full text ({len(full_text)} chars) for {candidate_id}")
             parsed_data_result = await self.resume_parser.parse_resume(full_text)
