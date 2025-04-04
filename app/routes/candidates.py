@@ -19,6 +19,7 @@ from app.agents.brain_agent import BrainAgent
 from app.dependencies import get_brain_agent
 from app.config.settings import Settings
 from app.config.supabase import get_supabase_client
+from app.config.utils import get_table_name
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -29,6 +30,10 @@ supabase_client = get_supabase_client()
 retell_service = RetellService(settings=settings)
 openai_service = OpenAIService(settings=settings)
 
+# Get table names
+candidates_table = get_table_name("candidates")
+jobs_table = get_table_name("jobs")
+
 # Initialize services with dependencies
 candidate_service = CandidateService(
     supabase_client=supabase_client,
@@ -36,7 +41,14 @@ candidate_service = CandidateService(
     openai_service=openai_service,
     settings=settings
 )
-vector_service = VectorService()
+
+vector_service = VectorService(
+    openai_service=openai_service,
+    supabase_client=supabase_client,
+    candidates_table=candidates_table,
+    jobs_table=jobs_table
+)
+
 matching_service = MatchingService()
 job_service = JobService()
 
