@@ -228,7 +228,7 @@ class CandidateIntakeAgent(BaseAgent):
             first_name = full_name.split(' ')[0]
 
             # Process PDF with quick extraction
-            quick_result = await self.pdf_processor._arun(resume_content)
+            quick_result = self.pdf_processor._quick_extract(resume_content)
 
             if quick_result["status"] != "success":
                 error_msg = quick_result.get("error", "Unknown error in quick extraction")
