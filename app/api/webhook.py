@@ -40,11 +40,39 @@ async def log_call_communication(
 
         # Extract transcript summary instead of full transcript
         transcript_object = call_data.get('transcript_object', [])
+        
+        # Safely calculate transcript summary with better error handling
         transcript_summary = {
-            "word_count": len(transcript_object),
-            "duration": transcript_object[-1]["end"] - transcript_object[0]["start"] if transcript_object else 0,
-            "first_words": " ".join([word["word"] for word in transcript_object[:5]]) + "..." if transcript_object else ""
+            "word_count": len(transcript_object)
         }
+        
+        # Safely calculate duration only if transcript has valid structure
+        if transcript_object and len(transcript_object) > 0:
+            try:
+                # Check if first and last items have required keys
+                if "start" in transcript_object[0] and "end" in transcript_object[-1]:
+                    transcript_summary["duration"] = transcript_object[-1]["end"] - transcript_object[0]["start"]
+                else:
+                    transcript_summary["duration"] = 0
+                    logger.warning(f"Transcript missing start/end times for candidate {candidate_id}")
+            except Exception as e:
+                transcript_summary["duration"] = 0
+                logger.warning(f"Error calculating transcript duration: {str(e)}")
+        else:
+            transcript_summary["duration"] = 0
+        
+        # Safely extract first few words
+        first_words = ""
+        if transcript_object:
+            try:
+                words = []
+                for word_obj in transcript_object[:5]:
+                    if "word" in word_obj:
+                        words.append(word_obj["word"])
+                first_words = " ".join(words) + "..." if words else ""
+            except Exception as e:
+                logger.warning(f"Error extracting first words from transcript: {str(e)}")
+        transcript_summary["first_words"] = first_words
 
         communication_log = {
             "candidates_id": candidate_id,
