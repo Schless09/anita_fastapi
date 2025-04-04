@@ -2,12 +2,12 @@
   "version": 2,
   "builds": [
     {
-      "src": "app/main.py",
+      "src": "app/main.vercel.py",
       "use": "@vercel/python",
       "config": {
         "maxLambdaSize": "15mb",
         "runtime": "python3.9",
-        "requirementsPath": "./requirements.slim.txt"
+        "requirementsPath": "./requirements.vercel.txt"
       }
     }
   ],
@@ -17,15 +17,17 @@
       "dest": "app/static/favicon.ico"
     },
     {
-      "src": "/webhook/retell",
-      "dest": "app/main.py"
-    },
-    {
       "src": "/(.*)",
-      "dest": "app/main.py"
+      "dest": "app/main.vercel.py"
     }
   ],
   "env": {
     "PYTHONUNBUFFERED": "1"
+  },
+  "functions": {
+    "app/main.vercel.py": {
+      "memory": 1024,
+      "maxDuration": 10
+    }
   }
 }
