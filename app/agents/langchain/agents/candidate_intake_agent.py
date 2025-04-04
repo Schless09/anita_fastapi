@@ -201,36 +201,38 @@ class CandidateIntakeAgent(BaseAgent):
         self,
         resume_content: bytes,
         candidate_email: str,
-        candidate_id: str,
-        additional_info: Optional[Dict[str, Any]] = None
+        candidate_id: str
     ) -> Dict[str, Any]:
+        """Process a new candidate submission."""
         try:
-            logger.info("\n=== Starting Candidate Intake Process ===")
-            logger.info(f"Processing candidate: {candidate_email} (ID: {candidate_id})")
-            
-            # Get candidate's first name from database
-            logger.info(f"Fetching candidate data from database for ID: {candidate_id}")
-            candidate_data = await self.supabase.table(self.candidates_table).select("full_name").eq("id", candidate_id).execute()
-            if not candidate_data.data:
-                logger.error(f"❌ Candidate not found in database: {candidate_id}")
-                return {
-                    "status": "error",
-                    "error": "Candidate not found in database"
-                }
-            full_name = candidate_data.data[0].get("full_name", "")
-            logger.info(f"Found candidate with name: {full_name}")
-            
-            # Extract first name from full name
-            first_name = full_name.split()[0] if full_name else ""
-            logger.info(f"Extracted first name: {first_name}")
-            
-            # Step 1: Quick Extract Essential Info
+            # Step 1: Quick Resume Extraction
             logger.info("\nStep 1: ⚡ Quick Resume Extraction")
             logger.info("----------------------------------------")
-            logger.info(f"Starting quick extraction for resume (size: {len(resume_content)} bytes)")
             
-            # First do quick extraction of essential info
-            quick_result = self.pdf_processor._quick_extract(resume_content)
+            # First, check if candidate is already being processed
+            candidate_status = await self.supabase.table(self.candidates_table)\
+                .select('status')\
+                .eq('id', candidate_id)\
+                .single()\
+                .execute()
+            
+            if candidate_status.data and candidate_status.data.get('status') in ['processing', 'completed']:
+                logger.warning(f"Candidate {candidate_id} is already being processed or completed. Skipping duplicate processing.")
+                return {
+                    "status": "skipped",
+                    "message": "Candidate is already being processed or completed"
+                }
+
+            # Extract first name from email for Retell
+            full_name = candidate_email.split('@')[0].replace('.', ' ').title()
+            first_name = full_name.split(' ')[0]
+
+            # Process PDF with quick extraction
+            quick_result = await self.pdf_processor._arun(
+                "quick_extract",
+                pdf_content=resume_content
+            )
+
             if quick_result["status"] != "success":
                 error_msg = quick_result.get("error", "Unknown error in quick extraction")
                 logger.error(f"❌ Quick PDF Extraction Failed: {error_msg}")

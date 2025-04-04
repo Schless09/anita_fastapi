@@ -13,6 +13,7 @@ from app.config.settings import Settings
 from app.config.utils import get_table_name
 from app.dependencies import get_vector_service, get_brain_agent, get_supabase_client_dependency, get_cached_settings
 from app.services.vector_service import VectorService
+import uuid
 
 # Get logger
 logger = logging.getLogger(__name__)
@@ -34,7 +35,8 @@ async def log_call_communication(
             logger.warning(f"Missing call_id in call_data for candidate {candidate_id}. Cannot set thread_id.")
             thread_id_to_log = None
         else:
-            thread_id_to_log = call_id
+            # Generate a new UUID for thread_id while preserving the call_id in metadata
+            thread_id_to_log = str(uuid.uuid4())
 
         communication_log = {
             "candidates_id": candidate_id,
