@@ -2,30 +2,23 @@
   "version": 2,
   "builds": [
     {
-      "src": "app/main.py", 
+      "src": "app/main.py",
       "use": "@vercel/python",
       "config": {
-        "maxLambdaSize": "15mb" 
+        "maxLambdaSize": "15mb",
+        "runtime": "python3.9",
+        "requirementsPath": "./requirements.slim.txt"
       }
     }
   ],
   "routes": [
     {
       "src": "/favicon.ico",
-      "dest": "public/images/anita2rounded.png"
+      "dest": "app/static/favicon.ico"
     },
     {
       "src": "/webhook/retell",
-      "dest": "app/main.py",
-      "methods": ["POST", "OPTIONS"],
-      "headers": {
-        "Access-Control-Allow-Origin": "*",
-        "Access-Control-Allow-Methods": "POST, OPTIONS",
-        "Access-Control-Allow-Headers": "x-retell-auth, x-retell-signature, x-vercel-protection-bypass, content-type",
-        "x-vercel-protection-bypass": "${VERCEL_PROTECTION_BYPASS}"
-      },
-      "continue": true,
-      "override": true
+      "dest": "app/main.py"
     },
     {
       "src": "/(.*)",
