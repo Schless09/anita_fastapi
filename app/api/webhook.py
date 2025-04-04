@@ -38,13 +38,21 @@ async def log_call_communication(
             # Generate a new UUID for thread_id while preserving the call_id in metadata
             thread_id_to_log = str(uuid.uuid4())
 
+        # Extract transcript summary instead of full transcript
+        transcript_object = call_data.get('transcript_object', [])
+        transcript_summary = {
+            "word_count": len(transcript_object),
+            "duration": transcript_object[-1]["end"] - transcript_object[0]["start"] if transcript_object else 0,
+            "first_words": " ".join([word["word"] for word in transcript_object[:5]]) + "..." if transcript_object else ""
+        }
+
         communication_log = {
             "candidates_id": candidate_id,
             "thread_id": thread_id_to_log,
             "type": "call",
             "direction": "inbound",
             "subject": f"Retell Call ({call_id})",
-            "content": json.dumps(call_data.get('transcript_object', [])),
+            "content": json.dumps(transcript_summary),
             "metadata": {
                 "call_id": call_id,
                 "call_status": call_data.get('call_status'),
@@ -53,7 +61,8 @@ async def log_call_communication(
                 "recording_url": call_data.get('recording_url'),
                 "disconnection_reason": call_data.get('disconnection_reason'),
                 "agent_id": call_data.get('agent_id'),
-                "call_analysis": call_data.get('call_analysis', {})
+                "call_analysis": call_data.get('call_analysis', {}),
+                "full_transcript": json.dumps(transcript_object)  # Store full transcript in metadata
             }
         }
         

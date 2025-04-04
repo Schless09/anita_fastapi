@@ -197,141 +197,122 @@ class BrainAgent:
     
     async def handle_candidate_submission(self, candidate_id: str, candidate_email: str, resume_content: Optional[bytes] = None) -> Dict[str, Any]:
         """
-        Handle initial candidate data processing (e.g., resume parsing) via agent.
-        Does NOT generate embedding or trigger matching.
-        Assumes initial candidate record might already exist.
+        Handle a new candidate submission.
         """
-        process_id = f"initial_submission_{candidate_id}_{datetime.utcnow().isoformat()}"
+        process_id = f"submission_{candidate_id}_{datetime.utcnow().isoformat()}"
         self._start_transaction(process_id, "candidate_submission")
-        resume_processed_flag = False # Initialize flag
-        current_status = 'submitted' # Default initial status
+        
         try:
-            logger.info(f"\n=== Processing Initial Submission for Candidate ID: {candidate_id} ===")
-            self._update_transaction(process_id, "resume_processing", "started")
-
-            # Step 1: Process Resume with Intake Agent (if resume provided)
-            if resume_content:
-                logger.info(f"\nStep 1: 📄 Processing Resume")
-                logger.info("----------------------------------------")
-                intake_result = await self.candidate_intake_agent.process_candidate(
-                        resume_content=resume_content,
-                        candidate_email=candidate_email,
-                        candidate_id=candidate_id
-                    )
-                if not intake_result or intake_result.get("status") != "success" or "profile" not in intake_result:
-                    error_msg = intake_result.get("error", "Failed to process resume")
-                    logger.error(f"❌ Resume processing failed for {candidate_id}: {error_msg}")
-                    self._update_transaction(process_id, "resume_processing", "failed", {"error": error_msg})
-                    extracted_profile = {}
-                    # resume_processed_flag remains False
-                else:
-                    extracted_profile = intake_result["profile"]
-                    resume_processed_flag = True
-                    logger.info(f"✅ Resume processed successfully for {candidate_id}")
-                    self._update_transaction(process_id, "resume_processing", "completed")
-            else:
-                logger.info(f"No resume content provided for {candidate_id}, skipping agent processing.")
-                extracted_profile = {}
-                # resume_processed_flag remains False
-                self._update_transaction(process_id, "resume_processing", "skipped")
-
-            # Step 2: Update Profile and Status Columns in Supabase
-            logger.info(f"\nStep 2: 💾 Updating Profile & Status in DB")
+            # Step 1: Initial Data Processing
+            logger.info("\nStep 1: 📝 Initial Data Processing")
             logger.info("----------------------------------------")
-            self._update_transaction(process_id, "profile_update", "started")
-
-            # Fetch existing profile JSON to merge (optional, merge logic can be complex)
-            # For simplicity here, we'll assume extracted_profile is the primary source for profile_json content
-            # If merging is critical, fetch existing profile_json and merge carefully
-            # existing_profile_resp = await self.supabase.table('candidates_dev').select('profile_json').eq('id', candidate_id).single().execute()
-            # existing_profile = existing_profile_resp.data.get('profile_json', {}) if existing_profile_resp.data else {}
-            # merged_profile = existing_profile.copy()
-            # merged_profile.update(extracted_profile) # Prioritize extracted data
-
-            # Clean the extracted profile before saving
-            cleaned_profile_json = self._clean_profile_json(extracted_profile) 
-
-            # Prepare data for the new status columns
-            now_utc = datetime.utcnow()
-            status_update_data = {
-                "is_resume_processed": resume_processed_flag,
-                "status": current_status, # Set initial status
-                "status_last_updated": now_utc.isoformat(),
-                 # Keep other flags as default or update if needed based on initial submission logic
-                # "is_call_completed": False, 
-                # "is_embedding_generated": False,
-                # "embedding_error": None, 
-                "updated_at": now_utc.isoformat() # Also update the main updated_at
-            }
-
-            # Combine data for the update operation
-            update_data = {
-                "profile_json": cleaned_profile_json,
-                **status_update_data # Unpack the status fields
+            
+            # Create initial candidate record
+            candidate_data = {
+                "id": candidate_id,
+                "email": candidate_email,
+                "status": "processing",
+                "created_at": datetime.utcnow().isoformat(),
+                "updated_at": datetime.utcnow().isoformat()
             }
             
-            # Perform the update
-            update_response = await self.supabase.table(self.candidates_table).update(update_data).eq('id', candidate_id).execute()
-
-            if not update_response.data:
-                error_msg = f"Failed to update profile/status in DB for {candidate_id}"
-                logger.error(f"❌ {error_msg}")
-                self._update_transaction(process_id, "profile_update", "failed", {"error": error_msg})
-                self._end_transaction(process_id, "failed")
-                raise Exception(error_msg)
-
-            logger.info(f"✅ Candidate {candidate_id} profile and status updated in Supabase.")
-            self._update_transaction(process_id, "profile_update", "completed")
-
-            # Step 3: Schedule Retell Call (Code remains largely the same, but fetch needed data)
-            logger.info(f"\nStep 3: 📞 Scheduling Retell Call")
+            # Insert into database
+            insert_result = await self.supabase.table(self.candidates_table).insert(candidate_data).execute()
+            if not insert_result.data:
+                raise ValueError("Failed to create initial candidate record")
+            
+            logger.info("✅ Initial candidate record created")
+            self._update_transaction(process_id, "initial_record", "completed")
+            
+            # If no resume content, we're done with initial processing
+            if not resume_content:
+                logger.info("No resume content provided, skipping resume processing")
+                self._end_transaction(process_id, "completed")
+                return {
+                    "id": candidate_id,
+                    "status": "initial_processing_complete",
+                    "timestamp": datetime.utcnow().isoformat()
+                }
+            
+            # Step 2: Quick Resume Extraction
+            logger.info("\nStep 2: 🚀 Quick Resume Extraction")
             logger.info("----------------------------------------")
-            self._update_transaction(process_id, "call_scheduling", "started")
+            
+            # Use PDFProcessor for quick extraction
             try:
-                 # Fetch needed data for the call: phone and full_name directly, profile_json for role/company
-                 call_data_resp = await ( 
-                     self.supabase.table(self.candidates_table)
-                     .select('profile_json, phone, full_name') # Select necessary fields
-                     .eq('id', candidate_id)
-                     .single()
-                     .execute()
-                 ) 
-                 if not call_data_resp.data:
-                      raise ValueError("Failed to fetch latest data before scheduling call.")
+                quick_result = await self.pdf_processor._arun(resume_content)
+                if quick_result["status"] != "success":
+                    raise ValueError(f"Quick extraction failed: {quick_result.get('error', 'Unknown error')}")
+                
+                # Parse the extracted text
+                parsed_data = await self.resume_parser.parse_resume(quick_result["text_content"])
+                if parsed_data["status"] != "success":
+                    raise ValueError(f"Resume parsing failed: {parsed_data.get('error', 'Unknown error')}")
+                
+                # Update candidate with initial data
+                update_data = {
+                    "profile_json": parsed_data["profile"],
+                    "updated_at": datetime.utcnow().isoformat()
+                }
+                await self.supabase.table(self.candidates_table).update(update_data).eq("id", candidate_id).execute()
+                
+                logger.info("✅ Quick resume extraction completed")
+                self._update_transaction(process_id, "quick_extraction", "completed")
+                
+            except Exception as e:
+                logger.error(f"❌ Quick extraction failed: {str(e)}")
+                self._update_transaction(process_id, "quick_extraction", "failed", {"error": str(e)})
+                # Continue with background processing even if quick extraction failed
+            
+            # Step 3: Schedule Retell Call
+            logger.info("\nStep 3: 📞 Scheduling Retell Call")
+            logger.info("----------------------------------------")
+            
+            try:
+                # Fetch needed data for the call: phone and full_name directly, profile_json for role/company
+                call_data_resp = await ( 
+                    self.supabase.table(self.candidates_table)
+                    .select('profile_json, phone, full_name') # Select necessary fields
+                    .eq('id', candidate_id)
+                    .single()
+                    .execute()
+                ) 
+                if not call_data_resp.data:
+                    raise ValueError("Failed to fetch latest data before scheduling call.")
 
-                 call_profile_json = call_data_resp.data.get('profile_json', {}) # Use the (now cleaned) profile_json
-                 phone_number = call_data_resp.data.get('phone')
-                 db_full_name = call_data_resp.data.get('full_name', '') 
+                call_profile_json = call_data_resp.data.get('profile_json', {}) # Use the (now cleaned) profile_json
+                phone_number = call_data_resp.data.get('phone')
+                db_full_name = call_data_resp.data.get('full_name', '') 
 
-                 if not phone_number:
-                      raise ValueError("Cannot schedule call, phone number missing.")
-                 if not db_full_name:
-                     logger.warning(f"Candidate {candidate_id} missing full_name, using 'Candidate' for Retell.")
+                if not phone_number:
+                    raise ValueError("Cannot schedule call, phone number missing.")
+                if not db_full_name:
+                    logger.warning(f"Candidate {candidate_id} missing full_name, using 'Candidate' for Retell.")
 
 
-                 # Extract role/company from profile_json (ensure these keys exist after cleaning)
-                 current_role = call_profile_json.get('current_role', '') 
-                 current_company = call_profile_json.get('current_company', '') 
+                # Extract role/company from profile_json (ensure these keys exist after cleaning)
+                current_role = call_profile_json.get('current_role', '') 
+                current_company = call_profile_json.get('current_company', '')
 
-                 call_result = await self.retell_service.schedule_call(
-                      candidate_id=candidate_id,
-                      dynamic_variables={
-                           'first_name': db_full_name.split(' ')[0] if db_full_name else 'Candidate',
-                           'email': candidate_email, # Email passed into handler, not from DB profile_json
-                           'current_company': current_company if current_company and current_company != 'pending' else '',
-                           'current_title': current_role if current_role and current_role != 'pending' else '',
-                           'phone': phone_number
-                      }
-                 )
-                 call_id = call_result.get("call_id", "unknown")
-                 logger.info(f"✅ Retell call scheduled for candidate {candidate_id}: {call_id}")
-                 self._update_transaction(process_id, "call_scheduling", "completed", {"call_id": call_id})
+                call_result = await self.retell_service.schedule_call(
+                    candidate_id=candidate_id,
+                    dynamic_variables={
+                        'first_name': db_full_name.split(' ')[0] if db_full_name else 'Candidate',
+                        'email': candidate_email, # Email passed into handler, not from DB profile_json
+                        'current_company': current_company if current_company and current_company != 'pending' else '',
+                        'current_title': current_role if current_role and current_role != 'pending' else '',
+                        'phone': phone_number
+                    }
+                )
+                call_id = call_result.get("call_id", "unknown")
+                logger.info(f"✅ Retell call scheduled for candidate {candidate_id}: {call_id}")
+                self._update_transaction(process_id, "call_scheduling", "completed", {"call_id": call_id})
 
             except Exception as call_err:
-                 logger.error(f"❌ Error scheduling Retell call for {candidate_id}: {call_err}")
-                 self._update_transaction(process_id, "call_scheduling", "failed", {"error": str(call_err)})
-                 # Decide if this should fail the whole submission process?
-                 # For now, log the error but let the overall process complete.
+                logger.error(f"❌ Error scheduling Retell call for {candidate_id}: {call_err}")
+                self._update_transaction(process_id, "call_scheduling", "failed", {"error": str(call_err)})
+                # Decide if this should fail the whole submission process?
+                # For now, log the error but let the overall process complete.
 
             logger.info(f"\n=== ✅ Initial Submission Processing Complete for {candidate_id} ===")
             self._end_transaction(process_id, "completed")
@@ -342,17 +323,10 @@ class BrainAgent:
             }
             
         except Exception as e:
-            error_msg = f"Error during initial submission processing for {candidate_id}: {str(e)}"
-            logger.error(f"❌ {error_msg}")
-            logger.error(f"❌ Full traceback: {traceback.format_exc()}")
-            self._update_transaction(process_id, "error", "failed", {"error": error_msg})
-            self._end_transaction(process_id, "error")
-            return {
-                "id": candidate_id,
-                "status": "error",
-                "error": error_msg,
-                "timestamp": datetime.utcnow().isoformat()
-            }
+            logger.error(f"❌ Error in handle_candidate_submission: {str(e)}")
+            logger.error(f"Traceback: {traceback.format_exc()}")
+            self._end_transaction(process_id, "failed", {"error": str(e)})
+            raise
 
     async def _generate_match_reason_and_tags(
         self, 
