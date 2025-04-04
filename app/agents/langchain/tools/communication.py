@@ -4,6 +4,7 @@ from langchain_openai import ChatOpenAI
 from datetime import datetime, timedelta
 import os
 from app.config import get_settings
+from app.config.settings import Settings
 from pydantic import Field, BaseModel, PrivateAttr
 from .base import parse_llm_json_response
 import logging
