@@ -304,4 +304,54 @@ class ResumeParser(BaseTool):
 
     async def _arun(self, text_content: str) -> Dict[str, Any]:
         """Async version of resume parsing."""
-        return self._run(text_content) 
+        return self._run(text_content)
+
+    async def parse_resume(self, text_content: str) -> Dict[str, Any]:
+        """Parse resume text and extract structured information.
+        
+        Args:
+            text_content: The text content of the resume
+        """
+        try:
+            # Use LLM to extract structured information
+            prompt = f"""Extract the following information from this resume text:
+            1. Contact Information
+            2. Professional Summary
+            3. Work Experience (include company, title, dates, and key responsibilities)
+            4. Education (include institution, degree, dates, and relevant coursework)
+            5. Skills (categorized by type)
+            6. Certifications
+            7. Projects (if any)
+            8. Languages (if any)
+            
+            Resume text:
+            {text_content}
+            
+            Return the information in a structured JSON format with these fields:
+            - contact_info: Object with email, phone, location, etc.
+            - professional_summary: String
+            - work_experience: Array of objects with company, title, dates, responsibilities
+            - education: Array of objects with institution, degree, dates, coursework
+            - skills: Object with categories as keys and arrays of skills as values
+            - certifications: Array of certification objects
+            - projects: Array of project objects (if any)
+            - languages: Array of language objects (if any)
+            
+            If any information is not found, use empty strings or empty arrays."""
+            
+            response = self.llm.invoke(prompt)
+            
+            # Parse the response into structured data
+            parsed_data = parse_llm_json_response(response.content)
+            
+            return {
+                "status": "success",
+                "profile": parsed_data
+            }
+            
+        except Exception as e:
+            logger.error(f"Error parsing resume: {str(e)}")
+            return {
+                "status": "error",
+                "error": str(e)
+            } 
