@@ -295,8 +295,8 @@ class CandidateIntakeAgent(BaseAgent):
             # Process the full resume in chunks
             try:
                 logger.info("Starting full PDF processing")
-                # First get the text content
-                result = await self.pdf_processor.process_pdf(resume_content)
+                # First get the text content using _arun
+                result = await self.pdf_processor._arun(resume_content)
                 if result["status"] != "success":
                     error_msg = result.get("error", "Unknown error in PDF processing")
                     logger.error(f"Failed to process PDF: {error_msg}")
