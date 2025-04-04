@@ -7,19 +7,12 @@ pydantic-settings>=2.2.1
 python-multipart==0.0.9
 
 # LangChain and AI
-langchain>=0.1.9
 langchain-openai>=0.0.8
 openai>=1.12.0
 tiktoken>=0.6.0
 
-# Vector Store
-pinecone-client>=3.0.2
-
 # Database
 supabase>=2.3.5
-
-# PDF Processing
-PyPDF2>=3.0.1
 
 # Email and Communication
 sendgrid>=6.11.0
@@ -43,8 +36,3 @@ tenacity>=8.2.3
 typing-extensions>=4.9.0
 python-jose[cryptography]>=3.3.0
 passlib[bcrypt]>=1.7.4
-
-# Testing
-pytest>=8.0.1
-pytest-asyncio>=0.23.5
-pytest-cov>=4.1.0
