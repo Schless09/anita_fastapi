@@ -5,7 +5,7 @@ import asyncio
 from unittest.mock import Mock, AsyncMock
 
 from app.main import app
-from app.config import get_settings, get_supabase, get_pinecone
+from app.config import get_settings
 from app.services.candidate_service import CandidateService
 from app.services.job_service import JobService
 from app.agents.brain_agent import BrainAgent

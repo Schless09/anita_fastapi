@@ -2,10 +2,10 @@ import pytest
 from typing import Dict, Any
 from app.services.candidate_service import CandidateService
 from app.services.job_service import JobService
-from app.config import get_settings, get_supabase
+from app.config import get_settings, get_supabase_client
 
 settings = get_settings()
-supabase = get_supabase()
+supabase = get_supabase_client()
 candidate_service = CandidateService()
 job_service = JobService()
 
