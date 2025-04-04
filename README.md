@@ -62,37 +62,65 @@ Anita is a sophisticated recruitment system built with FastAPI and LangChain tha
 
 ### Prerequisites
 
-- Python 3.8+
+- Python 3.9+ # Check compatibility if using older Python
 - FastAPI
 - LangChain
 - OpenAI API key
-- Pinecone API key
-- SendGrid API key
-- Google Calendar API credentials
-- Supabase account
+- Supabase account credentials
+- Retell API key and Agent ID
+- Twilio credentials (if used by Retell/directly)
+- Slack credentials (if Slack integration used)
+- Ngrok account (for local development with webhooks)
+- Google OAuth Credentials (if using Gmail for email)
 
 ### Environment Variables
 
+Create a `.env` file in the project root and add the following variables based on your `app/config/settings.py`:
+
 ```env
+# Environment
+ENVIRONMENT=development # or production
+
 # OpenAI
 OPENAI_API_KEY=your_openai_api_key
+OPENAI_MODEL=gpt-4-turbo-preview # Or your preferred model
+# OPENAI_TEMPERATURE=0.5 # Optional, defaults in settings
 
-# Pinecone
-PINECONE_API_KEY=your_pinecone_api_key
-PINECONE_ENVIRONMENT=your_pinecone_environment
-PINECONE_JOBS_INDEX=your_jobs_index_name
-PINECONE_CANDIDATES_INDEX=your_candidates_index_name
+# Retell
+RETELL_AGENT_ID=your_retell_agent_id
+RETELL_API_KEY=your_retell_api_key
+RETELL_API_BASE=https://api.retellai.com # Or your custom base
+RETELL_FROM_NUMBER=your_retell_phone_number
+# RETELL_WEBHOOK_URL is derived automatically
 
-# SendGrid
-SENDGRID_API_KEY=your_sendgrid_api_key
-SENDGRID_SENDER_EMAIL=your_sender_email
+# Twilio
+TWILIO_ACCOUNT_SID=your_twilio_sid
+TWILIO_AUTH_TOKEN=your_twilio_token
+TWILIO_PHONE_NUMBER=your_twilio_number
 
-# Google Calendar
-GOOGLE_CALENDAR_CREDENTIALS=path_to_credentials.json
+# Slack
+SLACK_APP_ID=
+SLACK_CLIENT_ID=
+SLACK_CLIENT_SECRET=
+SLACK_SIGNING_SECRET=
+SLACK_VERIFICATION_TOKEN=
+SLACK_BOT_TOKEN=
+
+# Ngrok / Base URL (for local dev)
+NGROK_AUTHTOKEN=your_ngrok_token
+BASE_URL=your_ngrok_https_url # e.g., https://xxxxx.ngrok-free.app
 
 # Supabase
 SUPABASE_URL=your_supabase_url
 SUPABASE_KEY=your_supabase_key
+SUPABASE_SERVICE_ROLE_KEY=your_supabase_service_role_key
+
+# Vercel (If using Vercel deployment protection)
+Vercel_PROTECTION_BYPASS=your_secret
+
+# Add Gmail / Google OAuth variables here if needed for email
+# e.g., GOOGLE_CLIENT_SECRETS_JSON=path/to/credentials.json
+# e.g., SENDER_EMAIL=your_authenticated_email@example.com
 ```
 
 ### Installation
@@ -248,3 +276,7 @@ pytest tests/
 ## License
 
 This project is licensed under the MIT License - see the LICENSE file for details.
+
+---
+
+_Note: Recent updates include migration from Pinecone/SendGrid to Supabase vectors/alternative email and deployment configuration fixes (as of commit xxxxxxx)._
