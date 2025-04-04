@@ -7,16 +7,19 @@ import os
 import logging
 from pydantic import Field, BaseModel, PrivateAttr
 from .base import parse_llm_json_response
+from app.config.settings import Settings
 
 logger = logging.getLogger(__name__)
 
 class PDFProcessorInput(BaseModel):
-    file_path: str
-    extract_images: bool = False
+    """Input schema for the PDF processor tool."""
+    file_path: str = Field(..., description="Path to the PDF file")
+    extract_images: bool = Field(False, description="Whether to extract images from the PDF")
 
 class ResumeParserInput(BaseModel):
-    file_path: str
-    format: str = None
+    """Input schema for the resume parser tool."""
+    file_path: str = Field(..., description="Path to the resume file")
+    format: Optional[str] = Field(None, description="Format of the resume (pdf, docx, etc.)")
 
 class PDFProcessor(BaseTool):
     """Tool for processing PDF documents."""
@@ -27,7 +30,7 @@ class PDFProcessor(BaseTool):
     - file_path: Path to the PDF file
     - extract_images: (optional) Whether to extract images from the PDF
     """
-    args_schema: Type[PDFProcessorInput] = PDFProcessorInput
+    args_schema: Type[BaseModel] = PDFProcessorInput
     return_direct: bool = True
     _settings: Settings = PrivateAttr()
     # Define fields that will be set in __init__
