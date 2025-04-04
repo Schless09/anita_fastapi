@@ -667,10 +667,16 @@ class BrainAgent:
 
                             match_records.append({
                                 "candidate_id": candidate_id,
-                                "job_id": job_id,
-                                "match_score": similarity_score,
+                                "job_id": int(job_id),  # Convert to bigint
+                                "match_score": float(similarity_score),  # Ensure numeric
                                 "match_reason": reason_tags_data.get("match_reason") if reason_tags_data else None,
-                                "match_tags": reason_tags_data.get("match_tags") if reason_tags_data else None
+                                "match_tags": reason_tags_data.get("match_tags") if reason_tags_data else None,
+                                "status": "pending",  # Default status
+                                "is_automatic_match": True,  # This is an automatic match
+                                "next_step": "Review match details",  # Default next step
+                                "matched_at": datetime.utcnow().isoformat(),
+                                "created_at": datetime.utcnow().isoformat(),
+                                "updated_at": datetime.utcnow().isoformat()
                             })
 
 
