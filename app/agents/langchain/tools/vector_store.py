@@ -27,11 +27,20 @@ class JobSearchInput(BaseModel):
     # Add filters later if needed
 
 class VectorStoreTool(BaseTool):
-    """Tool for managing vector store operations. Implements singleton pattern."""
+    """Tool for interacting with the vector store."""
     
-    name = "vector_store"
-    description = "Manage vector store operations for jobs and candidates. Use for storing or searching job and candidate data."
-    args_schema = VectorStoreInput
+    name: str = "vector_store"
+    description: str = """Useful for searching and retrieving information from the vector store.
+    Input should be a JSON string with the following fields:
+    - query: The search query
+    - table: The table to search in (candidates or jobs)
+    - limit: (optional) Maximum number of results to return
+    - filter: (optional) Additional filter criteria
+    """
+    args_schema: Type[BaseModel] = VectorStoreInput
+    return_direct: bool = True
+    _vector_service: VectorService = PrivateAttr()
+    _settings: Settings = PrivateAttr()
     
     # Class-level singleton instance
     _instance: ClassVar[Optional['VectorStoreTool']] = None
