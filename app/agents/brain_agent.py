@@ -446,21 +446,50 @@ class BrainAgent:
             await self._update_candidate_status(candidate_id, 'processing_call')
             # --- End Status Lock ---
 
-            # 1. Check for Transcript
+            # 1a. Check Call Status First
+            call_status = call_data.get('call_status')
+            MISSED_CALL_STATUSES = {"registered", "error"} # Statuses indicating no conversation happened
+
+            if call_status in MISSED_CALL_STATUSES:
+                logger.warning(f"Call for {candidate_id} had status: '{call_status}'. Treating as missed call.")
+                self._update_transaction(process_id, "call_status_check", "failed", {"reason": f"Call status: {call_status}"})
+                final_process_status = 'call_missed_or_failed' 
+                # Trigger missed call email HERE before returning (if email exists)
+                if candidate_email:
+                    logger.info(f"Attempting to send missed call email to {candidate_email} due to call_status: {call_status}")
+                    try:
+                        await send_missed_call_email(
+                            recipient_email=candidate_email, 
+                            candidate_name=candidate_name, 
+                            candidate_id=uuid.UUID(candidate_id), # Ensure UUID type
+                            supabase_client=self.supabase
+                        )
+                    except Exception as email_err:
+                        logger.error(f"Error sending missed call email (triggered by call_status): {email_err}")
+                # Status gets updated in finally block
+                return {"status": "stopped", "reason": f"Call status: {call_status}"}
+            else:
+                 logger.info(f"Call for {candidate_id} has status '{call_status}'. Proceeding to transcript check.")
+                 self._update_transaction(process_id, "call_status_check", "completed")
+
+            # 1b. Check for Transcript (Fallback if status was ok, e.g., 'ended' with immediate hangup)
             transcript = call_data.get('transcript')
             if not transcript or not transcript.strip():
-                logger.warning(f"No valid transcript for call {call_data.get('call_id')} (Candidate: {candidate_id}).")
+                logger.warning(f"No valid transcript for call {call_data.get('call_id')} (Candidate: {candidate_id}). Status was '{call_status}'. Treating as missed call.")
                 self._update_transaction(process_id, "transcript_check", "failed", {"reason": "No transcript"})
                 final_process_status = 'call_missed_or_failed' 
                 # Trigger missed call email HERE before returning (if email exists)
                 if candidate_email:
-                     logger.info(f"Attempting to send missed call email to {candidate_email} for {candidate_id}")
-                     await send_missed_call_email(
-                          recipient_email=candidate_email, 
-                          candidate_name=candidate_name, 
-                          candidate_id=uuid.UUID(candidate_id), # Ensure UUID type
-                          supabase_client=self.supabase
-                     )
+                    logger.info(f"Attempting to send missed call email to {candidate_email} due to empty transcript (status: {call_status}).")
+                    try:
+                        await send_missed_call_email(
+                            recipient_email=candidate_email, 
+                            candidate_name=candidate_name, 
+                            candidate_id=uuid.UUID(candidate_id), # Ensure UUID type
+                            supabase_client=self.supabase
+                        )
+                    except Exception as email_err:
+                         logger.error(f"Error sending missed call email (triggered by empty transcript): {email_err}")
                 # Status gets updated in finally block
                 return {"status": "stopped", "reason": "No transcript"} 
             self._update_transaction(process_id, "transcript_check", "completed")
@@ -622,11 +651,11 @@ class BrainAgent:
                             top_job_ids = [m['job_id'] for m in matches_ids_resp.data] if matches_ids_resp.data else []
 
                             # Fix indentation for high_scoring_jobs initialization and the following block
-                            high_scoring_jobs = []
-                            if top_job_ids:
+                            high_scoring_jobs = [] # Align this with top_job_ids
+                            if top_job_ids: # Align this with high_scoring_jobs initialization
                                 jobs_details_resp = await self.supabase.table('jobs_dev').select('id, job_title, job_url').in_('id', top_job_ids).execute()
                                 # Fix indentation for the inner if block
-                                if jobs_details_resp.data:
+                                if jobs_details_resp.data: # Indent under the 'if top_job_ids:'
                                     job_details_map = {job['id']: job for job in jobs_details_resp.data}
                                     high_scoring_jobs = [
                                         {'job_title': job_details_map[job_id].get('job_title'), 'job_url': job_details_map[job_id].get('job_url')}
@@ -634,7 +663,7 @@ class BrainAgent:
                                     ]
                             
                             # Fix indentation for the if high_scoring_jobs block
-                            if high_scoring_jobs:
+                            if high_scoring_jobs: # Align this with 'if top_job_ids:'
                                 logger.info(f"Attempting to send job match email to {candidate_email} for {len(high_scoring_jobs)} jobs.")
                                 await send_job_match_email(
                                     recipient_email=candidate_email, 
@@ -644,7 +673,7 @@ class BrainAgent:
                                     supabase_client=self.supabase
                                 )
                             # Fix indentation for the else block (sending no matches email)
-                            else:
+                            else: # Align this with 'if high_scoring_jobs:'
                                 # No jobs met threshold for the email OR no matches were found initially
                                 logger.info(f"No high-scoring jobs found or initial match count was zero. Attempting to send 'no matches' email to {candidate_email}.")
                                 await send_no_matches_email(
@@ -654,10 +683,10 @@ class BrainAgent:
                                     supabase_client=self.supabase
                                 )
                         # Fix indentation for the else block (no candidate email)
-                        else:
+                        else: # Align this with 'if candidate_email:'
                             logger.warning(f"Could not find email for candidate {candidate_id} to send post-match email.")
                     # Add the except block for the email try
-                    except Exception as email_err:
+                    except Exception as email_err: # Align this with 'try:'
                         logger.error(f"Error during email sending logic for {candidate_id}: {email_err}")
                         # Don't re-raise, just log the error and continue
 

@@ -47,6 +47,7 @@ class Settings(BaseSettings):
     # Supabase
     supabase_url: str
     supabase_key: str
+    supabase_service_role_key: str
 
     # Pinecone
     pinecone_api_key: str
