@@ -27,7 +27,7 @@ router = APIRouter()
 settings = Settings()
 supabase_client = get_supabase_client()
 retell_service = RetellService(settings=settings)
-openai_service = OpenAIService()
+openai_service = OpenAIService(settings=settings)
 
 # Initialize services with dependencies
 candidate_service = CandidateService(
