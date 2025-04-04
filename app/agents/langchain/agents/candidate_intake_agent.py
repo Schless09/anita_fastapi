@@ -206,9 +206,10 @@ class CandidateIntakeAgent(BaseAgent):
     ) -> Dict[str, Any]:
         try:
             logger.info("\n=== Starting Candidate Intake Process ===")
-            logger.info(f"Processing candidate: {candidate_email}")
+            logger.info(f"Processing candidate: {candidate_email} (ID: {candidate_id})")
             
             # Get candidate's first name from database
+            logger.info(f"Fetching candidate data from database for ID: {candidate_id}")
             candidate_data = await self.supabase.table(self.candidates_table).select("full_name").eq("id", candidate_id).execute()
             if not candidate_data.data:
                 logger.error(f"❌ Candidate not found in database: {candidate_id}")
@@ -217,22 +218,33 @@ class CandidateIntakeAgent(BaseAgent):
                     "error": "Candidate not found in database"
                 }
             full_name = candidate_data.data[0].get("full_name", "")
+            logger.info(f"Found candidate with name: {full_name}")
             
             # Extract first name from full name
             first_name = full_name.split()[0] if full_name else ""
+            logger.info(f"Extracted first name: {first_name}")
             
             # Step 1: Quick Extract Essential Info
             logger.info("\nStep 1: ⚡ Quick Resume Extraction")
             logger.info("----------------------------------------")
+            logger.info(f"Starting quick extraction for resume (size: {len(resume_content)} bytes)")
             
             # First do quick extraction of essential info
             quick_result = self.pdf_processor._quick_extract(resume_content)
             if quick_result["status"] != "success":
-                logger.error(f"❌ Quick PDF Extraction Failed: {quick_result}")
+                error_msg = quick_result.get("error", "Unknown error in quick extraction")
+                logger.error(f"❌ Quick PDF Extraction Failed: {error_msg}")
                 return quick_result
                 
             # Store essential info immediately
             essential_info = quick_result["essential_info"]
+            logger.info("Successfully extracted essential info:")
+            logger.info(f"- Current Title: {essential_info.get('current_title', 'Not found')}")
+            logger.info(f"- Current Company: {essential_info.get('current_company', 'Not found')}")
+            logger.info(f"- Email: {essential_info.get('email', 'Not found')}")
+            logger.info(f"- Phone: {essential_info.get('phone', 'Not found')}")
+            logger.info(f"- Skills: {len(essential_info.get('skills', []))} skills found")
+            
             # Add both full_name and first_name to essential_info
             essential_info["full_name"] = full_name
             essential_info["first_name"] = first_name
@@ -243,6 +255,7 @@ class CandidateIntakeAgent(BaseAgent):
             logger.info("----------------------------------------")
             
             # Start background processing
+            logger.info("Creating background task for full resume processing")
             asyncio.create_task(self._process_full_resume_background(resume_content, candidate_id))
             
             logger.info("✅ Background processing triggered")
@@ -270,35 +283,59 @@ class CandidateIntakeAgent(BaseAgent):
     ) -> None:
         """Process the full resume in the background."""
         try:
+            logger.info(f"\n=== Starting Background Processing for Candidate {candidate_id} ===")
+            
             # Update status to processing
+            logger.info("Updating candidate status to 'processing'")
             await self.supabase.table(self.candidates_table).update({
                 "status": "processing",
                 "updated_at": datetime.utcnow().isoformat()
             }).eq("id", candidate_id).execute()
+            logger.info("Status updated successfully")
 
             # Process the full resume in chunks
             try:
+                logger.info("Starting full PDF processing")
                 # First get the text content
                 result = await self.pdf_processor.process_pdf(resume_content)
                 if result["status"] != "success":
-                    raise Exception(f"Failed to process PDF: {result.get('error')}")
+                    error_msg = result.get("error", "Unknown error in PDF processing")
+                    logger.error(f"Failed to process PDF: {error_msg}")
+                    raise Exception(f"Failed to process PDF: {error_msg}")
 
-                # Parse the resume in chunks to avoid timeout
-                text_chunks = self._chunk_text(result["text"])
-                parsed_data = {}
+                logger.info(f"Successfully processed PDF with {result.get('num_pages', 0)} pages")
                 
-                for chunk in text_chunks:
-                    chunk_result = await self.resume_parser.parse_resume(chunk)
-                    if chunk_result["status"] == "success":
-                        # Merge the parsed data
-                        parsed_data = self._merge_parsed_data(parsed_data, chunk_result["profile"])
+                # Parse the resume in chunks to avoid timeout
+                logger.info("Starting chunked text processing")
+                text_chunks = self._chunk_text(result["text"])
+                logger.info(f"Split text into {len(text_chunks)} chunks")
+                
+                parsed_data = {}
+                for i, chunk in enumerate(text_chunks):
+                    logger.info(f"Processing chunk {i+1}/{len(text_chunks)}")
+                    try:
+                        chunk_result = await self.resume_parser.parse_resume(chunk)
+                        if chunk_result["status"] == "success":
+                            logger.info(f"Successfully parsed chunk {i+1}")
+                            # Merge the parsed data
+                            parsed_data = self._merge_parsed_data(parsed_data, chunk_result["profile"])
+                        else:
+                            logger.warning(f"Failed to parse chunk {i+1}: {chunk_result.get('error', 'Unknown error')}")
+                    except Exception as e:
+                        logger.error(f"Error processing chunk {i+1}: {str(e)}")
+                        continue
+
+                logger.info("Completed chunk processing")
+                logger.info(f"Final parsed data contains {len(parsed_data)} fields")
 
                 # Update status to completed
+                logger.info("Updating candidate status to 'completed'")
                 await self.supabase.table(self.candidates_table).update({
                     "status": "completed",
                     "profile_json": parsed_data,
                     "updated_at": datetime.utcnow().isoformat()
                 }).eq("id", candidate_id).execute()
+                logger.info("Status updated successfully")
 
             except asyncio.TimeoutError:
                 logger.error("Background processing timed out")
@@ -309,6 +346,7 @@ class CandidateIntakeAgent(BaseAgent):
                 }).eq("id", candidate_id).execute()
             except Exception as e:
                 logger.error(f"Error in background resume processing: {str(e)}")
+                logger.error(f"Full traceback: {traceback.format_exc()}")
                 await self.supabase.table(self.candidates_table).update({
                     "status": "error",
                     "error_message": str(e),
@@ -317,6 +355,7 @@ class CandidateIntakeAgent(BaseAgent):
 
         except Exception as e:
             logger.error(f"Error updating candidate status: {str(e)}")
+            logger.error(f"Full traceback: {traceback.format_exc()}")
 
     def _chunk_text(self, text: str, chunk_size: int = 10000) -> List[str]:
         """Split text into manageable chunks."""

@@ -8,6 +8,7 @@ import logging
 from pydantic import Field, BaseModel, PrivateAttr
 from .base import parse_llm_json_response
 from app.config.settings import Settings
+import traceback
 
 logger = logging.getLogger(__name__)
 
@@ -114,12 +115,15 @@ class PDFProcessor(BaseTool):
             file_input: Either a file path (str) or PDF binary content (bytes)
         """
         try:
+            logger.info("Starting quick PDF extraction")
+            
             # Check if input is a file path or binary content
             if isinstance(file_input, str):
                 # It's a file path
                 logger.info(f"Quick extracting from PDF file path: {file_input}")
                 try:
                     reader = PdfReader(file_input)
+                    logger.info(f"Successfully opened PDF file: {file_input}")
                 except FileNotFoundError as e:
                     logger.error(f"File not found: {file_input}")
                     return {
@@ -132,8 +136,10 @@ class PDFProcessor(BaseTool):
                 try:
                     pdf_stream = io.BytesIO(file_input)
                     reader = PdfReader(pdf_stream)
+                    logger.info("Successfully opened PDF from binary content")
                 except Exception as e:
                     logger.error(f"Error reading PDF from binary content: {str(e)}")
+                    logger.error(f"PDF content length: {len(file_input)} bytes")
                     return {
                         "status": "error",
                         "error": f"Invalid PDF content: {str(e)}"
@@ -141,15 +147,34 @@ class PDFProcessor(BaseTool):
             
             # Extract text from first 3 pages only
             text_content = []
+            total_pages = len(reader.pages)
+            logger.info(f"Total pages in PDF: {total_pages}")
+            
             for i, page in enumerate(reader.pages):
                 if i >= 3:  # Only process first 3 pages
+                    logger.info(f"Reached page limit (3), stopping extraction")
                     break
-                text_content.append(page.extract_text())
+                try:
+                    page_text = page.extract_text()
+                    text_content.append(page_text)
+                    logger.info(f"Successfully extracted text from page {i+1}")
+                except Exception as e:
+                    logger.error(f"Error extracting text from page {i+1}: {str(e)}")
+                    continue
             
             # Combine all text
             quick_text = "\n".join(text_content)
+            logger.info(f"Total extracted text length: {len(quick_text)} characters")
+            
+            if not quick_text.strip():
+                logger.error("No text content was extracted from the PDF")
+                return {
+                    "status": "error",
+                    "error": "No text content was extracted from the PDF"
+                }
             
             # Use LLM to extract essential info
+            logger.info("Sending text to LLM for information extraction")
             prompt = f"""Extract the following essential information from this resume text (first few pages only):
             1. Current or most recent job title
             2. Current or most recent company
@@ -168,19 +193,30 @@ class PDFProcessor(BaseTool):
             
             If any information is not found, use empty strings or empty arrays."""
             
-            response = self.llm.invoke(prompt)
-            
-            # Parse the response into structured data
-            essential_info = parse_llm_json_response(response.content)
-            
-            return {
-                "status": "success",
-                "essential_info": essential_info,
-                "num_pages_processed": min(3, len(reader.pages))
-            }
+            try:
+                response = self.llm.invoke(prompt)
+                logger.info("Successfully received response from LLM")
+                
+                # Parse the response into structured data
+                essential_info = parse_llm_json_response(response.content)
+                logger.info("Successfully parsed LLM response into structured data")
+                
+                return {
+                    "status": "success",
+                    "essential_info": essential_info,
+                    "num_pages_processed": min(3, len(reader.pages))
+                }
+            except Exception as e:
+                logger.error(f"Error in LLM processing: {str(e)}")
+                logger.error(f"LLM response content: {response.content if 'response' in locals() else 'No response'}")
+                return {
+                    "status": "error",
+                    "error": f"LLM processing failed: {str(e)}"
+                }
             
         except Exception as e:
             logger.error(f"Error in quick PDF extraction: {str(e)}")
+            logger.error(f"Full traceback: {traceback.format_exc()}")
             return {
                 "status": "error",
                 "error": str(e)
