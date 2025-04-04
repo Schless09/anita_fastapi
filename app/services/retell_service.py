@@ -48,10 +48,25 @@ class RetellService:
             
             logger.info(f"Formatted phone number: {phone}")
             
+            # Extract first name from full_name if provided
+            string_vars = dynamic_variables.copy()
+            
+            # Handle first_name correctly
+            if 'full_name' in string_vars and string_vars.get('full_name'):
+                full_name = string_vars.get('full_name')
+                # Extract first name from full name
+                first_name = full_name.split(' ')[0] if full_name else "Candidate"
+                string_vars['first_name'] = first_name
+                logger.info(f"Using first_name '{first_name}' extracted from full_name '{full_name}'")
+            elif not string_vars.get('first_name'):
+                # Fallback if no first_name and no full_name
+                string_vars['first_name'] = "Candidate"
+                logger.info("Using default first_name 'Candidate' as no name was provided")
+            
             # Convert all dynamic variables to strings
-            string_vars = {
+            clean_vars = {
                 key: str(value) if value is not None else ""
-                for key, value in dynamic_variables.items()
+                for key, value in string_vars.items()
             }
             
             # Get candidate data to get phone number
@@ -70,7 +85,7 @@ class RetellService:
                         "metadata": {
                             "candidate_id": candidate_id
                         },
-                        "retell_llm_dynamic_variables": string_vars  # Use string-converted variables
+                        "retell_llm_dynamic_variables": clean_vars  # Use string-converted variables
                     }
                 )
                 

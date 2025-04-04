@@ -324,20 +324,13 @@ class BrainAgent:
                 current_role = call_profile_json.get('current_role', '') 
                 current_company = call_profile_json.get('current_company', '')
 
-                # Get first name from full name but handle edge cases
-                first_name = 'Candidate'
-                if db_full_name and db_full_name != 'Candidate':
-                    name_parts = db_full_name.split(' ')
-                    if name_parts:
-                        first_name = name_parts[0]
-                
                 # Log the dynamic variables we're going to use
-                logger.info(f"Using dynamic variables - first_name: {first_name}, company: {current_company}, role: {current_role}")
+                logger.info(f"Using dynamic variables - full_name: {db_full_name}, company: {current_company}, role: {current_role}")
 
                 call_result = await self.retell_service.schedule_call(
                     candidate_id=candidate_id,
                     dynamic_variables={
-                        'first_name': first_name,
+                        'full_name': db_full_name,  # Pass the full name instead of extracting first name here
                         'email': candidate_email, # Email passed into handler, not from DB profile_json
                         'current_company': current_company if current_company and current_company != 'pending' else '',
                         'current_title': current_role if current_role and current_role != 'pending' else '',
@@ -857,7 +850,7 @@ class BrainAgent:
                  call_result = await self.retell_service.schedule_call(
                       candidate_id=candidate_id,
                       dynamic_variables={
-                           'first_name': db_full_name.split(' ')[0] if db_full_name else 'Candidate',
+                           'full_name': db_full_name,  # Pass the full name instead of extracting first name here
                            'email': candidate_email if candidate_email else '', # Pass email if available
                            # Assuming role/company aren't needed/available for a simple callback
                            'current_company': '',
