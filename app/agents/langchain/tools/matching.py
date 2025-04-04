@@ -1,18 +1,27 @@
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Type
 from langchain.tools import BaseTool
 from langchain_openai import ChatOpenAI
 from .vector_store import VectorStoreTool
-from pydantic import Field
+from pydantic import Field, BaseModel
 from .base import parse_llm_json_response
 import logging
 
 logger = logging.getLogger(__name__)
 
 class MatchingTool(BaseTool):
-    """Tool for handling job-candidate matching operations."""
+    """Tool for matching candidates to jobs."""
     
-    name = "matching"
-    description = "Handle job-candidate matching operations"
+    name: str = "matching"
+    description: str = """Useful for matching candidates to jobs based on skills, experience, and preferences.
+    Input should be a JSON string with the following fields:
+    - candidate_id: The ID of the candidate to match
+    - job_id: (optional) The ID of a specific job to match against
+    - limit: (optional) Maximum number of matches to return
+    """
+    args_schema: Type[BaseModel] = MatchingInput
+    return_direct: bool = True
+    _matching_service: MatchingService = PrivateAttr()
+    _settings: Settings = PrivateAttr()
     # Define fields that will be set in __init__
     llm: ChatOpenAI = Field(default=None)
     vector_store: VectorStoreTool = Field(default=None)
