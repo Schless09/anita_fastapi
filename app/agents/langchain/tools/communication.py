@@ -21,8 +21,9 @@ class EmailTool(BaseTool):
     description = "Handle email communications"
     # Define fields that will be set in __init__
     llm: ChatOpenAI = Field(default=None)
-    sg: SendGridAPIClient = Field(default=None)
-    from_email: str = Field(default=None)
+    settings: Any = Field(default=None) # Store settings
+    sg_client: Optional[SendGridAPIClient] = Field(default=None) # Store SendGrid client
+    from_email: Optional[str] = Field(default=None)
     
     class Config:
         """Configuration for this pydantic object."""
@@ -32,18 +33,33 @@ class EmailTool(BaseTool):
         """Initialize the email tool."""
         super().__init__()
         
+        # Get settings and store them
+        self.settings = get_settings()
+        
         # Set up LLM
         self.llm = ChatOpenAI(
-            model_name="gpt-4-turbo-preview",
-            temperature=0.7
+            model_name=self.settings.openai_model, # Use model from settings
+            temperature=0.7,
+            api_key=self.settings.openai_api_key # Use key from settings
         )
         
-        # Initialize SendGrid
-        self.sg = SendGridAPIClient(os.getenv("SENDGRID_API_KEY"))
-        self.from_email = os.getenv("SENDGRID_SENDER_EMAIL")
+        # Initialize SendGrid Client using the config function
+        self.sg_client = get_sendgrid_client() # Returns None if not configured
+        if self.sg_client:
+            self.from_email = self.settings.sender_email
+        else:
+            self.from_email = None
+            logger.warning("SendGrid client not initialized. Email sending disabled.")
 
     def _run(self, operation: str, **kwargs) -> Dict[str, Any]:
         """Run email operations."""
+        # Check if SendGrid is available for send operations
+        if operation == "send_email" and not self.sg_client:
+            return {
+                "status": "error",
+                "error": "SendGrid is not configured. Cannot send email."
+            }
+            
         try:
             if operation == "send_email":
                 return self._send_email(**kwargs)
@@ -72,6 +88,12 @@ class EmailTool(BaseTool):
         content: str
     ) -> Dict[str, Any]:
         """Send an email using SendGrid."""
+        if not self.sg_client or not self.from_email:
+            return {
+                "status": "error",
+                "error": "SendGrid client or sender email is not configured."
+            }
+            
         try:
             message = Mail(
                 from_email=self.from_email,
@@ -80,7 +102,7 @@ class EmailTool(BaseTool):
                 html_content=content
             )
             
-            response = self.sg.send(message)
+            response = self.sg_client.send(message) # Use self.sg_client
             
             return {
                 "status": "success",

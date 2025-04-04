@@ -163,11 +163,6 @@ async def health_check():
         }
     }
 
-# Get Vercel protection bypass secret
-VERCEL_PROTECTION_BYPASS = os.getenv('VERCEL_PROTECTION_BYPASS')
-if not VERCEL_PROTECTION_BYPASS:
-    raise ValueError("VERCEL_PROTECTION_BYPASS environment variable is not set")
-
 class RetellCallStatus(str, Enum):
     CREATED = "created"
     RINGING = "ringing"

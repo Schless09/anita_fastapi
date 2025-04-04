@@ -48,6 +48,7 @@ class BrainAgent:
     
     def __init__(self):
         """Initialize the brain agent and required services."""
+        settings = get_settings() # Get settings
         self._candidate_intake_agent = None
         self._job_matching_agent = None
         self._farming_matching_agent = None
@@ -57,7 +58,7 @@ class BrainAgent:
         # Initialize needed services
         self.supabase: AsyncClient = get_supabase_client()
         self.candidate_service = CandidateService()
-        self.openai_service = OpenAIService()
+        self.openai_service = OpenAIService(settings)
         self.matching_service = MatchingService()
         self.retell_service = RetellService()
 
@@ -86,16 +87,14 @@ class BrainAgent:
             await self.candidate_service.supabase.table("candidates_dev").select("count").execute()
             logger.info("Successfully connected to Supabase")
 
-            # Initialize OpenAI client
-            openai.api_key = os.getenv("OPENAI_API_KEY")
-            if not openai.api_key:
-                logger.warning("OPENAI_API_KEY not found in environment variables. Match reason generation will be disabled.")
-                self.openai_enabled = False
+            # We should check if the service has a valid client instead
+            if not self.openai_service or not self.openai_service.client.api_key:
+                 logger.warning("OpenAI service client not properly initialized (missing API key). Match reason generation disabled.")
+                 self.openai_enabled = False
             else:
+                logger.info("OpenAI service client appears initialized.")
                 self.openai_enabled = True
-                # TODO: Consider using async OpenAI client if available and beneficial
-                # from openai import AsyncOpenAI
-                # self.openai_client = AsyncOpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+                
         except Exception as e:
             logger.error(f"Error initializing async components: {str(e)}")
             raise
@@ -422,11 +421,10 @@ class BrainAgent:
                  
                  if not candidate_info_resp.data:
                       logger.error(f"(Agent Pre-Check) Could not find candidate {candidate_id}. Aborting call processing.")
-                      # Fix indentation here
                       self._end_transaction(process_id, "failed", "Candidate not found")
                       return {"status": "error", "reason": "Candidate not found"}
                  # else (implied): continue if candidate was found
-                 # Fix indentation for storing data (should be outside the inner if, inside the try)
+                 
                  # Store fetched data
                  candidate_email = candidate_info_resp.data.get('email')
                  candidate_name = candidate_info_resp.data.get('full_name')
@@ -436,7 +434,6 @@ class BrainAgent:
                  if not candidate_email: # Log warning if email is missing
                       logger.warning(f"(Agent Pre-Check) Candidate {candidate_id} missing email address. Cannot send follow-up emails.")
 
-            # Fix indentation for except (should align with the 'try' above)
             except Exception as fetch_err:
                  logger.error(f"(Agent Pre-Check) Error fetching initial candidate data for {candidate_id}: {fetch_err}")
                  self._end_transaction(process_id, "failed", "DB error fetching candidate")
@@ -526,8 +523,8 @@ class BrainAgent:
                      # Update DB: Save cleaned profile JSON only
                      profile_update_resp = await self.supabase.table(self.candidates_table).update({
                          'profile_json': cleaned_profile_json,
-                     'updated_at': datetime.utcnow().isoformat()
-                }).eq('id', candidate_id).execute()
+                         'updated_at': datetime.utcnow().isoformat()
+                     }).eq('id', candidate_id).execute()
 
                      if not profile_update_resp.data:
                           logger.error("Failed to save cleaned/merged profile JSON to database.")
