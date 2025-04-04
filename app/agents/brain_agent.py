@@ -253,10 +253,33 @@ class BrainAgent:
                 if parsed_data["status"] != "success":
                     raise ValueError(f"Resume parsing failed: {parsed_data.get('error', 'Unknown error')}")
                 
+                # Log what was extracted from the resume
+                profile = parsed_data.get("profile", {})
+                logger.info(f"Extracted profile data: Name: {profile.get('full_name', 'Not found')}, " + 
+                            f"Current role: {profile.get('current_role', 'Not found')}, " +
+                            f"Current company: {profile.get('current_company', 'Not found')}")
+                
+                # Check if basic_info structure is present and extract full_name from there if needed
+                if not profile.get("full_name") and profile.get("basic_info", {}).get("full_name"):
+                    profile["full_name"] = profile["basic_info"]["full_name"]
+                    logger.info(f"Using full_name from basic_info: {profile['full_name']}")
+                
+                # Ensure current_role and current_company are set at top level
+                if profile.get("experience") and isinstance(profile.get("experience"), list) and len(profile.get("experience")) > 0:
+                    # Get most recent experience (first in the list)
+                    most_recent = profile["experience"][0]
+                    if not profile.get("current_role") and most_recent.get("title"):
+                        profile["current_role"] = most_recent.get("title")
+                        logger.info(f"Setting current_role from experience: {profile['current_role']}")
+                    
+                    if not profile.get("current_company") and most_recent.get("company"):
+                        profile["current_company"] = most_recent.get("company")
+                        logger.info(f"Setting current_company from experience: {profile['current_company']}")
+                
                 # Update candidate with initial data
                 update_data = {
-                    "profile_json": parsed_data["profile"],
-                    "full_name": parsed_data["profile"].get("full_name", "Candidate"),  # Update with real name if available
+                    "profile_json": profile,  # Use the potentially enhanced profile
+                    "full_name": profile.get("full_name", "Candidate"),  # Update with real name if available
                     "updated_at": datetime.utcnow().isoformat()
                 }
                 await self.supabase.table(self.candidates_table).update(update_data).eq("id", candidate_id).execute()
@@ -274,7 +297,7 @@ class BrainAgent:
             logger.info("----------------------------------------")
             
             try:
-                # Fetch needed data for the call: phone and full_name directly, profile_json for role/company
+                # Fetch the LATEST candidate data including the updated profile_json from quick extraction
                 call_data_resp = await ( 
                     self.supabase.table(self.candidates_table)
                     .select('profile_json, phone, full_name') # Select necessary fields
@@ -288,21 +311,33 @@ class BrainAgent:
                 call_profile_json = call_data_resp.data.get('profile_json', {}) # Use the (now cleaned) profile_json
                 phone_number = call_data_resp.data.get('phone')
                 db_full_name = call_data_resp.data.get('full_name', '') 
+                
+                # Log what we found in the database for debugging
+                logger.info(f"Candidate data for call scheduling - full_name: {db_full_name}, profile: {json.dumps(call_profile_json)[:100]}...")
 
                 if not phone_number:
                     raise ValueError("Cannot schedule call, phone number missing.")
                 if not db_full_name:
                     logger.warning(f"Candidate {candidate_id} missing full_name, using 'Candidate' for Retell.")
 
-
                 # Extract role/company from profile_json (ensure these keys exist after cleaning)
                 current_role = call_profile_json.get('current_role', '') 
                 current_company = call_profile_json.get('current_company', '')
 
+                # Get first name from full name but handle edge cases
+                first_name = 'Candidate'
+                if db_full_name and db_full_name != 'Candidate':
+                    name_parts = db_full_name.split(' ')
+                    if name_parts:
+                        first_name = name_parts[0]
+                
+                # Log the dynamic variables we're going to use
+                logger.info(f"Using dynamic variables - first_name: {first_name}, company: {current_company}, role: {current_role}")
+
                 call_result = await self.retell_service.schedule_call(
                     candidate_id=candidate_id,
                     dynamic_variables={
-                        'first_name': db_full_name.split(' ')[0] if db_full_name else 'Candidate',
+                        'first_name': first_name,
                         'email': candidate_email, # Email passed into handler, not from DB profile_json
                         'current_company': current_company if current_company and current_company != 'pending' else '',
                         'current_title': current_role if current_role and current_role != 'pending' else '',
