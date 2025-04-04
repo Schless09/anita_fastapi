@@ -8,7 +8,7 @@ import logging
 from pydantic import Field, PrivateAttr, BaseModel
 from .base import parse_llm_json_response
 from app.services.vector_service import VectorService
-from app.config.settings import get_table_name
+from app.config.utils import get_table_name
 import traceback
 
 logger = logging.getLogger(__name__)
@@ -55,13 +55,13 @@ class VectorStoreTool(BaseTool):
             object.__setattr__(cls._instance, '_initialized', False)
         return cls._instance
     
-    def __init__(self):
+    def __init__(self, vector_service: VectorService, settings: Settings):
         """Initialize the vector store tool."""
         if not self._initialized:
             super().__init__()
             
             # Initialize Vector service
-            self.vector_service = VectorService()
+            self.vector_service = vector_service
             
             # Create OpenAI embeddings
             self.embeddings = OpenAIEmbeddings()

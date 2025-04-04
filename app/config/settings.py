@@ -43,6 +43,9 @@ class Settings(BaseSettings):
     supabase_key: str
     supabase_service_role_key: str
 
+    # Email
+    sender_email: str
+
     @property
     def webhook_base_url(self) -> str:
         """Get the base URL for webhooks based on environment."""
@@ -61,10 +64,4 @@ class Settings(BaseSettings):
 
 @lru_cache()
 def get_settings() -> Settings:
-    return Settings()
-
-def get_table_name(base_name: str) -> str:
-    """Returns the full table name with environment suffix (_dev or _prod)."""
-    settings = get_settings()
-    suffix = "_prod" if settings.environment == "production" else "_dev"
-    return f"{base_name}{suffix}" 
+    return Settings() 

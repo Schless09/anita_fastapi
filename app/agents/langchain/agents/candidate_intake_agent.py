@@ -10,10 +10,11 @@ import traceback
 from langchain.prompts import PromptTemplate
 from datetime import datetime
 from app.config.supabase import get_supabase_client
-from app.config.settings import get_table_name
+from app.config.utils import get_table_name
 from postgrest import AsyncPostgrestClient
 import json
 from app.services.openai_service import OpenAIService
+from app.services.vector_service import VectorService
 
 logger = logging.getLogger(__name__)
 
@@ -55,10 +56,11 @@ class CandidateProfile(BaseModel):
 class CandidateIntakeAgent(BaseAgent):
     def __init__(
         self,
+        vector_service: VectorService,
+        settings: Settings,
         model_name: str = "gpt-4-turbo-preview",
         temperature: float = 0.7,
         memory: Optional[Any] = None,
-        vector_store: Optional[VectorStoreTool] = None,
         candidate_id: str = "",
         supabase: AsyncPostgrestClient = None
     ):
@@ -67,9 +69,9 @@ class CandidateIntakeAgent(BaseAgent):
         # Initialize tools as instance attributes
         self.pdf_processor = PDFProcessor()
         self.resume_parser = ResumeParser()
-        self.vector_store = vector_store or VectorStoreTool()
+        self.vector_store = VectorStoreTool(vector_service=vector_service, settings=settings)
         self.email_tool = EmailTool()
-        self.matching_tool = MatchingTool(vector_store=vector_store)
+        self.matching_tool = MatchingTool(vector_store=self.vector_store)
         
         # Initialize Supabase client
         self.supabase: AsyncPostgrestClient = supabase or get_supabase_client()

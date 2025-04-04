@@ -2,19 +2,17 @@ from http.server import BaseHTTPRequestHandler
 import json
 import logging
 from datetime import datetime
-from app.services.candidate_service import CandidateService
-from app.config import get_settings
 import traceback
 from typing import Dict, Any
 from fastapi import Request, BackgroundTasks, APIRouter, Depends
 from fastapi.responses import JSONResponse
 from app.agents.brain_agent import BrainAgent
-from app.services.vector_service import VectorService
 from retell import Retell
-from app.dependencies import get_brain_agent
 from supabase._async.client import AsyncClient
-from app.dependencies import get_supabase_client
-from app.config.settings import get_table_name
+from app.config.settings import Settings
+from app.config.utils import get_table_name
+from app.dependencies import get_vector_service, get_brain_agent, get_supabase_client_dependency, get_cached_settings
+from app.services.vector_service import VectorService
 
 # Get logger
 logger = logging.getLogger(__name__)
@@ -22,18 +20,11 @@ logger = logging.getLogger(__name__)
 # Initialize router
 router = APIRouter()
 
-# Initialize services
-candidate_service = CandidateService()
-settings = get_settings()
-vector_service = VectorService()
-
-# Initialize Retell client
-retell = Retell(api_key=str(settings.retell_api_key))
-
 async def log_call_communication(
     candidate_id: str,
     call_data: Dict[str, Any],
-    supabase_client: AsyncClient
+    supabase_client: AsyncClient,
+    settings: Settings
 ):
     """Logs the completed call details to the communications table."""
     logger.info(f"Attempting to log call communication for candidate {candidate_id}")
@@ -111,7 +102,8 @@ async def handler(
     request: Request,
     background_tasks: BackgroundTasks,
     brain_agent: BrainAgent = Depends(get_brain_agent),
-    supabase_client: AsyncClient = Depends(get_supabase_client)
+    supabase_client: AsyncClient = Depends(get_supabase_client_dependency),
+    settings: Settings = Depends(get_cached_settings)
 ):
     """Handle Retell webhook events."""
     try:
@@ -143,7 +135,8 @@ async def handler(
                 log_call_communication,
                 candidate_id=candidate_id,
                 call_data=call_data,
-                supabase_client=supabase_client
+                supabase_client=supabase_client,
+                settings=settings
             )
             # Then add task for BrainAgent processing
             background_tasks.add_task(

@@ -22,6 +22,8 @@ from app.config import (
     get_embeddings,
     get_supabase_client,
 )
+from app.config.settings import Settings
+from app.config.utils import get_table_name
 
 # Agents
 from app.agents.langchain.agents.candidate_intake_agent import CandidateIntakeAgent
@@ -129,7 +131,6 @@ async def startup_event():
         from app.services.job_service import JobService
         from app.services.retell_service import RetellService
         from app.services.matching_service import MatchingService
-        from app.config.settings import get_table_name
         
         # Initialize OpenAI service with settings
         openai_service = OpenAIService(settings)
