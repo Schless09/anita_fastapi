@@ -207,26 +207,21 @@ class BrainAgent:
             logger.info("\nStep 1: 📝 Initial Data Processing")
             logger.info("----------------------------------------")
             
-            # Create initial candidate record with required fields
-            candidate_data = {
-                "id": candidate_id,
-                "email": candidate_email,
-                "full_name": "Candidate",  # Default name until we get the real one
+            # Update existing candidate record with additional fields
+            update_data = {
                 "status": "processing",
-                "created_at": datetime.utcnow().isoformat(),
                 "updated_at": datetime.utcnow().isoformat(),
                 "is_resume_processed": False,
                 "is_call_completed": False,
-                "is_embedding_generated": False,
-                "profile_json": {}  # Initialize empty profile
+                "is_embedding_generated": False
             }
             
-            # Insert into database
-            insert_result = await self.supabase.table(self.candidates_table).insert(candidate_data).execute()
-            if not insert_result.data:
-                raise ValueError("Failed to create initial candidate record")
+            # Update in database
+            update_result = await self.supabase.table(self.candidates_table).update(update_data).eq("id", candidate_id).execute()
+            if not update_result.data:
+                raise ValueError("Failed to update candidate record")
             
-            logger.info("✅ Initial candidate record created")
+            logger.info("✅ Initial candidate record updated")
             self._update_transaction(process_id, "initial_record", "completed")
             
             # If no resume content, we're done with initial processing
