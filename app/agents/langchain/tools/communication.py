@@ -3,27 +3,29 @@ from langchain.tools import BaseTool
 from langchain_openai import ChatOpenAI
 from datetime import datetime, timedelta
 import os
-from sendgrid import SendGridAPIClient
-from sendgrid.helpers.mail import Mail, Email, To, Content
 # import google.auth
 # from google.oauth2.credentials import Credentials
 # from google_auth_oauthlib.flow import InstalledAppFlow
 # from google.auth.transport.requests import Request
 # import pickle
-from app.config import get_settings, get_sendgrid_client  # Removed get_google_calendar_client
+from app.config import get_settings # Removed get_sendgrid_client
 from pydantic import Field
 from .base import parse_llm_json_response
+import logging # Added logger
+
+logger = logging.getLogger(__name__) # Added logger
 
 class EmailTool(BaseTool):
-    """Tool for handling email communications."""
+    """Tool for handling email communications (currently only generation)."""
     
     name = "email"
-    description = "Handle email communications"
+    description = "Handle email communications (generation only currently)"
     # Define fields that will be set in __init__
     llm: ChatOpenAI = Field(default=None)
     settings: Any = Field(default=None) # Store settings
-    sg_client: Optional[SendGridAPIClient] = Field(default=None) # Store SendGrid client
-    from_email: Optional[str] = Field(default=None)
+    # Remove SendGrid client
+    # sg_client: Optional[SendGridAPIClient] = Field(default=None)
+    from_email: Optional[str] = Field(default=None) # Keep for potential Gmail use
     
     class Config:
         """Configuration for this pydantic object."""
@@ -38,31 +40,40 @@ class EmailTool(BaseTool):
         
         # Set up LLM
         self.llm = ChatOpenAI(
-            model_name=self.settings.openai_model, # Use model from settings
+            model_name=self.settings.openai_model,
             temperature=0.7,
-            api_key=self.settings.openai_api_key # Use key from settings
+            api_key=self.settings.openai_api_key
         )
         
-        # Initialize SendGrid Client using the config function
-        self.sg_client = get_sendgrid_client() # Returns None if not configured
-        if self.sg_client:
-            self.from_email = self.settings.sender_email
-        else:
-            self.from_email = None
-            logger.warning("SendGrid client not initialized. Email sending disabled.")
+        # Remove SendGrid Client initialization
+        # self.sg_client = get_sendgrid_client()
+        # if self.sg_client:
+        #     self.from_email = self.settings.sender_email
+        # else:
+        #     self.from_email = None
+        #     logger.warning("SendGrid client not initialized. Email sending disabled.")
+        
+        # Placeholder for potential Gmail initialization or setting from_email
+        self.from_email = self.settings.sender_email # Assuming sender_email is still relevant for Gmail
+        if not self.from_email:
+            logger.warning("Sender email not configured in settings.")
 
     def _run(self, operation: str, **kwargs) -> Dict[str, Any]:
         """Run email operations."""
-        # Check if SendGrid is available for send operations
-        if operation == "send_email" and not self.sg_client:
-            return {
-                "status": "error",
-                "error": "SendGrid is not configured. Cannot send email."
-            }
+        # Remove SendGrid check
+        # if operation == "send_email" and not self.sg_client:
+        #     return {
+        #         "status": "error",
+        #         "error": "SendGrid is not configured. Cannot send email."
+        #     }
             
         try:
             if operation == "send_email":
-                return self._send_email(**kwargs)
+                # Mark send_email as not implemented for now
+                return {
+                    "status": "error",
+                    "error": "Email sending via this tool is not implemented yet (SendGrid removed)."
+                }
             elif operation == "generate_email":
                 return self._generate_email(**kwargs)
             else:
@@ -79,42 +90,44 @@ class EmailTool(BaseTool):
 
     async def _arun(self, operation: str, **kwargs) -> Dict[str, Any]:
         """Async version of email operations."""
+        # Just call sync version for now, adjust if async sending needed
         return self._run(operation, **kwargs)
 
-    def _send_email(
-        self,
-        to_email: str,
-        subject: str,
-        content: str
-    ) -> Dict[str, Any]:
-        """Send an email using SendGrid."""
-        if not self.sg_client or not self.from_email:
-            return {
-                "status": "error",
-                "error": "SendGrid client or sender email is not configured."
-            }
-            
-        try:
-            message = Mail(
-                from_email=self.from_email,
-                to_emails=to_email,
-                subject=subject,
-                html_content=content
-            )
-            
-            response = self.sg_client.send(message) # Use self.sg_client
-            
-            return {
-                "status": "success",
-                "success": response.status_code == 202,
-                "message_id": response.headers.get("X-Message-Id")
-            }
-            
-        except Exception as e:
-            return {
-                "status": "error",
-                "error": str(e)
-            }
+    # Remove the _send_email method entirely
+    # def _send_email(
+    #     self,
+    #     to_email: str,
+    #     subject: str,
+    #     content: str
+    # ) -> Dict[str, Any]:
+    #     """Send an email using SendGrid.""""
+    #     if not self.sg_client or not self.from_email:
+    #         return {
+    #             "status": "error",
+    #             "error": "SendGrid client or sender email is not configured."
+    #         }
+    #         
+    #     try:
+    #         message = Mail(
+    #             from_email=self.from_email,
+    #             to_emails=to_email,
+    #             subject=subject,
+    #             html_content=content
+    #         )
+    #         
+    #         response = self.sg_client.send(message)
+    #         
+    #         return {
+    #             "status": "success",
+    #             "success": response.status_code == 202,
+    #             "message_id": response.headers.get("X-Message-Id")
+    #         }
+    #         
+    #     except Exception as e:
+    #         return {
+    #             "status": "error",
+    #             "error": str(e)
+    #         }
 
     def _generate_email(
         self,

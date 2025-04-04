@@ -23,11 +23,6 @@ class Settings(BaseSettings):
     twilio_auth_token: str
     twilio_phone_number: str
     
-    # SendGrid (Optional)
-    sendgrid_api_key: Optional[str] = None
-    sender_email: Optional[str] = None
-    sendgrid_inbound_hostname: Optional[str] = None
-    
     # Vercel
     vercel_protection_bypass: str
     
@@ -60,11 +55,6 @@ class Settings(BaseSettings):
     def retell_webhook_url(self) -> str:
         """Get the Retell webhook URL based on environment."""
         return f"{self.webhook_base_url}/webhook/retell"
-    
-    @property
-    def sendgrid_webhook_url(self) -> str:
-        """Get the SendGrid webhook URL based on environment."""
-        return f"{self.webhook_base_url}/email/webhook"
     
     class Config:
         env_file = ".env"

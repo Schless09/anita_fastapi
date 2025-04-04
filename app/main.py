@@ -24,8 +24,8 @@ from app.config import (
     get_settings,
     get_openai_client,
     get_embeddings,
-    get_sendgrid_client,
-    get_sendgrid_webhook_url,
+    # get_sendgrid_client,
+    # get_sendgrid_webhook_url,
     get_supabase_client,
 )
 
@@ -97,7 +97,7 @@ settings = get_settings()
 llm = get_openai_client()
 embeddings = get_embeddings()
 supabase = get_supabase_client()
-sendgrid = get_sendgrid_client()
+# sendgrid = get_sendgrid_client() # Remove SendGrid client init
 
 @app.on_event("startup")
 async def startup_event():
