@@ -57,6 +57,8 @@ class RetellService:
                 # Extract first name from full name
                 first_name = full_name.split(' ')[0] if full_name else "Candidate"
                 string_vars['first_name'] = first_name
+                # Remove full_name since we only need first_name for Retell
+                del string_vars['full_name']
                 logger.info(f"Using first_name '{first_name}' extracted from full_name '{full_name}'")
             elif not string_vars.get('first_name'):
                 # Fallback if no first_name and no full_name
