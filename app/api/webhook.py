@@ -98,7 +98,7 @@ async def log_call_communication(
         }
         
         logger.info(f"Preparing to insert communication log for candidate {candidate_id}")
-        logger.debug(f"Communication log data: {json.dumps(communication_log, default=str)}")
+        # Don't log the full communication_log object as it contains large transcript data
         
         table_name = get_table_name("communications")
         logger.info(f"Using table name: {table_name}")
@@ -107,9 +107,9 @@ async def log_call_communication(
         
         if hasattr(log_resp, 'data') and log_resp.data:
             logger.info(f"Successfully logged call communication for candidate {candidate_id}")
-            logger.debug(f"Supabase response: {log_resp.data}")
+            # Don't log the response data which might contain sensitive information
         else:
-            logger.warning(f"Could not log call communication for candidate {candidate_id}. Response: {log_resp}")
+            logger.warning(f"Could not log call communication for candidate {candidate_id}")
             if hasattr(log_resp, 'error'):
                 logger.error(f"Supabase error: {log_resp.error}")
     except Exception as log_err:
@@ -117,7 +117,13 @@ async def log_call_communication(
         logger.error(f"Traceback: {traceback.format_exc()}")
         # Try to log the error message that might help debug the issue
         if 'communication_log' in locals():
-            logger.error(f"Failed communication log object: {json.dumps(communication_log, default=str)}")
+            # Create a copy without the large transcript data for logging
+            log_copy = communication_log.copy()
+            if 'metadata' in log_copy and 'full_transcript' in log_copy['metadata']:
+                log_copy['metadata'] = log_copy['metadata'].copy()
+                log_copy['metadata']['full_transcript'] = "[REDACTED]"
+            # Don't log even the redacted version, just note there was an error
+            logger.error(f"Error occurred with communication log object (transcript redacted)")
 
 def extract_call_data(body: Dict[str, Any]) -> Dict[str, Any]:
     """Extract and validate relevant call data from webhook payload."""
@@ -143,10 +149,11 @@ def extract_call_data(body: Dict[str, Any]) -> Dict[str, Any]:
         "agent_id": call_data.get("agent_id")
     }
     
-    # Log what we found
+    # Log what we found, but skip transcript object and other large fields
     logger.info("📋 Extracted fields:")
     for key, value in extracted.items():
-        if value is not None and value != {} and value != [] and key != 'transcript_object':  # Skip logging transcript_object
+        if (value is not None and value != {} and value != [] and 
+            key not in ['transcript_object', 'transcript', 'call_analysis']):
             logger.info(f"  {key}: {value}")
     
     return extracted
