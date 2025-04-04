@@ -1,20 +1,35 @@
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Optional, Union, Type
 from langchain.tools import BaseTool
 from langchain_openai import ChatOpenAI
 from PyPDF2 import PdfReader
 import io
 import os
 import logging
-from pydantic import Field
+from pydantic import Field, BaseModel, PrivateAttr
 from .base import parse_llm_json_response
 
 logger = logging.getLogger(__name__)
 
+class PDFProcessorInput(BaseModel):
+    file_path: str
+    extract_images: bool = False
+
+class ResumeParserInput(BaseModel):
+    file_path: str
+    format: str = None
+
 class PDFProcessor(BaseTool):
     """Tool for processing PDF documents."""
     
-    name = "pdf_processor"
-    description = "Processes PDF documents to extract text content. Can accept either a file path string or binary data."
+    name: str = "pdf_processor"
+    description: str = """Useful for processing PDF documents and extracting text content.
+    Input should be a JSON string with the following fields:
+    - file_path: Path to the PDF file
+    - extract_images: (optional) Whether to extract images from the PDF
+    """
+    args_schema: Type[PDFProcessorInput] = PDFProcessorInput
+    return_direct: bool = True
+    _settings: Settings = PrivateAttr()
     # Define fields that will be set in __init__
     llm: ChatOpenAI = Field(default=None)
     
@@ -90,10 +105,17 @@ class PDFProcessor(BaseTool):
         return self._run(file_input)
 
 class ResumeParser(BaseTool):
-    """Tool for parsing resume content."""
+    """Tool for parsing resumes and extracting structured information."""
     
-    name = "resume_parser"
-    description = "Parses resume content to extract structured information"
+    name: str = "resume_parser"
+    description: str = """Useful for parsing resumes and extracting structured information.
+    Input should be a JSON string with the following fields:
+    - file_path: Path to the resume file
+    - format: (optional) Format of the resume (pdf, docx, etc.)
+    """
+    args_schema: Type[ResumeParserInput] = ResumeParserInput
+    return_direct: bool = True
+    _settings: Settings = PrivateAttr()
     # Define fields that will be set in __init__
     llm: ChatOpenAI = Field(default=None)
     
