@@ -7,14 +7,17 @@ from .base_agent import BaseAgent
 from ..tools.vector_store import VectorStoreTool
 from ..tools.communication import EmailTool
 from ..tools.matching import MatchingTool
+from app.services.vector_service import VectorService
+from app.config.settings import Settings
 
 class InterviewAgent(BaseAgent):
     def __init__(
         self,
+        vector_service: VectorService,
+        settings: Settings,
         model_name: str = "gpt-4-turbo-preview",
         temperature: float = 0.7,
         memory: Optional[Any] = None,
-        vector_store: Optional[VectorStoreTool] = None
     ):
         super().__init__(model_name, temperature, memory)
         
@@ -24,10 +27,11 @@ class InterviewAgent(BaseAgent):
         )
         
         # Initialize tools
+        vector_store_tool = VectorStoreTool(vector_service=vector_service, settings=settings)
         self.tools = [
             EmailTool(),
-            vector_store or VectorStoreTool(),  # Use provided vector_store or create a new one
-            MatchingTool(vector_store=vector_store)  # Pass vector_store to MatchingTool
+            vector_store_tool,
+            MatchingTool(vector_store=vector_store_tool)
         ]
         
         # Initialize agent with system message

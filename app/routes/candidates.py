@@ -10,7 +10,6 @@ from app.dependencies import get_brain_agent
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
-candidate_service = CandidateService()
 
 @router.post("/candidates")
 async def create_candidate(

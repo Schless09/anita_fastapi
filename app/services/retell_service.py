@@ -1,15 +1,13 @@
 from typing import Dict, Any, Optional
 import logging
 import httpx
-from app.config import get_settings
+from app.config.settings import Settings
 
 # Set up logging
 logger = logging.getLogger(__name__)
 
-settings = get_settings()
-
 class RetellService:
-    def __init__(self):
+    def __init__(self, settings: Settings):
         self.api_key = settings.retell_api_key
         self.phone_number = settings.retell_from_number
         self.webhook_url = settings.retell_webhook_url

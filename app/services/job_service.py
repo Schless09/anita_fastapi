@@ -1,7 +1,7 @@
 from typing import Dict, Any, Optional, List, Union
 from datetime import datetime
 import logging
-from app.config import get_settings
+from app.config.settings import Settings # Import Settings if needed, remove get_settings if only used for globals
 from app.config.supabase import get_supabase_client
 from app.services.vector_service import VectorService
 from app.services.openai_service import OpenAIService
@@ -10,12 +10,14 @@ import uuid
 import json
 import traceback
 import re # Added for _safe_int helper
+from supabase._async.client import AsyncClient # Import AsyncClient for type hinting
 
-# Initialize services
-settings = get_settings()
-supabase = get_supabase_client()
-vector_service = VectorService()
-openai = OpenAIService()
+# Remove global initializations
+# settings = get_settings()
+# supabase = get_supabase_client()
+# vector_service = VectorService()
+# openai = OpenAIService(settings)
+
 logger = logging.getLogger(__name__)
 
 def _safe_int(value, default=None):
@@ -38,10 +40,10 @@ def _safe_int(value, default=None):
         return default
 
 class JobService:
-    def __init__(self):
-        self.supabase = supabase
+    def __init__(self, supabase_client: AsyncClient, vector_service: VectorService, openai_service: OpenAIService):
+        self.supabase = supabase_client
         self.vector_service = vector_service
-        self.openai = openai
+        self.openai = openai_service
         
     def _prepare_text_for_embedding(self, job_data: dict) -> str:
         """Prepare job data for embedding by combining relevant fields into a single text."""

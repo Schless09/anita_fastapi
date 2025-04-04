@@ -6,13 +6,14 @@ import json
 import tempfile
 import PyPDF2
 import logging
+from app.config.settings import Settings
 
 logger = logging.getLogger(__name__)
 
 class OpenAIService:
-    def __init__(self):
-        self.client = OpenAI(api_key=os.getenv('OPENAI_API_KEY'))
-        self.model = os.getenv('OPENAI_MODEL', 'gpt-4-turbo-preview')
+    def __init__(self, settings: Settings):
+        self.client = OpenAI(api_key=settings.openai_api_key)
+        self.model = settings.openai_model
         self.embedding_model = os.getenv('OPENAI_EMBEDDING_MODEL', 'text-embedding-3-small')
 
     @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=4, max=10))

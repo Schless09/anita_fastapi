@@ -6,13 +6,13 @@ import logging
 import uuid
 from datetime import datetime
 from pydantic import ValidationError
+from app.dependencies import get_job_service
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
-job_service = JobService()
 
 @router.post("/submit")
-async def submit_job(job_data: JobPosting):
+async def submit_job(job_data: JobPosting, job_service: JobService = Depends(get_job_service)):
     """
     Submit a new job posting.
     """
