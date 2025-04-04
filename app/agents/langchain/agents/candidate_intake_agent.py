@@ -276,31 +276,92 @@ class CandidateIntakeAgent(BaseAgent):
                 "updated_at": datetime.utcnow().isoformat()
             }).eq("id", candidate_id).execute()
 
-            # Process the full resume
-            result = await self.pdf_processor.process_pdf(resume_content)
-            if result["status"] != "success":
-                raise Exception(f"Failed to process PDF: {result.get('error')}")
+            # Process the full resume in chunks
+            try:
+                # First get the text content
+                result = await self.pdf_processor.process_pdf(resume_content)
+                if result["status"] != "success":
+                    raise Exception(f"Failed to process PDF: {result.get('error')}")
 
-            # Parse the resume
-            parsed_result = await self.resume_parser.parse_resume(result["text"])
-            if parsed_result["status"] != "success":
-                raise Exception(f"Failed to parse resume: {parsed_result.get('error')}")
+                # Parse the resume in chunks to avoid timeout
+                text_chunks = self._chunk_text(result["text"])
+                parsed_data = {}
+                
+                for chunk in text_chunks:
+                    chunk_result = await self.resume_parser.parse_resume(chunk)
+                    if chunk_result["status"] == "success":
+                        # Merge the parsed data
+                        parsed_data = self._merge_parsed_data(parsed_data, chunk_result["profile"])
 
-            # Update status to completed
-            await self.supabase.table(self.candidates_table).update({
-                "status": "completed",
-                "profile_json": parsed_result["profile"],
-                "updated_at": datetime.utcnow().isoformat()
-            }).eq("id", candidate_id).execute()
+                # Update status to completed
+                await self.supabase.table(self.candidates_table).update({
+                    "status": "completed",
+                    "profile_json": parsed_data,
+                    "updated_at": datetime.utcnow().isoformat()
+                }).eq("id", candidate_id).execute()
+
+            except asyncio.TimeoutError:
+                logger.error("Background processing timed out")
+                await self.supabase.table(self.candidates_table).update({
+                    "status": "error",
+                    "error_message": "Processing timed out",
+                    "updated_at": datetime.utcnow().isoformat()
+                }).eq("id", candidate_id).execute()
+            except Exception as e:
+                logger.error(f"Error in background resume processing: {str(e)}")
+                await self.supabase.table(self.candidates_table).update({
+                    "status": "error",
+                    "error_message": str(e),
+                    "updated_at": datetime.utcnow().isoformat()
+                }).eq("id", candidate_id).execute()
 
         except Exception as e:
-            logger.error(f"Error in background resume processing: {str(e)}")
-            # Update status to error
-            await self.supabase.table(self.candidates_table).update({
-                "status": "error",
-                "error_message": str(e),
-                "updated_at": datetime.utcnow().isoformat()
-            }).eq("id", candidate_id).execute()
+            logger.error(f"Error updating candidate status: {str(e)}")
+
+    def _chunk_text(self, text: str, chunk_size: int = 10000) -> List[str]:
+        """Split text into manageable chunks."""
+        words = text.split()
+        chunks = []
+        current_chunk = []
+        current_size = 0
+
+        for word in words:
+            if current_size + len(word) > chunk_size:
+                chunks.append(" ".join(current_chunk))
+                current_chunk = [word]
+                current_size = len(word)
+            else:
+                current_chunk.append(word)
+                current_size += len(word) + 1  # +1 for space
+
+        if current_chunk:
+            chunks.append(" ".join(current_chunk))
+
+        return chunks
+
+    def _merge_parsed_data(self, existing: Dict[str, Any], new: Dict[str, Any]) -> Dict[str, Any]:
+        """Merge parsed data from different chunks."""
+        merged = existing.copy() if existing else {}
+        
+        for key, value in new.items():
+            if key not in merged:
+                merged[key] = value
+            elif isinstance(value, list):
+                # For lists, append unique items
+                if key not in merged:
+                    merged[key] = []
+                merged[key].extend([item for item in value if item not in merged[key]])
+            elif isinstance(value, dict):
+                # For dicts, recursively merge
+                if key not in merged:
+                    merged[key] = {}
+                merged[key].update(value)
+            else:
+                # For other types, prefer non-empty values
+                if not merged[key] and value:
+                    merged[key] = value
+        
+        return merged
 
     async def screen_candidate(self, candidate_data: Dict[str, Any]) -> Dict[str, Any]:
         """Screen a candidate based on their data."""
