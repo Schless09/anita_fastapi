@@ -102,43 +102,91 @@ app = FastAPI(
     version="2.0.0"
 )
 
-# Global service instances - Remove or manage via lifespan/context
-# vector_store = None # Manage via lifespan or dependency
-# brain_agent_instance = None # Manage via lifespan or dependency
+# Global service instances
+vector_store = None  # Manage via lifespan or dependency
+brain_agent_instance = None  # Manage via lifespan or dependency
 core_services = {}
 agents = {}
 
-# Remove global service initializations
-# settings = get_settings()
-# llm = get_openai_client()
-# embeddings = get_embeddings()
-# supabase = get_supabase_client()
-# sendgrid = get_sendgrid_client() # Remove SendGrid client init
+# Initialize global services
+settings = get_settings()
+llm = get_openai_client()
+embeddings = get_embeddings()
+supabase = get_supabase_client()
 
-# Replace @app.on_event("startup") with lifespan context manager if preferred,
-# or ensure dependencies are injected where needed instead of relying on globals.
-# For now, let's remove the startup event logic that initializes global instances.
-# @app.on_event("startup")
-# async def startup_event():
-#     """Initialize services on startup."""
-#     global vector_store, brain_agent_instance
-#     try:
-#         logger.info("Initializing services...")
+@app.on_event("startup")
+async def startup_event():
+    """Initialize services on startup."""
+    global vector_store, brain_agent_instance
+    try:
+        logger.info("Initializing services...")
         
-#         # Initialize vector store - This should happen via dependency injection
-#         # from app.agents.langchain.tools.vector_store import VectorStoreTool
-#         # vector_store = VectorStoreTool()
-#         # await vector_store._initialize_async()
+        # Initialize vector store
+        from app.agents.langchain.tools.vector_store import VectorStoreTool
+        from app.services.vector_service import VectorService
+        from app.services.openai_service import OpenAIService
+        from app.services.candidate_service import CandidateService
+        from app.services.job_service import JobService
+        from app.services.retell_service import RetellService
+        from app.services.matching_service import MatchingService
+        from app.config.settings import get_table_name
         
-#         # Initialize brain agent - This should happen via dependency injection
-#         # from app.agents.brain_agent import BrainAgent
-#         # brain_agent_instance = BrainAgent() # This needs dependencies now
-#         # await brain_agent_instance._initialize_async()
+        # Initialize OpenAI service with settings
+        openai_service = OpenAIService(settings)
         
-#         logger.info("✅ Services initialized successfully")
-#     except Exception as e:
-#         logger.error(f"❌ Error initializing services: {str(e)}")
-#         raise
+        # Get table names from settings
+        candidates_table = get_table_name("candidates")
+        jobs_table = get_table_name("jobs")
+        
+        # Initialize vector service
+        vector_service = VectorService(
+            openai_service=openai_service,
+            supabase_client=supabase,
+            candidates_table=candidates_table,
+            jobs_table=jobs_table
+        )
+        
+        # Initialize vector store tool
+        vector_store = VectorStoreTool(vector_service=vector_service, settings=settings)
+        await vector_store._initialize_async()
+        
+        # Initialize other required services
+        retell_service = RetellService(settings)
+        candidate_service = CandidateService(
+            supabase_client=supabase,
+            retell_service=retell_service,
+            openai_service=openai_service,
+            settings=settings
+        )
+        job_service = JobService(
+            supabase_client=supabase,
+            vector_service=vector_service,
+            openai_service=openai_service
+        )
+        matching_service = MatchingService(
+            openai_service=openai_service,
+            vector_service=vector_service,
+            supabase_client=supabase,
+            settings=settings
+        )
+        
+        # Initialize brain agent with all required services
+        from app.agents.brain_agent import BrainAgent
+        brain_agent_instance = BrainAgent(
+            supabase_client=supabase,
+            candidate_service=candidate_service,
+            openai_service=openai_service,
+            matching_service=matching_service,
+            retell_service=retell_service,
+            vector_service=vector_service,
+            settings=settings
+        )
+        await brain_agent_instance._initialize_async()
+        
+        logger.info("✅ Services initialized successfully")
+    except Exception as e:
+        logger.error(f"❌ Error initializing services: {str(e)}")
+        raise
 
 # Configure CORS
 app.add_middleware(
