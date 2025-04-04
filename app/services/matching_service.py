@@ -4,7 +4,7 @@ from app.services.openai_service import OpenAIService
 from app.services.vector_service import VectorService
 from app.config.supabase import get_supabase_client
 from supabase._async.client import AsyncClient
-from app.config import get_settings, get_table_name
+from app.config.settings import get_settings, get_table_name
 import uuid
 
 logger = logging.getLogger(__name__)

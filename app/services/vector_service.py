@@ -8,7 +8,7 @@ import json
 from tenacity import retry, stop_after_attempt, wait_exponential
 from supabase._async.client import AsyncClient
 from pinecone import Pinecone, Index
-from app.config import get_table_name
+from app.config.settings import get_table_name
 
 # Set up logging
 logger = logging.getLogger(__name__)

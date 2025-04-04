@@ -8,7 +8,7 @@ import logging
 from pydantic import Field, PrivateAttr, BaseModel
 from .base import parse_llm_json_response
 from app.services.vector_service import VectorService
-from app.config import get_table_name
+from app.config.settings import get_table_name
 import traceback
 
 logger = logging.getLogger(__name__)

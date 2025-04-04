@@ -9,9 +9,11 @@ import logging
 import traceback
 from langchain.prompts import PromptTemplate
 from datetime import datetime
-from app.config import get_supabase_client, get_table_name
-from supabase import AsyncClient
+from app.config.supabase import get_supabase_client
+from app.config.settings import get_table_name
+from postgrest import AsyncPostgrestClient
 import json
+from app.services.openai_service import OpenAIService
 
 logger = logging.getLogger(__name__)
 
@@ -21,6 +23,35 @@ class CandidateState(BaseModel):
     status: str # Or an Enum if status values are fixed
     # Add other fields if needed by _save_state
 
+# Define CandidateProfile model (based on expected structure)
+class BasicInfo(BaseModel):
+    full_name: Optional[str] = None
+    email: Optional[str] = None
+    phone: Optional[str] = None
+    location: Optional[str] = None
+
+class ExperienceItem(BaseModel):
+    title: Optional[str] = None
+    company: Optional[str] = None
+    duration: Optional[str] = None
+    description: Optional[str] = None
+
+class EducationItem(BaseModel):
+    degree: Optional[str] = None
+    institution: Optional[str] = None
+    year: Optional[str] = None
+
+class CandidateProfile(BaseModel):
+    basic_info: Optional[BasicInfo] = None
+    current_role: Optional[str] = None
+    current_company: Optional[str] = None
+    professional_summary: Optional[str] = None
+    skills: Optional[List[str]] = None
+    experience: Optional[List[ExperienceItem]] = None
+    education: Optional[List[EducationItem]] = None
+    additional_qualifications: Optional[List[str]] = None
+    years_of_experience: Optional[float] = None # Use float to allow for numbers
+
 class CandidateIntakeAgent(BaseAgent):
     def __init__(
         self,
@@ -29,7 +60,7 @@ class CandidateIntakeAgent(BaseAgent):
         memory: Optional[Any] = None,
         vector_store: Optional[VectorStoreTool] = None,
         candidate_id: str = "",
-        supabase: AsyncClient = None
+        supabase: AsyncPostgrestClient = None
     ):
         super().__init__(model_name, temperature, memory)
         
@@ -41,7 +72,7 @@ class CandidateIntakeAgent(BaseAgent):
         self.matching_tool = MatchingTool(vector_store=vector_store)
         
         # Initialize Supabase client
-        self.supabase = supabase or get_supabase_client()
+        self.supabase: AsyncPostgrestClient = supabase or get_supabase_client()
         
         # Set tools list for the agent
         self.tools = [

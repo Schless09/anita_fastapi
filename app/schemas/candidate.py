@@ -3,6 +3,7 @@ from typing import List, Optional, Dict, Any, Annotated, Union
 from datetime import datetime
 from fastapi import UploadFile, File
 import base64
+import uuid
 
 class CandidateBase(BaseModel):
     name: str = Field(..., description="Candidate's full name")
@@ -60,4 +61,9 @@ class CandidateResponse(CandidateBase):
     metadata: Optional[Dict[str, Any]] = None
 
     class Config:
-        from_attributes = True 
+        from_attributes = True
+
+# Add the missing schema
+class CandidateStatusUpdate(BaseModel):
+    candidate_id: uuid.UUID # Assuming UUID based on context
+    status: str 
