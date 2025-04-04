@@ -68,6 +68,10 @@ class BrainAgent:
         self.settings = settings 
         self.vector_service = vector_service
 
+        # Initialize the PDF processing tools
+        self.pdf_processor = PDFProcessor()
+        self.resume_parser = ResumeParser()
+
         # Define table names using the helper function with injected settings
         self.candidates_table = get_table_name("candidates")
         self.jobs_table = get_table_name("jobs")
