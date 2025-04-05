@@ -100,13 +100,14 @@ class OpenAIService:
         Generate embedding for text using OpenAI's embedding model.
         """
         try:
-            response = self.client.embeddings.create(
+            response = await self.client.embeddings.create(
                 model=self.embedding_model,
                 input=text
             )
             return response.data[0].embedding
 
         except Exception as e:
+            logger.error(f"Error during OpenAI embedding generation: {str(e)}")
             raise Exception(f"Error generating embedding: {str(e)}")
 
     def _prepare_text_for_embedding(self, data: Dict[str, Any]) -> str:
@@ -442,7 +443,7 @@ class OpenAIService:
                 }}
             }}"""
             
-            response = self.client.chat.completions.create(
+            response = await self.client.chat.completions.create(
                 model="gpt-4-turbo-preview",
                 messages=[
                     {"role": "system", "content": system_message},
@@ -451,7 +452,7 @@ class OpenAIService:
                 response_format={"type": "json_object"}
             )
             
-            if response.choices and response.choices[0].message.content:
+            if response and response.choices and response.choices[0].message.content:
                 extracted_info = json.loads(response.choices[0].message.content)
                 
                 # Analyze if the call was complete
