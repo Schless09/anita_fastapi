@@ -4,6 +4,10 @@ from langchain_openai import ChatOpenAI
 from langchain.prompts import PromptTemplate
 from langchain.schema.runnable import RunnableSequence
 import json
+import logging # Add logging import
+
+# Initialize logger for this module
+logger = logging.getLogger(__name__)
 
 def create_prompt(template: str, input_variables: List[str]) -> PromptTemplate:
     """Create a prompt template."""

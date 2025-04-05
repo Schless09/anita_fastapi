@@ -627,12 +627,13 @@ class BrainAgent:
             # 2. Analyze Transcript & Update Profile/Status
             self._update_transaction(process_id, "profile_update", "started")
             logger.info(f"Analyzing transcript and updating profile/status for {candidate_id}")
+            extracted_info = None # Initialize extracted_info
+            call_completed_flag = False # Initialize flag
             try:
                 extracted_info = await self.openai_service.extract_transcript_info(transcript)
                 if not extracted_info:
                      logger.warning(f"No information extracted from transcript for {candidate_id}. Profile JSON not updated.")
-                     # Still need to mark call as completed
-                     call_completed_flag = True
+                     call_completed_flag = True # Still mark call as completed even if no info extracted
                 else:
                      # Deep merge extracted info into the existing profile data
                      merged_profile_data = self._deep_merge(merged_profile_data, extracted_info)
@@ -649,13 +650,38 @@ class BrainAgent:
 
                      if not profile_update_resp.data:
                           logger.error("Failed to save cleaned/merged profile JSON to database.")
-                          # Don't raise Exception here, allow process to continue but log error
-                          # We can still try embedding with the un-updated profile
                      else:
                          logger.info(f"Successfully updated profile_json for {candidate_id}")
                      
                      call_completed_flag = True # Mark call completed as info was processed
                 
+                # --- Update communications table content --- 
+                if extracted_info and call_data.get('call_id'):
+                    call_id = call_data['call_id']
+                    logger.info(f"Attempting to update communications content for call_id: {call_id}")
+                    try:
+                        comms_table_name = get_table_name("communications") # Use get_table_name
+                        # Correctly chain the Supabase query methods
+                        comms_update_resp = await self.supabase.table(comms_table_name)\
+                            .update({"content": json.dumps(extracted_info)})\
+                            .match({"metadata->>call_id": call_id})\
+                            .execute()
+                        
+                        # Check if the update was successful (updated at least one row)
+                        # Supabase update returns the updated data array, check if it's non-empty
+                        if comms_update_resp.data: 
+                            logger.info(f"Successfully updated communications content for call_id: {call_id}")
+                        else:
+                            # Log warning if no rows were updated (record might not exist yet or match failed)
+                            logger.warning(f"Update command executed but no communications record updated for call_id {call_id}. (Maybe log_call_communication hasn't finished?) Response: {comms_update_resp}")
+                    except Exception as comms_err:
+                        logger.error(f"Error updating communications content for call_id {call_id}: {comms_err}")
+                elif not call_data.get('call_id'):
+                    logger.warning("Cannot update communications content: call_id missing from call_data.")
+                elif not extracted_info:
+                    logger.info("No structured info extracted, skipping communications content update.")
+                # --- End update communications table content --- 
+
                 # Update the is_call_completed flag in the database
                 if call_completed_flag:
                     await self._update_candidate_status(candidate_id, 'processing_call', update_flags={'is_call_completed': True})
