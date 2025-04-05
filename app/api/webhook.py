@@ -173,11 +173,17 @@ async def handler(
         # Create a copy for logging and redact large fields
         payload_for_logging = payload.copy()
         if 'call' in payload_for_logging and isinstance(payload_for_logging.get('call'), dict):
-            if 'transcript_object' in payload_for_logging['call']:
-                payload_for_logging['call']['transcript_object'] = f"[... omitted {len(payload['call'].get('transcript_object', []))} items ...]"
-            if 'transcript' in payload_for_logging['call']:
-                payload_for_logging['call']['transcript'] = f"[... omitted {len(payload['call'].get('transcript', ''))} chars ...]"
-        
+            call_log_copy = payload_for_logging['call'] # Work on the nested dict
+            if 'transcript_object' in call_log_copy:
+                call_log_copy['transcript_object'] = f"[... omitted {len(payload['call'].get('transcript_object', []))} items ...]"
+            if 'transcript' in call_log_copy:
+                call_log_copy['transcript'] = f"[... omitted {len(payload['call'].get('transcript', ''))} chars ...]"
+            # Also redact transcript_with_tool_calls
+            if 'transcript_with_tool_calls' in call_log_copy:
+                call_log_copy['transcript_with_tool_calls'] = f"[... omitted {len(payload['call'].get('transcript_with_tool_calls', []))} items ...]"
+            
+            payload_for_logging['call'] = call_log_copy # Assign the modified dict back (optional if modifying in place)
+            
         logger.info(f"📥 Received Retell webhook: {json.dumps(payload_for_logging, indent=2)}")
 
         # Continue processing with the original payload
