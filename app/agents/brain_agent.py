@@ -820,27 +820,49 @@ class BrainAgent:
                             # Fix indentation for the if high_scoring_jobs block
                             if high_scoring_jobs: # Align this with 'if top_job_ids:'
                                 logger.info(f"Attempting to send job match email to {candidate_email} for {len(high_scoring_jobs)} jobs.")
-                                # Temporarily comment out this import to test startup
-                                # await send_job_match_email(
-                                #     recipient_email=candidate_email, 
-                                #     candidate_name=candidate_name, 
-                                #     job_matches=high_scoring_jobs,
-                                #     candidate_id=uuid.UUID(candidate_id), # Ensure UUID 
-                                #     supabase_client=self.supabase
-                                # )
-                                pass # Added pass
+                                # --- Call send_job_match_email --- 
+                                # Ensure await is used and the call is not commented out
+                                try:
+                                    # Assuming send_job_match_email is imported at the top of the file
+                                    # from anita.services.email_service import send_job_match_email
+                                    email_sent_successfully = await send_job_match_email(
+                                        recipient_email=candidate_email, 
+                                        candidate_name=candidate_name, 
+                                        job_matches=high_scoring_jobs,
+                                        candidate_id=uuid.UUID(candidate_id), # Ensure UUID 
+                                        supabase_client=self.supabase
+                                    )
+                                    if email_sent_successfully:
+                                        logger.info(f"Call to send_job_match_email completed for {candidate_email}.")
+                                    else:
+                                        logger.warning(f"send_job_match_email indicated failure for {candidate_email}.")
+                                except Exception as email_call_err:
+                                    logger.error(f"Exception occurred while calling send_job_match_email for {candidate_email}: {email_call_err}")
+                                # --- End Call send_job_match_email ---
+                                # pass # Removed pass
                             # Fix indentation for the else block (sending no matches email)
                             else: # Align this with 'if high_scoring_jobs:'
                                 # No jobs met threshold for the email OR no matches were found initially
                                 logger.info(f"No high-scoring jobs found or initial match count was zero. Attempting to send 'no matches' email to {candidate_email}.")
-                                # Temporarily comment out this import to test startup
-                                # await send_no_matches_email(
-                                #     recipient_email=candidate_email, 
-                                #     candidate_name=candidate_name, 
-                                #     candidate_id=uuid.UUID(candidate_id), # Ensure UUID
-                                #     supabase_client=self.supabase
-                                # )
-                                pass # Added pass
+                                # --- Call send_no_matches_email --- 
+                                # Ensure await is used and the call is not commented out
+                                try:
+                                    # Assuming send_no_matches_email is imported
+                                    # from anita.services.email_service import send_no_matches_email
+                                    no_match_email_sent = await send_no_matches_email(
+                                        recipient_email=candidate_email, 
+                                        candidate_name=candidate_name, 
+                                        candidate_id=uuid.UUID(candidate_id), # Ensure UUID
+                                        supabase_client=self.supabase
+                                    )
+                                    if no_match_email_sent:
+                                        logger.info(f"Call to send_no_matches_email completed for {candidate_email}.")
+                                    else:
+                                        logger.warning(f"send_no_matches_email indicated failure for {candidate_email}.")
+                                except Exception as no_match_email_err:
+                                    logger.error(f"Exception occurred while calling send_no_matches_email for {candidate_email}: {no_match_email_err}")
+                                # --- End Call send_no_matches_email --- 
+                                # pass # Removed pass
                         # Fix indentation for the else block (no candidate email)
                         else: # Align this with 'if candidate_email:'
                             logger.warning(f"Could not find email for candidate {candidate_id} to send post-match email.")
