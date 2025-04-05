@@ -187,7 +187,7 @@ class VectorService:
                 "match_candidates", 
                 {
                     "query_embedding": query_vector,
-                    "match_threshold": 0.5,  # Adjust as needed
+                    "match_threshold": 0.1,  # Adjust as needed
                     "match_count": top_k
                 }
             ).execute()
@@ -217,43 +217,56 @@ class VectorService:
     async def query_jobs(self, query_vector: List[float], top_k: int = 10) -> List[Dict[str, Any]]:
         """
         Query jobs based on vector similarity using pgvector.
+        Uses the match_jobs RPC function which now accepts an environment parameter.
         """
         try:
-            logger.info(f"Querying jobs for semantic similarity")
-            # Use pgvector's <-> operator for cosine distance (lower is more similar)
+            logger.info(f"Querying jobs for semantic similarity using table: {self.jobs_table}")
+            
+            # Determine environment based on the jobs_table name
+            environment = 'production' if self.jobs_table.endswith('_prod') else 'development'
+            logger.info(f"Determined environment: {environment}")
+
             rpc_response = await self.supabase.rpc(
                 "match_jobs", 
                 {
                     "query_embedding": query_vector,
-                    "match_threshold": 0.5,  # Adjust as needed
-                    "match_count": top_k
+                    "match_threshold": 0.5,  # Existing threshold
+                    "match_count": top_k,
+                    "environment": environment # Pass the environment
                 }
             ).execute()
             
             if not rpc_response.data:
+                logger.info("Match_jobs RPC returned no data.")
                 return []
             
-            # Format results
+            # Format results based on the fields returned by the UPDATED match_jobs function
             results = []
+            logger.info(f"Processing {len(rpc_response.data)} results from match_jobs RPC...")
             for item in rpc_response.data:
+                # Use the fields returned by the new SQL function
+                job_id = item.get("id") 
+                similarity_score = item.get("similarity")
+                if job_id is None or similarity_score is None:
+                    logger.warning(f"Skipping RPC result due to missing id or similarity: {item}")
+                    continue
+                    
                 results.append({
-                    "id": item.get("id"),  # Now a bigint
-                    "job_title": item.get("job_title"),
-                    "company_name": item.get("company_name"),
-                    "key_responsibilities": item.get("key_responsibilities", []),
-                    "skills_must_have": item.get("skills_must_have", []),
-                    "skills_preferred": item.get("skills_preferred", []),
-                    "tech_stack_must_haves": item.get("tech_stack_must_haves", []),
-                    "tech_stack_nice_to_haves": item.get("tech_stack_nice_to_haves", []),
-                    "role_category": item.get("role_category", []),
-                    "seniority": item.get("seniority"),
-                    "scope_of_impact": item.get("scope_of_impact", []),
-                    "company_mission": item.get("company_mission"),
-                    "company_vision": item.get("company_vision"),
-                    "company_culture": item.get("company_culture"),
-                    "similarity": item.get("similarity", 0)
+                    "id": job_id,
+                    "title": item.get("title"), # Changed from job_title
+                    "company": item.get("company"), # Changed from company_name
+                    "description": item.get("description"), # Added description
+                    "similarity": similarity_score,
+                    "profile_json": item.get("profile_json", {}) # Added profile_json
+                    # Removed fields no longer returned directly by the RPC:
+                    # "key_responsibilities", "skills_must_have", "skills_preferred", 
+                    # "tech_stack_must_haves", "tech_stack_nice_to_haves", "role_category", 
+                    # "seniority", "scope_of_impact", "company_mission", 
+                    # "company_vision", "company_culture"
+                    # These details are now nested within profile_json if needed upstream.
                 })
             
+            logger.info(f"Formatted {len(results)} job matches.")
             return results
 
         except Exception as e:
