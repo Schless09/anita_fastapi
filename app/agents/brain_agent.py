@@ -35,8 +35,8 @@ from dotenv import load_dotenv
 from fastapi import HTTPException
 from supabase._async.client import AsyncClient, create_client
 
-# Temporarily comment out this import to test startup
-# from anita.services.email_service import send_job_match_email, send_missed_call_email, send_no_matches_email
+# Uncomment the email service import
+from anita.services.email_service import send_job_match_email, send_missed_call_email, send_no_matches_email
 
 logger = logging.getLogger(__name__)
 
