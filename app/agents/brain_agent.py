@@ -442,8 +442,9 @@ class BrainAgent:
         match_score: float
     ) -> Optional[Dict[str, Any]]:
         """Generates a match reason and tags using OpenAI based on candidate text, job text, and the calculated match score."""
-        if not self.openai_enabled or not openai.api_key:
-            logger.warning("OpenAI is not configured. Skipping match reason generation.")
+        # Check if the openai_service has a valid client/API key configured
+        if not self.openai_service or not self.openai_service.is_configured():
+            logger.warning("OpenAI service is not configured. Skipping match reason generation.")
             return None
 
         system_prompt = (
@@ -465,17 +466,16 @@ class BrainAgent:
 
         logger.info("Generating match reason/tags via OpenAI...")
         try:
-            # Use the ChatCompletions endpoint
-            response = openai.chat.completions.create(
-                # model="gpt-4-turbo-preview", # Consider gpt-4 for higher quality if needed
+            # Use the injected openai_service to make the call
+            response = await self.openai_service.client.chat.completions.create(
                 model="gpt-3.5-turbo-0125", # Use a model that supports JSON mode
                 response_format={"type": "json_object"}, # Request JSON output
                 messages=[
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": user_prompt}
                 ],
-                temperature=0.5, # Adjust for desired creativity/factuality
-                max_tokens=250 # Limit response size
+                temperature=0.5,
+                max_tokens=250
             )
 
             response_content = response.choices[0].message.content
@@ -488,12 +488,11 @@ class BrainAgent:
             # Parse the JSON response
             try:
                 result = json.loads(response_content)
-                # Basic validation of expected keys
                 if "match_reason" in result and "match_tags" in result and isinstance(result["match_tags"], list):
                     logger.info("Successfully generated match reason and tags via OpenAI.")
                     return {
-                        "match_reason": str(result["match_reason"]), # Ensure string type
-                        "match_tags": [str(tag) for tag in result["match_tags"]] # Ensure list of strings
+                        "match_reason": str(result["match_reason"]), 
+                        "match_tags": [str(tag) for tag in result["match_tags"]]
                     }
                 else:
                     logger.error(f"OpenAI response JSON is missing expected keys or has incorrect types: {result}")
@@ -503,10 +502,7 @@ class BrainAgent:
                 logger.error(f"Response content was: {response_content}")
                 return None
 
-        except openai.APIError as api_err:
-            logger.error(f"OpenAI API error: {api_err}")
-            return None
-        except Exception as e:
+        except Exception as e: # Catch broader exceptions from the API call
             logger.error(f"Unexpected error generating match reason/tags via OpenAI: {e}")
             logger.error(f"Traceback: {traceback.format_exc()}")
             return None
