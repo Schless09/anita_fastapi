@@ -91,8 +91,8 @@ async def log_call_communication(
                 "recording_url": call_data.get('recording_url'),
                 "disconnection_reason": call_data.get('disconnection_reason'),
                 "agent_id": call_data.get('agent_id'),
-                "call_analysis": call_data.get('call_analysis', {})
-                #"full_transcript": json.dumps(transcript_object if transcript_object else [])  # Ensure we don't serialize None
+                "call_analysis": call_data.get('call_analysis', {}),
+                "full_transcript": json.dumps(transcript_object if transcript_object else [])  # Ensure we don't serialize None
             },
             "timestamp": datetime.utcnow().isoformat()  # Explicitly set timestamp
         }
@@ -169,8 +169,18 @@ async def handler(
     """Handle Retell webhook events."""
     try:
         payload = await request.json()
-        logger.info(f"📥 Received Retell webhook: {json.dumps(payload, indent=2)}")
+        
+        # Create a copy for logging and redact large fields
+        payload_for_logging = payload.copy()
+        if 'call' in payload_for_logging and isinstance(payload_for_logging.get('call'), dict):
+            if 'transcript_object' in payload_for_logging['call']:
+                payload_for_logging['call']['transcript_object'] = f"[... omitted {len(payload['call'].get('transcript_object', []))} items ...]"
+            if 'transcript' in payload_for_logging['call']:
+                payload_for_logging['call']['transcript'] = f"[... omitted {len(payload['call'].get('transcript', ''))} chars ...]"
+        
+        logger.info(f"📥 Received Retell webhook: {json.dumps(payload_for_logging, indent=2)}")
 
+        # Continue processing with the original payload
         call_data = extract_call_data(payload)
         if not call_data:
             logger.error("❌ Failed to extract call data from webhook payload")
