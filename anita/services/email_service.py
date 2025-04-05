@@ -21,7 +21,8 @@ TOKEN_PICKLE_PATH = 'token.pkl'
 CREDENTIALS_JSON_PATH = 'credentials.json' # Needed for refresh
 SCOPES = ['https://www.googleapis.com/auth/gmail.send']
 
-logging.basicConfig(level=logging.INFO)
+# Remove basicConfig - logging should be configured centrally
+# logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 def get_gmail_service():
