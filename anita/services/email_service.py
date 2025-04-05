@@ -161,22 +161,19 @@ async def send_job_match_email(
 ):
     """
     Sends an email to a candidate with their top job matches and logs the communication.
-    
-    Args:
-        recipient_email: The email address of the candidate.
-        candidate_name: The name of the candidate (used for personalization).
-        job_matches: A list of dictionaries, where each dict contains at least
-                     'job_title' and 'job_url'.
-        candidate_id: The UUID of the candidate.
-        supabase_client: An initialized async Supabase client instance.
     """
+    logger.info(f"[Email Service] Entered send_job_match_email for candidate {candidate_id}, recipient {recipient_email}")
+    
+    logger.info("[Email Service] Attempting to get Gmail service...")
     service = get_gmail_service()
     if not service:
-        logger.error("Failed to get Gmail service. Cannot send email.")
+        # Error is already logged within get_gmail_service
+        logger.error("[Email Service] Failed to get Gmail service. Aborting email send.")
         return False # Indicate failure
+    logger.info("[Email Service] Successfully obtained Gmail service object.")
 
     if not job_matches:
-        logger.warning(f"No job matches provided for {recipient_email}. Email not sent.")
+        logger.warning(f"[Email Service] No job matches provided for {recipient_email}. Email not sent.")
         return False
 
     subject = "🔥 Top matches for you!"
@@ -196,8 +193,8 @@ async def send_job_match_email(
     ]
 
     for match in job_matches:
-        title = match.get('job_title', 'N/A')
-        url = match.get('job_url', '#')
+        title = match.get('job_title', 'N/A') # Use job_title from the match dict passed by BrainAgent
+        url = match.get('job_url', '#') # Use job_url from the match dict
         plain_text_parts.append(f"- {title}: {url}")
         html_parts.append(f'<li><a href="{url}">{title}</a></li>')
 
@@ -212,47 +209,56 @@ async def send_job_match_email(
 
     message = create_message(SENDER_EMAIL, recipient_email, subject, plain_text, html_content)
 
+    logger.info(f"[Email Service] Attempting to send message via send_message helper for {recipient_email}...")
     sent_message_details = send_message(service, 'me', message)
+    
     if sent_message_details:
-        logger.info(f"Successfully sent job match email to {recipient_email}")
+        logger.info(f"[Email Service] send_message returned success for {recipient_email}. Message ID: {sent_message_details.get('id')}")
         
         # Log the communication in the database
+        logger.info(f"[Email Service] Attempting to log communication to database for candidate {candidate_id}...")
         try:
             # Generate a new thread_id for this email communication
             new_thread_id = str(uuid.uuid4())
-            logger.info(f"Generated new thread_id for job match email: {new_thread_id}")
+            # logger.info(f"Generated new thread_id for job match email: {new_thread_id}") # Less verbose log
 
             communication_log = {
                 "candidates_id": str(candidate_id),  # Convert UUID to string
                 "thread_id": new_thread_id,  # Add the generated thread_id
-                "type": "email",  # Must be one of: 'email', 'call', 'sms', 'iMessage'
-                "direction": "outbound",  # Must be either 'inbound' or 'outbound'
+                "type": "email",  
+                "direction": "outbound", 
                 "subject": subject,
                 "content": plain_text,  # Store the plain text version
                 "metadata": {
                     "message_id": sent_message_details.get('id'),
                     "recipient": recipient_email,
                     "html_content": html_content,
-                    "job_matches": job_matches
+                    # Log simplified job matches, avoid large objects if job_matches contains full details
+                    "job_matches_sent": [{'job_id': m.get('job_id'), 'title': m.get('job_title')} for m in job_matches]
                 }
-                # timestamp will default to now() in DB
             }
             
-            # Use get_table_name
             table_name = get_table_name("communications")
             log_resp = await supabase_client.table(table_name).insert(communication_log).execute()
+            
+            # Check response status more reliably
             if hasattr(log_resp, 'data') and log_resp.data:
-                logger.info(f"Successfully logged email communication for candidate {candidate_id}")
+                logger.info(f"[Email Service] Successfully logged email communication for candidate {candidate_id}")
+            elif hasattr(log_resp, 'error') and log_resp.error:
+                 logger.error(f"[Email Service] Error logging email communication for candidate {candidate_id}. Supabase error: {log_resp.error}")
             else:
-                logger.warning(f"Could not log email communication for candidate {candidate_id}. Response: {log_resp}")
+                logger.warning(f"[Email Service] Could not log email communication for candidate {candidate_id}. Response: {log_resp}")
                 
         except Exception as log_err:
-            logger.error(f"Error logging email communication for candidate {candidate_id}: {log_err}")
-            logger.error(f"Traceback: {traceback.format_exc()}")
+            logger.error(f"[Email Service] Exception logging email communication for candidate {candidate_id}: {log_err}")
+            # Optionally log traceback: logger.error(f"Traceback: {traceback.format_exc()}")
+            # Don't return False here, email was sent, just logging failed.
         
-        return True
-    
-    return False
+        return True # Email sent successfully (logging failure is separate)
+    else:
+        # Error is already logged within send_message
+        logger.error(f"[Email Service] send_message returned failure for {recipient_email}. Email not logged.")
+        return False # Indicate email send failure
 
 async def send_missed_call_email(
     recipient_email: str, 
