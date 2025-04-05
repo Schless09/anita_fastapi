@@ -11,7 +11,8 @@ import os
 import uuid
 from supabase._async.client import AsyncClient
 import traceback
-from app.config.settings import get_settings, get_table_name # Import from settings
+from app.config.settings import get_settings # Keep this import
+from app.config.utils import get_table_name # Import get_table_name from utils
 import io # Add io import
 
 # Configuration
