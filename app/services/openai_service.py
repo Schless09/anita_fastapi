@@ -7,14 +7,33 @@ import tempfile
 import PyPDF2
 import logging
 from app.config.settings import Settings
+import openai
 
 logger = logging.getLogger(__name__)
 
 class OpenAIService:
     def __init__(self, settings: Settings):
-        self.client = OpenAI(api_key=settings.openai_api_key)
-        self.model = settings.openai_model
+        self.settings = settings
+        # Use try-except for robustness during initialization
+        try:
+            # Ensure openai is imported if used directly
+            # import openai 
+            # Assuming openai is imported globally or handled by the dependency
+            self.client = openai.AsyncOpenAI(api_key=self.settings.openai_api_key)
+            if not self.settings.openai_api_key:
+                 logger.warning("OpenAI API key is missing in settings.")
+                 self.client = None # Ensure client is None if key is missing
+        except Exception as e:
+            logger.error(f"Failed to initialize OpenAI client: {e}")
+            self.client = None # Set client to None on initialization error
+
+        self.model = self.settings.openai_model
         self.embedding_model = os.getenv('OPENAI_EMBEDDING_MODEL', 'text-embedding-3-small')
+
+    def is_configured(self) -> bool:
+        """Check if the OpenAI client is initialized and likely usable."""
+        # Check if the client was successfully initialized
+        return self.client is not None
 
     @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=4, max=10))
     async def extract_candidate_details(self, transcript: str) -> Dict[str, Any]:
