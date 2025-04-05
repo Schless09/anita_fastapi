@@ -35,7 +35,8 @@ def get_gmail_service():
     
     # --- Vercel/Deployment Environment Check ---
     # Check for environment variables typically set in Vercel
-    is_deployed = os.environ.get('VERCEL') == '1' or os.environ.get('ENVIRONMENT') == 'production' # Use ENVIRONMENT
+    # Updated check for Render.com deployment
+    is_deployed = os.environ.get('RENDER') == 'true' or os.environ.get('ENVIRONMENT') == 'production' # Use RENDER or ENVIRONMENT
     
     if is_deployed:
         logger.info("Running in deployed environment. Attempting to load Gmail credentials from GMAIL_TOKEN_B64 env var.")
@@ -60,17 +61,20 @@ def get_gmail_service():
                 # We still need client_id/secret for refresh, even when loading token
                 client_id = os.environ.get('GMAIL_CLIENT_ID')
                 client_secret = os.environ.get('GMAIL_CLIENT_SECRET')
-                token_uri = os.environ.get('GMAIL_TOKEN_URI', 'https://oauth2.googleapis.com/token')
+                # token_uri = os.environ.get('GMAIL_TOKEN_URI', 'https://oauth2.googleapis.com/token') # Not needed directly
                 
                 if not client_id or not client_secret:
                      logger.error("Missing GMAIL_CLIENT_ID or GMAIL_CLIENT_SECRET env vars needed for token refresh.")
                      return None # Cannot refresh without these
                 
                 # Manually set the client info on the credentials object before refresh
-                creds.token_uri = token_uri
-                creds.client_id = client_id
-                creds.client_secret = client_secret
+                # --- REMOVE THESE LINES --- 
+                # creds.token_uri = token_uri # Causes AttributeError: property 'token_uri' of 'Credentials' object has no setter
+                # creds.client_id = client_id
+                # creds.client_secret = client_secret
+                # --- END REMOVAL --- 
                 
+                # Attempt refresh - it should use internal state or find env vars
                 creds.refresh(Request())
                 logger.info("Token refreshed successfully (originally from GMAIL_TOKEN_B64).")
                 # Note: We cannot easily save the refreshed token back to the env var here.
@@ -401,6 +405,88 @@ Anita, your personal career co-pilot
         return True
     return False
 
+# --- NEW FUNCTION FOR CALL TOO SHORT --- 
+async def send_call_too_short_email(
+    recipient_email: str,
+    candidate_name: str | None,
+    candidate_id: uuid.UUID,
+    supabase_client: AsyncClient
+) -> bool:
+    """
+    Sends an email when the initial call was too short to gather sufficient info.
+    """
+    logger.info(f"[Email Service] Entered send_call_too_short_email for candidate {candidate_id}, recipient {recipient_email}")
+
+    service = get_gmail_service()
+    if not service:
+        logger.error("[Email Service] Failed to get Gmail service. Aborting email send for call_too_short.")
+        return False
+
+    subject = "Following up on our chat"
+
+    first_name = candidate_name.split(' ')[0] if candidate_name else None
+    greeting = f"Hi {first_name}," if first_name else "Hi there,"
+
+    plain_text_body = (
+        f"{greeting}\n\n"
+        "It was great speaking with you, but we\'ll need more information to complete your profile and match you with jobs. \n"
+        "Let us know when\'s a good time to call you back.\n\n"
+        "Best regards,\nAnita, Your personal career co-pilot"
+    )
+
+    html_body = (
+        f"<html><body><h2>{greeting}</h2>"
+        "<p>It was great speaking with you, but we\'ll need more information to complete your profile and match you with jobs.</p>"
+        "<p>Let us know when\'s a good time to call you back.</p>"
+        "<p>Best regards,<br>Anita, Your personal career co-pilot</p></body></html>"
+    )
+
+    message = create_message(SENDER_EMAIL, recipient_email, subject, plain_text_body, html_body)
+
+    logger.info(f"[Email Service] Attempting to send call_too_short email to {recipient_email}...")
+    sent_message_details = send_message(service, 'me', message)
+
+    if sent_message_details:
+        logger.info(f"[Email Service] send_message returned success for call_too_short email to {recipient_email}. Message ID: {sent_message_details.get('id')}")
+
+        # Log the communication
+        logger.info(f"[Email Service] Attempting to log call_too_short communication to database for candidate {candidate_id}...")
+        try:
+            new_thread_id = str(uuid.uuid4())
+            communication_log = {
+                "candidates_id": str(candidate_id),
+                "thread_id": new_thread_id,
+                "type": "email",
+                "direction": "outbound",
+                "subject": subject,
+                "content": plain_text_body,
+                "metadata": {
+                    "message_id": sent_message_details.get('id'),
+                    "recipient": recipient_email,
+                    "html_content": html_body,
+                    "reason": "call_too_short" # Add reason for this specific email
+                }
+            }
+
+            table_name = get_table_name("communications")
+            log_resp = await supabase_client.table(table_name).insert(communication_log).execute()
+
+            if hasattr(log_resp, 'data') and log_resp.data:
+                logger.info(f"[Email Service] Successfully logged call_too_short email communication for candidate {candidate_id}")
+                return True # Email sent and logged successfully
+            elif hasattr(log_resp, 'error') and log_resp.error:
+                logger.error(f"[Email Service] Error logging call_too_short email communication for candidate {candidate_id}. Supabase error: {log_resp.error}")
+                return False # Email sent, but logging failed
+            else:
+                logger.warning(f"[Email Service] Communication log response for call_too_short email did not contain expected data or error for candidate {candidate_id}. Response: {log_resp}")
+                return False # Email sent, but logging status unclear
+        except Exception as log_err:
+            logger.error(f"[Email Service] Exception logging call_too_short email communication for candidate {candidate_id}: {log_err}\n{traceback.format_exc()}")
+            return False # Email sent, but logging failed due to exception
+    else:
+        logger.error(f"[Email Service] send_message failed for call_too_short email to {recipient_email}. Email not sent.")
+        return False # Email failed to send
+
 # Example Usage (for testing purposes)
 if __name__ == '__main__':
     # Ensure token.pkl exists by running auth.py first
@@ -416,11 +502,15 @@ if __name__ == '__main__':
     
     if os.path.exists(TOKEN_PICKLE_PATH):
         # Call the function directly for testing
-        success = send_job_match_email(test_recipient, test_name, test_matches)
-        if success:
-            logger.info("--- Test Email Sent Successfully (check inbox) ---")
-        else:
-            logger.error("--- Test Email Failed to Send --- ")
+        # success = send_job_match_email(test_recipient, test_name, test_matches)
+        # success = send_missed_call_email(test_recipient, test_name, uuid.uuid4(), None) # Requires Supabase client mock or connection
+        # success = send_no_matches_email(test_recipient, test_name, uuid.uuid4(), None) # Requires Supabase client mock or connection
+        # success = send_call_too_short_email(test_recipient, test_name, uuid.uuid4(), None) # Requires Supabase client mock or connection
+        # if success:
+        #     logger.info("--- Test Email Sent Successfully (check inbox) ---")
+        # else:
+        #     logger.error("--- Test Email Failed to Send --- ")
+        pass # Avoid running actual send without proper setup/mocking
     else:
         logger.error(f"'{TOKEN_PICKLE_PATH}' not found. Run auth.py to generate it before testing.")
         print(f"'{TOKEN_PICKLE_PATH}' not found. Run auth.py to generate it before testing.") 

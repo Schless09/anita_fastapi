@@ -36,7 +36,7 @@ from fastapi import HTTPException
 from supabase._async.client import AsyncClient, create_client
 
 # Uncomment the email service import
-from anita.services.email_service import send_job_match_email, send_missed_call_email, send_no_matches_email
+from anita.services.email_service import send_job_match_email, send_missed_call_email, send_no_matches_email, send_call_too_short_email
 
 logger = logging.getLogger(__name__)
 
@@ -634,26 +634,28 @@ class BrainAgent:
 
                 if extracted_info and isinstance(extracted_info.get('call_status'), dict) and extracted_info['call_status'].get('is_complete') is True:
                     analysis_complete = True
-                    logger.info(f"Call analysis deemed call COMPLETE for {candidate_id}. Reason: {extracted_info['call_status'].get('reason')}")
+                    analysis_reason = extracted_info['call_status'].get('reason')
+                    logger.info(f"Call analysis deemed call COMPLETE for {candidate_id}. Reason: {analysis_reason}")
                     self._update_transaction(process_id, "transcript_analysis", "completed", {"status": "complete"})
                 else:
                     analysis_complete = False
-                    reason = extracted_info.get('call_status', {}).get('reason', 'Analysis failed or call incomplete') if extracted_info else 'Analysis failed'
-                    logger.warning(f"Call analysis deemed call INCOMPLETE for {candidate_id}. Reason: {reason}. Skipping embedding/matchmaking.")
-                    self._update_transaction(process_id, "transcript_analysis", "completed", {"status": "incomplete", "reason": reason})
-                    final_process_status = 'call_incomplete' # Set final status for incomplete calls
+                    analysis_reason = extracted_info.get('call_status', {}).get('reason', 'Analysis failed or call incomplete') if extracted_info else 'Analysis failed'
+                    final_process_status = 'call_incomplete' # Tentative status
+                    logger.warning(f"Call analysis deemed call INCOMPLETE for {candidate_id}. Reason: {analysis_reason}. Skipping embedding/matchmaking.")
+                    self._update_transaction(process_id, "transcript_analysis", "completed", {"status": "incomplete", "reason": analysis_reason})
 
             except Exception as analysis_err:
                 logger.error(f"Error during transcript analysis for {candidate_id}: {analysis_err}")
                 self._update_transaction(process_id, "transcript_analysis", "failed", {"error": str(analysis_err)})
-                final_process_status = 'error_processing_call' # Set error status
-                call_completed_flag = True # Analysis was attempted but failed
-                analysis_complete = False # Ensure this is false on error
+                final_process_status = 'error_processing_call'
+                call_completed_flag = True
+                analysis_complete = False
+                analysis_reason = f"Analysis exception: {analysis_err}" # Capture reason for failure
 
             # --- Process based on Analysis Outcome ---
 
             if analysis_complete and extracted_info:
-                # --- Call was Complete: Update Profile, Comms, Embed, Match --- 
+                # === Step 2a/b, 3, 4: Call was Complete - Update Profile, Comms, Embed, Match, Send Email ===
                 try:
                     # 2a. Update Profile JSON
                     self._update_transaction(process_id, "profile_update", "started")
@@ -763,7 +765,7 @@ class BrainAgent:
                             else: 
                                 logger.info("No match records were prepared (e.g., all matches filtered out?).")
 
-                            # --- Email Logic --- 
+                            # --- Email Logic (Based on Matches) --- 
                             if candidate_email:
                                 MATCH_SCORE_THRESHOLD = 0.40
                                 high_scoring_jobs = []
@@ -810,27 +812,35 @@ class BrainAgent:
                      final_process_status = 'error_processing_call'
                      embedding_success = False # Ensure flag is false on error
 
-            else: # Analysis was incomplete or failed
-                 # --- Call was Incomplete or Analysis Failed: Send Missed Call Email --- 
-                 if final_process_status != 'error_processing_call': # Don't overwrite if analysis itself failed
+            else: # === Step X: Analysis was incomplete or failed - Send Specific Email ===
+                 if final_process_status != 'error_processing_call': # Don't overwrite if analysis itself failed badly
                       final_process_status = 'call_incomplete'
                  
                  if candidate_email:
-                     logger.info(f"Attempting to send missed/incomplete call email to {candidate_email} due to analysis result.")
+                     logger.info(f"Analysis incomplete/failed. Reason: {analysis_reason}. Sending appropriate email to {candidate_email}.")
                      try:
-                         # Using send_missed_call_email for this scenario
-                         await send_missed_call_email(
-                             recipient_email=candidate_email,
-                             candidate_name=candidate_name,
-                             candidate_id=uuid.UUID(candidate_id),
-                             supabase_client=self.supabase
-                         )
-                         logger.info(f"Call to send_missed_call_email completed for {candidate_email}.")
+                         # --- Call specific email based on analysis_reason --- 
+                         if analysis_reason == 'Conversation too short':
+                             logger.info("Calling send_call_too_short_email...")
+                             await send_call_too_short_email(
+                                 recipient_email=candidate_email,
+                                 candidate_name=candidate_name,
+                                 candidate_id=uuid.UUID(candidate_id),
+                                 supabase_client=self.supabase
+                             )
+                         else: # For 'No background/experience discussed' or analysis failure
+                             logger.info("Calling send_missed_call_email as fallback...")
+                             await send_missed_call_email(
+                                 recipient_email=candidate_email,
+                                 candidate_name=candidate_name,
+                                 candidate_id=uuid.UUID(candidate_id),
+                                 supabase_client=self.supabase
+                             )
+                         # logger.info(f"Call to specific email function completed for {candidate_email}.") # Covered inside email func
                      except Exception as email_call_err:
-                         logger.error(f"Exception calling send_missed_call_email for incomplete call: {email_call_err}")
+                         logger.error(f"Exception calling specific email for incomplete/failed analysis: {email_call_err}")
                  else:
-                     logger.warning(f"Cannot send missed/incomplete call email for {candidate_id}, email missing.")
-
+                     logger.warning(f"Cannot send incomplete/failed call email for {candidate_id}, email missing.")
 
             # --- Final Return --- 
             # Moved status update logic to finally block
