@@ -457,7 +457,7 @@ class OpenAIService:
                 
                 # Analyze if the call was complete
                 transcript_lines = transcript.split('\n')
-                if len(transcript_lines) < 20:  # Arbitrary threshold for very short conversations
+                if len(transcript_lines) < 5:  # Changed threshold from 20 to 5 for testing
                     extracted_info['call_status'] = {
                         'is_complete': False,
                         'reason': 'Conversation too short',
