@@ -376,38 +376,34 @@ class OpenAIService:
 
     async def extract_transcript_info(self, transcript: str) -> Dict[str, Any]:
         """
-        Analyzes the transcript using OpenAI to extract structured information.
+        Extract structured information from call transcript using OpenAI.
+        Returns a dictionary with the extracted information.
+        Handles partial conversations and captures any available information.
         """
         try:
             # New accuracy-focused system message
-            system_message = """You are an expert assistant analyzing a call transcript between a candidate and a recruiter (Anita). Your task is to extract specific professional details mentioned by the candidate and return them in a structured JSON object.
-
-**Your primary goal is accuracy. Extract information ONLY if it is explicitly stated or clearly implied in the transcript text.**
-
-1.  **Scan the transcript** for mentions of:
-    *   Professional summary, current role, current company, years of experience.
-    *   Technical skills, specific technologies (tech stack).
-    *   Details about past roles (title, company, duration, description highlights).
-    *   Education or qualifications.
-    *   Industry preferences or restrictions.
-    *   Work arrangement preferences (remote, hybrid, onsite).
-    *   Salary/compensation expectations.
-    *   Technical preferences or restrictions (e.g., technologies to avoid).
-
-2.  **Populate the JSON:** Use the exact JSON structure provided in the user message.
-    *   For string fields: If the information is found, include it. If it is **clearly absent** from the transcript, use an empty string "".
-    *   For list fields: If relevant items are found, include them in a list. If **none** are found, use an empty list ([]).
-
-3.  **CRITICAL RULE: Do NOT invent, infer, or assume any information not present in the transcript.** It is better to have empty fields than incorrect data. Do not add example data. Your output must strictly reflect the conversation.
-
-4.  **Output Format:** Ensure your final output is ONLY the valid JSON object, with no additional text, explanations, or apologies.
+            system_message = """You are an expert at extracting structured information from call transcripts.
+            Extract ANY information that is available, even from partial conversations.
+            Focus on capturing:
+            1. Any explicitly stated preferences (work arrangements, benefits, company size, etc.)
+            2. Any mentioned experience or skills
+            3. Any stated career goals or preferences
+            4. Any mentioned education or qualifications
+            5. Any industry preferences or restrictions
+            6. Any technical preferences or restrictions
+            
+            Do NOT include any personal information like name, email, phone, or location.
+            Keep the information professional and focused on qualifications and preferences.
+            
+            If a field is not mentioned in the conversation, return an empty value for that field.
+            Do not make assumptions about missing information.
 """
             
             # user_message remains the same, requesting the specific JSON structure
             user_message = f"""Please extract any available information from this call transcript:
             {transcript}
             
-            Return the information in this exact JSON structure, using empty strings ("") or empty lists ([]) for any fields where the information is clearly absent in the transcript:
+            Return the information in this exact JSON structure, with empty values for any fields not mentioned:
             {{
                 "professional_summary": "string or empty string",
                 "current_role": "string or empty string",
@@ -448,7 +444,7 @@ class OpenAIService:
             logger.debug(f"Attempting to extract info from transcript (length {len(transcript)}): {transcript}")
             
             response = await self.client.chat.completions.create(
-                model=self.model, # Use configured model name
+                model="gpt-4-turbo-preview", # Use configured model name
                 messages=[
                     {"role": "system", "content": system_message},
                     {"role": "user", "content": user_message}
