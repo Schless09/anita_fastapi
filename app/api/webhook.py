@@ -11,7 +11,7 @@ from retell import Retell
 from supabase._async.client import AsyncClient
 from app.config.settings import Settings
 from app.config.utils import get_table_name
-from app.dependencies import get_vector_service, get_brain_agent, get_supabase_client_dependency, get_cached_settings
+from app.dependencies import get_vector_service, get_brain_agent, get_supabase_client_dependency, get_cached_settings, get_retell_service
 from app.services.vector_service import VectorService
 import uuid
 
@@ -165,7 +165,8 @@ async def handler(
     background_tasks: BackgroundTasks,
     brain_agent: BrainAgent = Depends(get_brain_agent),
     supabase_client: AsyncClient = Depends(get_supabase_client_dependency),
-    settings: Settings = Depends(get_cached_settings)
+    settings: Settings = Depends(get_cached_settings),
+    retell_service: RetellService = Depends(get_retell_service)
 ):
     """Handle Retell webhook events."""
     try:
@@ -191,6 +192,34 @@ async def handler(
         if not call_data:
             logger.error("❌ Failed to extract call data from webhook payload")
             return JSONResponse(status_code=400, content={"status": "error", "message": "Invalid webhook payload"})
+
+        # Get the call ID
+        call_id = call_data.get('call_id')
+        if not call_id:
+            logger.error("❌ No call_id found in call data")
+            return JSONResponse(status_code=400, content={"status": "error", "message": "No call_id in call data"})
+
+        # Always fetch the full call data from Retell API
+        try:
+            logger.info(f"Fetching full call data for call {call_id}")
+            full_call_data = await retell_service.get_call(call_id)
+            if full_call_data:
+                # Update call_data with full transcript and other data
+                call_data['transcript'] = full_call_data.get('transcript', '')
+                call_data['transcript_object'] = full_call_data.get('transcript_object', [])
+                call_data['transcript_with_tool_calls'] = full_call_data.get('transcript_with_tool_calls', [])
+                logger.info(f"Successfully fetched full call data for call {call_id}")
+            else:
+                logger.warning(f"No full call data available for call {call_id}")
+        except Exception as e:
+            logger.error(f"Error fetching full call data: {str(e)}")
+            # Continue with the original call_data even if fetch fails
+
+        # Add debug logging for transcript
+        logger.debug(f"Transcript content: {call_data.get('transcript')}")
+        logger.debug(f"Transcript object length: {len(call_data.get('transcript_object', []))}")
+        if call_data.get('transcript_object'):
+            logger.debug(f"First few transcript objects: {call_data.get('transcript_object')[:3]}")
 
         candidate_id = call_data.get('metadata', {}).get('candidate_id')
         if not candidate_id:
