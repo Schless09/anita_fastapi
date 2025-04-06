@@ -381,6 +381,11 @@ class OpenAIService:
         Handles partial conversations and captures any available information.
         """
         try:
+            # Add detailed debug logging
+            logger.debug(f"Raw transcript content: {transcript}")
+            logger.debug(f"Transcript length: {len(transcript)}")
+            logger.debug(f"Transcript type: {type(transcript)}")
+            
             # New accuracy-focused system message
             system_message = """You are an expert at extracting structured information from call transcripts.
             Extract ANY information that is available, even from partial conversations.
@@ -441,10 +446,10 @@ class OpenAIService:
                 "technologies_to_avoid": ["string"]
             }}"""
             
-            logger.debug(f"Attempting to extract info from transcript (length {len(transcript)}): {transcript}")
+            logger.debug(f"Attempting to extract info from transcript (length {len(transcript)}): {transcript[:500]}...")  # Show first 500 chars instead of truncating
             
             response = await self.client.chat.completions.create(
-                model="gpt-4-turbo-preview", # Use configured model name
+                model="gpt-4-turbo-preview",
                 messages=[
                     {"role": "system", "content": system_message},
                     {"role": "user", "content": user_message}

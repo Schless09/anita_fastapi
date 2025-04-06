@@ -162,6 +162,31 @@ class RetellService:
             logger.error(f"Error getting call data: {str(e)}")
             raise Exception(f"Error getting call data from Retell: {str(e)}")
 
+    async def get_full_transcript(self, call_id: str) -> Dict[str, Any]:
+        """
+        Get the full transcript for a call, including the complete transcript text and transcript object.
+        """
+        try:
+            logger.info(f"Getting full transcript for call: {call_id}")
+            call_data = await self.get_call(call_id)
+            
+            # Extract transcript data
+            transcript = call_data.get('transcript', '')
+            transcript_object = call_data.get('transcript_object', [])
+            
+            if not transcript and not transcript_object:
+                logger.warning(f"No transcript data found for call {call_id}")
+                return {}
+            
+            return {
+                'transcript': transcript,
+                'transcript_object': transcript_object
+            }
+            
+        except Exception as e:
+            logger.error(f"Error getting full transcript: {str(e)}")
+            raise Exception(f"Error getting full transcript from Retell: {str(e)}")
+
     async def cancel_call(self, call_id: str) -> Dict[str, Any]:
         """
         Cancel a scheduled call.

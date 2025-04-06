@@ -660,14 +660,25 @@ class BrainAgent:
 
                     # 2a. Analyze Transcript (Still useful for data extraction)
                     self._update_transaction(process_id, "transcript_analysis", "started")
-                    if not transcript or not transcript.strip():
+                    
+                    # Get transcript in string format, either directly or from transcript_object
+                    transcript_text = transcript
+                    if not transcript_text and call_data.get('transcript_object'):
+                        try:
+                            # Convert transcript_object to text
+                            transcript_text = ' '.join([word.get('word', '') for word in call_data['transcript_object'] if word.get('word')])
+                            logger.debug(f"Converted transcript_object to text: {transcript_text[:100]}...")
+                        except Exception as e:
+                            logger.error(f"Error converting transcript_object to text: {e}")
+                    
+                    if not transcript_text or not transcript_text.strip():
                          logger.error(f"Critical error: Call duration >= 5min for {candidate_id}, but transcript is missing or empty! Skipping analysis.")
                          self._update_transaction(process_id, "transcript_analysis", "skipped", {"reason": "Transcript missing despite duration"})
                          # This case shouldn't happen often, but if it does, embedding will likely fail
                     else: 
                         logger.info(f"Analyzing transcript for {candidate_id} (call duration >= 5 min)")
                         try:
-                            extracted_info = await self.openai_service.extract_transcript_info(transcript)
+                            extracted_info = await self.openai_service.extract_transcript_info(transcript_text)
                             # Log the outcome of analysis but don't use its status for gating emails
                             analysis_status_from_llm = extracted_info.get('call_status', {}).get('is_complete', 'unknown')
                             analysis_reason_from_llm = extracted_info.get('call_status', {}).get('reason', 'unknown')
