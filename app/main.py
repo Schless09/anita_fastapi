@@ -1,79 +1,97 @@
-from fastapi import FastAPI, HTTPException, status, UploadFile, File, Form, Depends, Request, BackgroundTasks
+# Standard library imports
+import os
+from datetime import datetime
+from enum import Enum
+from typing import Dict, Any, Optional
+import logging
+import traceback
+from dotenv import load_dotenv
+
+# Third-party imports
+from fastapi import FastAPI, HTTPException, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import JSONResponse, Response
-from pydantic import BaseModel, Field, validator
-from typing import List, Optional, Dict, Any, Literal, Union, Tuple
-from datetime import datetime, timedelta
-import os
-from dotenv import load_dotenv
-import logging
-import logging.config
-import logging.handlers
-from enum import Enum
-import openai
-import traceback
-import json
-from contextlib import asynccontextmanager
-import uuid
-import tempfile
-import asyncio
+from pydantic import BaseModel, Field
 from retell import Retell
+from fastapi.responses import FileResponse
 
+# Config and core services
 from app.config import (
     get_settings,
     get_openai_client,
     get_embeddings,
-    get_sendgrid_client,
-    get_sendgrid_webhook_url,
-    get_supabase_client
+    get_supabase_client,
 )
+from app.config.settings import Settings
+from app.config.utils import get_table_name
 
+# Agents
 from app.agents.langchain.agents.candidate_intake_agent import CandidateIntakeAgent
 from app.agents.langchain.agents.job_matching_agent import JobMatchingAgent
 from app.agents.langchain.agents.farming_matching_agent import FarmingMatchingAgent
 from app.agents.langchain.agents.interview_agent import InterviewAgent
 from app.agents.langchain.agents.follow_up_agent import FollowUpAgent
 
+# Tools
 from app.agents.langchain.tools.document_processing import PDFProcessor, ResumeParser
 from app.agents.langchain.tools.vector_store import VectorStoreTool
 from app.agents.langchain.tools.matching import MatchingTool
 from app.agents.langchain.tools.communication import EmailTool
 
+# Chains
 from app.agents.langchain.chains.candidate_processing import CandidateProcessingChain
 from app.agents.langchain.chains.job_matching import JobMatchingChain
 from app.agents.langchain.chains.interview_scheduling import InterviewSchedulingChain
 from app.agents.langchain.chains.follow_up import FollowUpChain
 
+# Services
 from app.services.candidate_service import CandidateService
 from app.services.job_service import JobService
-from app.agents.brain_agent import BrainAgent
-from app.schemas.candidate import CandidateCreate, CandidateResponse, CandidateUpdate
-from app.schemas.job import JobCreate, JobResponse, JobUpdate
-from app.schemas.matching import MatchingResponse
-from app.api.webhook import router as webhook_router
 from app.services.retell_service import RetellService
 from app.services.openai_service import OpenAIService
 from app.services.vector_service import VectorService
 from app.services.matching_service import MatchingService
+
+# Schemas
+from app.schemas.candidate import CandidateCreate, CandidateResponse, CandidateUpdate
+from app.schemas.job import JobCreate, JobResponse, JobUpdate
+from app.schemas.matching import MatchingResponse
+
+# Routers
+from app.api.webhook import router as webhook_router
 from app.routes.jobs import router as jobs_router
-# Import the new webhook router
-from app.routes.webhooks import router as webhook_jobs_router
 from app.routes.candidates import router as candidates_router
+from app.routes.webhooks import router as webhook_jobs_router
+
+# Dependencies
 from app.dependencies import get_brain_agent
+from app.agents.brain_agent import BrainAgent
 
 # Load environment variables first
 load_dotenv()
 
-# Configure logging from config file
-logging.config.fileConfig('app/config/logging.conf')
+# Configure logging programmatically
 logger = logging.getLogger('app')
+logger.setLevel(logging.DEBUG)
+
+# Console handler
+console_handler = logging.StreamHandler()
+console_handler.setLevel(logging.DEBUG)
+formatter = logging.Formatter('%(levelname)s [%(filename)s:%(lineno)d] - %(message)s')
+console_handler.setFormatter(formatter)
+logger.addHandler(console_handler)
+
+# File handler
+file_handler = logging.FileHandler('/tmp/app.log')
+file_handler.setLevel(logging.DEBUG)
+file_handler.setFormatter(formatter)
+logger.addHandler(file_handler)
 
 # Test logging configuration
 logger.info("🚀 Starting Anita AI with debug logging enabled")
 logger.debug("Debug logging is enabled")
 
-# Suppress noisy logs from other libraries
+# Suppress noisy logs from other libraries (Keep these)
 logging.getLogger("httpx").setLevel(logging.WARNING)
 logging.getLogger("httpcore").setLevel(logging.WARNING)
 logging.getLogger("asyncio").setLevel(logging.WARNING)
@@ -87,17 +105,16 @@ app = FastAPI(
 )
 
 # Global service instances
-vector_store = None
-brain_agent_instance = None
+vector_store = None  # Manage via lifespan or dependency
+brain_agent_instance = None  # Manage via lifespan or dependency
 core_services = {}
 agents = {}
 
-# Initialize services
+# Initialize global services
 settings = get_settings()
 llm = get_openai_client()
 embeddings = get_embeddings()
 supabase = get_supabase_client()
-sendgrid = get_sendgrid_client()
 
 @app.on_event("startup")
 async def startup_event():
@@ -108,12 +125,63 @@ async def startup_event():
         
         # Initialize vector store
         from app.agents.langchain.tools.vector_store import VectorStoreTool
-        vector_store = VectorStoreTool()
+        from app.services.vector_service import VectorService
+        from app.services.openai_service import OpenAIService
+        from app.services.candidate_service import CandidateService
+        from app.services.job_service import JobService
+        from app.services.retell_service import RetellService
+        from app.services.matching_service import MatchingService
+        
+        # Initialize OpenAI service with settings
+        openai_service = OpenAIService(settings)
+        
+        # Get table names from settings
+        candidates_table = get_table_name("candidates")
+        jobs_table = get_table_name("jobs")
+        
+        # Initialize vector service
+        vector_service = VectorService(
+            openai_service=openai_service,
+            supabase_client=supabase,
+            candidates_table=candidates_table,
+            jobs_table=jobs_table
+        )
+        
+        # Initialize vector store tool
+        vector_store = VectorStoreTool(vector_service=vector_service, settings=settings)
         await vector_store._initialize_async()
         
-        # Initialize brain agent
+        # Initialize other required services
+        retell_service = RetellService(settings)
+        candidate_service = CandidateService(
+            supabase_client=supabase,
+            retell_service=retell_service,
+            openai_service=openai_service,
+            settings=settings
+        )
+        job_service = JobService(
+            supabase_client=supabase,
+            vector_service=vector_service,
+            openai_service=openai_service
+        )
+        matching_service = MatchingService(
+            openai_service=openai_service,
+            vector_service=vector_service,
+            supabase_client=supabase,
+            settings=settings
+        )
+        
+        # Initialize brain agent with all required services
         from app.agents.brain_agent import BrainAgent
-        brain_agent_instance = BrainAgent()
+        brain_agent_instance = BrainAgent(
+            supabase_client=supabase,
+            candidate_service=candidate_service,
+            openai_service=openai_service,
+            matching_service=matching_service,
+            retell_service=retell_service,
+            vector_service=vector_service,
+            settings=settings
+        )
         await brain_agent_instance._initialize_async()
         
         logger.info("✅ Services initialized successfully")
@@ -133,8 +201,10 @@ app.add_middleware(
 # Mount static files
 app.mount("/public", StaticFiles(directory="public"), name="public")
 
-# Import routers
-from app.api.webhook import router as webhook_router
+# Add favicon endpoint
+@app.get("/favicon.ico")
+async def favicon():
+    return FileResponse("public/favicon.ico")
 
 # Include routers
 app.include_router(webhook_router, prefix="/webhook", tags=["webhook"])
@@ -149,32 +219,20 @@ def get_service(service_name: str):
 def get_agent(agent_name: str):
     return agents.get(agent_name)
 
+# Root endpoint
+@app.get("/")
+async def read_root():
+    return {"message": "Welcome to Anita AI Recruitment API v2.0.0"}
+
+# Health check endpoint
 @app.get("/health")
 async def health_check():
     """Health check endpoint with initialization status."""
     return {
         "status": "healthy",
         "timestamp": datetime.utcnow().isoformat(),
-        "services": {
-            "vector_store": vector_store is not None,
-            "brain_agent": brain_agent_instance is not None,
-            "core_services": list(core_services.keys()),
-            "agents": list(agents.keys())
-        }
+        "note": "Service instances are managed via dependency injection."
     }
-
-# Configure OpenAI
-OPENAI_API_KEY = os.getenv('OPENAI_API_KEY')
-if not OPENAI_API_KEY:
-    raise ValueError("OPENAI_API_KEY environment variable is not set")
-
-# Get Vercel protection bypass secret
-VERCEL_PROTECTION_BYPASS = os.getenv('VERCEL_PROTECTION_BYPASS')
-if not VERCEL_PROTECTION_BYPASS:
-    raise ValueError("VERCEL_PROTECTION_BYPASS environment variable is not set")
-
-# Initialize OpenAI client
-openai_client = openai.OpenAI(api_key=OPENAI_API_KEY)
 
 class RetellCallStatus(str, Enum):
     CREATED = "created"
@@ -260,7 +318,3 @@ async def check_call_status(
             status_code=500,
             detail=f"Error checking call status: {str(e)}"
         )
-
-@app.get("/")
-async def root():
-    return {"message": "Welcome to the API"}

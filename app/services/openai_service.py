@@ -6,14 +6,34 @@ import json
 import tempfile
 import PyPDF2
 import logging
+from app.config.settings import Settings
+import openai
 
 logger = logging.getLogger(__name__)
 
 class OpenAIService:
-    def __init__(self):
-        self.client = OpenAI(api_key=os.getenv('OPENAI_API_KEY'))
-        self.model = os.getenv('OPENAI_MODEL', 'gpt-4-turbo-preview')
+    def __init__(self, settings: Settings):
+        self.settings = settings
+        # Use try-except for robustness during initialization
+        try:
+            # Ensure openai is imported if used directly
+            # import openai 
+            # Assuming openai is imported globally or handled by the dependency
+            self.client = openai.AsyncOpenAI(api_key=self.settings.openai_api_key)
+            if not self.settings.openai_api_key:
+                 logger.warning("OpenAI API key is missing in settings.")
+                 self.client = None # Ensure client is None if key is missing
+        except Exception as e:
+            logger.error(f"Failed to initialize OpenAI client: {e}")
+            self.client = None # Set client to None on initialization error
+
+        self.model = self.settings.openai_model
         self.embedding_model = os.getenv('OPENAI_EMBEDDING_MODEL', 'text-embedding-3-small')
+
+    def is_configured(self) -> bool:
+        """Check if the OpenAI client is initialized and likely usable."""
+        # Check if the client was successfully initialized
+        return self.client is not None
 
     @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=4, max=10))
     async def extract_candidate_details(self, transcript: str) -> Dict[str, Any]:
@@ -80,13 +100,14 @@ class OpenAIService:
         Generate embedding for text using OpenAI's embedding model.
         """
         try:
-            response = self.client.embeddings.create(
+            response = await self.client.embeddings.create(
                 model=self.embedding_model,
                 input=text
             )
             return response.data[0].embedding
 
         except Exception as e:
+            logger.error(f"Error during OpenAI embedding generation: {str(e)}")
             raise Exception(f"Error generating embedding: {str(e)}")
 
     def _prepare_text_for_embedding(self, data: Dict[str, Any]) -> str:
@@ -360,6 +381,12 @@ class OpenAIService:
         Handles partial conversations and captures any available information.
         """
         try:
+            # Add detailed debug logging
+            logger.debug(f"Raw transcript content: {transcript}")
+            logger.debug(f"Transcript length: {len(transcript)}")
+            logger.debug(f"Transcript type: {type(transcript)}")
+            
+            # New accuracy-focused system message
             system_message = """You are an expert at extracting structured information from call transcripts.
             Extract ANY information that is available, even from partial conversations.
             Focus on capturing:
@@ -374,8 +401,10 @@ class OpenAIService:
             Keep the information professional and focused on qualifications and preferences.
             
             If a field is not mentioned in the conversation, return an empty value for that field.
-            Do not make assumptions about missing information."""
+            Do not make assumptions about missing information.
+"""
             
+            # user_message remains the same, requesting the specific JSON structure
             user_message = f"""Please extract any available information from this call transcript:
             {transcript}
             
@@ -414,53 +443,25 @@ class OpenAIService:
                 "project_visibility_preference": ["string"],
                 "desired_company_stage": ["string"],
                 "preferred_company_size": ["string"],
-                "technologies_to_avoid": ["string"],
-                "call_status": {{
-                    "is_complete": false,
-                    "reason": "string",
-                    "follow_up_needed": true
-                }}
+                "technologies_to_avoid": ["string"]
             }}"""
             
-            response = self.client.chat.completions.create(
+            logger.debug(f"Attempting to extract info from transcript (length {len(transcript)}): {transcript[:500]}...")  # Show first 500 chars instead of truncating
+            
+            response = await self.client.chat.completions.create(
                 model="gpt-4-turbo-preview",
                 messages=[
                     {"role": "system", "content": system_message},
                     {"role": "user", "content": user_message}
                 ],
                 response_format={"type": "json_object"}
+                # Temperature parameter removed to use default
             )
-            
-            if response.choices and response.choices[0].message.content:
-                extracted_info = json.loads(response.choices[0].message.content)
-                
-                # Analyze if the call was complete
-                transcript_lines = transcript.split('\n')
-                if len(transcript_lines) < 20:  # Arbitrary threshold for very short conversations
-                    extracted_info['call_status'] = {
-                        'is_complete': False,
-                        'reason': 'Conversation too short',
-                        'follow_up_needed': True
-                    }
-                elif not any('experience' in line.lower() or 'background' in line.lower() for line in transcript_lines):
-                    extracted_info['call_status'] = {
-                        'is_complete': False,
-                        'reason': 'No background/experience discussed',
-                        'follow_up_needed': True
-                    }
-                else:
-                    extracted_info['call_status'] = {
-                        'is_complete': True,
-                        'reason': 'Sufficient information gathered',
-                        'follow_up_needed': False
-                    }
-                
-                logger.info(f"Successfully extracted transcript info: {json.dumps(extracted_info, indent=2)}")
-                return extracted_info
-            else:
-                logger.error("No content in OpenAI response")
-                return {}
-                
+            extracted_info = json.loads(response.choices[0].message.content)
+            logger.info("Successfully extracted transcript info.")
+            logger.debug(f"Extracted data: {json.dumps(extracted_info, indent=2)}")
+            return extracted_info
+
         except Exception as e:
-            logger.error(f"Error extracting transcript info: {str(e)}")
+            logger.error(f"Error extracting transcript info: {e}")
             return {} 

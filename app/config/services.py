@@ -1,6 +1,6 @@
 from typing import Optional, Dict, Any
 from langchain_openai import ChatOpenAI, OpenAIEmbeddings
-from sendgrid import SendGridAPIClient
+from openai import OpenAI, AsyncOpenAI
 # from google.oauth2.credentials import Credentials
 # from google_auth_oauthlib.flow import InstalledAppFlow
 # from google.auth.transport.requests import Request
@@ -25,20 +25,6 @@ def get_openai_client() -> ChatOpenAI:
 def get_embeddings() -> OpenAIEmbeddings:
     """Get OpenAI embeddings instance."""
     return OpenAIEmbeddings()
-
-@lru_cache()
-def get_sendgrid_client() -> SendGridAPIClient:
-    """Get SendGrid client instance with configuration."""
-    if not settings.sendgrid_api_key:
-        raise ValueError("Missing required SendGrid configuration. Check SENDGRID_API_KEY environment variable.")
-    
-    return SendGridAPIClient(api_key=settings.sendgrid_api_key)
-
-def get_sendgrid_webhook_url() -> str:
-    """Get the full webhook URL for SendGrid Inbound Parse setup."""
-    hostname = settings.sendgrid_inbound_hostname
-    url_path = "/email/webhook"
-    return f"https://{hostname}{url_path}"
 
 # @lru_cache()
 # def get_google_calendar_client():

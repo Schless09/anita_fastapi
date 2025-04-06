@@ -23,12 +23,6 @@ class Settings(BaseSettings):
     twilio_auth_token: str
     twilio_phone_number: str
     
-    # SendGrid
-    sendgrid_api_key: str
-    sender_email: str
-    sendgrid_inbound_hostname: str
-    sendgrid_webhook_url: str
-    
     # Vercel
     vercel_protection_bypass: str
     
@@ -49,12 +43,8 @@ class Settings(BaseSettings):
     supabase_key: str
     supabase_service_role_key: str
 
-    # Pinecone
-    pinecone_api_key: str
-    pinecone_environment: str
-    pinecone_candidates_index: str
-    pinecone_jobs_index: str
-    pinecone_call_status_index: str
+    # Email
+    sender_email: str
 
     @property
     def webhook_base_url(self) -> str:
@@ -69,20 +59,9 @@ class Settings(BaseSettings):
         """Get the Retell webhook URL based on environment."""
         return f"{self.webhook_base_url}/webhook/retell"
     
-    @property
-    def sendgrid_webhook_url(self) -> str:
-        """Get the SendGrid webhook URL based on environment."""
-        return f"{self.webhook_base_url}/email/webhook"
-    
     class Config:
         env_file = ".env"
 
 @lru_cache()
 def get_settings() -> Settings:
-    return Settings()
-
-def get_table_name(base_name: str) -> str:
-    """Returns the full table name with environment suffix (_dev or _prod)."""
-    settings = get_settings()
-    suffix = "_prod" if settings.environment == "production" else "_dev"
-    return f"{base_name}{suffix}" 
+    return Settings() 

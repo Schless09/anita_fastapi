@@ -1,15 +1,13 @@
 from typing import Dict, Any, Optional
 import logging
 import httpx
-from app.config import get_settings
+from app.config.settings import Settings
 
 # Set up logging
 logger = logging.getLogger(__name__)
 
-settings = get_settings()
-
 class RetellService:
-    def __init__(self):
+    def __init__(self, settings: Settings):
         self.api_key = settings.retell_api_key
         self.phone_number = settings.retell_from_number
         self.webhook_url = settings.retell_webhook_url
@@ -50,10 +48,27 @@ class RetellService:
             
             logger.info(f"Formatted phone number: {phone}")
             
+            # Extract first name from full_name if provided
+            string_vars = dynamic_variables.copy()
+            
+            # Handle first_name correctly
+            if 'full_name' in string_vars and string_vars.get('full_name'):
+                full_name = string_vars.get('full_name')
+                # Extract first name from full name
+                first_name = full_name.split(' ')[0] if full_name else "Candidate"
+                string_vars['first_name'] = first_name
+                # Remove full_name since we only need first_name for Retell
+                del string_vars['full_name']
+                logger.info(f"Using first_name '{first_name}' extracted from full_name '{full_name}'")
+            elif not string_vars.get('first_name'):
+                # Fallback if no first_name and no full_name
+                string_vars['first_name'] = "Candidate"
+                logger.info("Using default first_name 'Candidate' as no name was provided")
+            
             # Convert all dynamic variables to strings
-            string_vars = {
+            clean_vars = {
                 key: str(value) if value is not None else ""
-                for key, value in dynamic_variables.items()
+                for key, value in string_vars.items()
             }
             
             # Get candidate data to get phone number
@@ -72,7 +87,7 @@ class RetellService:
                         "metadata": {
                             "candidate_id": candidate_id
                         },
-                        "retell_llm_dynamic_variables": string_vars  # Use string-converted variables
+                        "retell_llm_dynamic_variables": clean_vars  # Use string-converted variables
                     }
                 )
                 
@@ -146,6 +161,31 @@ class RetellService:
         except Exception as e:
             logger.error(f"Error getting call data: {str(e)}")
             raise Exception(f"Error getting call data from Retell: {str(e)}")
+
+    async def get_full_transcript(self, call_id: str) -> Dict[str, Any]:
+        """
+        Get the full transcript for a call, including the complete transcript text and transcript object.
+        """
+        try:
+            logger.info(f"Getting full transcript for call: {call_id}")
+            call_data = await self.get_call(call_id)
+            
+            # Extract transcript data
+            transcript = call_data.get('transcript', '')
+            transcript_object = call_data.get('transcript_object', [])
+            
+            if not transcript and not transcript_object:
+                logger.warning(f"No transcript data found for call {call_id}")
+                return {}
+            
+            return {
+                'transcript': transcript,
+                'transcript_object': transcript_object
+            }
+            
+        except Exception as e:
+            logger.error(f"Error getting full transcript: {str(e)}")
+            raise Exception(f"Error getting full transcript from Retell: {str(e)}")
 
     async def cancel_call(self, call_id: str) -> Dict[str, Any]:
         """

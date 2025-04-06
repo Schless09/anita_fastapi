@@ -5,10 +5,15 @@ import asyncio
 from unittest.mock import Mock, AsyncMock
 
 from app.main import app
-from app.config import get_settings, get_supabase, get_pinecone
+from app.config import get_settings
 from app.services.candidate_service import CandidateService
 from app.services.job_service import JobService
 from app.agents.brain_agent import BrainAgent
+from app.services.openai_service import OpenAIService
+from app.services.matching_service import MatchingService
+from app.services.retell_service import RetellService
+from app.config.settings import Settings
+from supabase._async.client import AsyncClient
 
 @pytest.fixture(scope="session")
 def event_loop():
@@ -29,18 +34,6 @@ def mock_supabase():
     mock = AsyncMock()
     mock.table.return_value.insert.return_value.execute.return_value = {"data": [{"id": "test-id"}]}
     mock.table.return_value.select.return_value.execute.return_value = {"data": [{"id": "test-id"}]}
-    return mock
-
-@pytest.fixture
-def mock_pinecone():
-    """Create a mock Pinecone client."""
-    mock = AsyncMock()
-    mock.upsert.return_value = {"status": "success"}
-    mock.query.return_value = {
-        "matches": [
-            {"id": "test-id", "score": 0.9}
-        ]
-    }
     return mock
 
 @pytest.fixture
@@ -80,9 +73,24 @@ def test_job_data() -> Dict[str, Any]:
     }
 
 @pytest.fixture
-def mock_brain_agent(mock_supabase, mock_pinecone, mock_openai):
+def mock_brain_agent(mock_supabase, mock_openai):
     """Create a mock BrainAgent with mocked dependencies."""
-    agent = BrainAgent()
-    agent.candidate_service = AsyncMock()
-    agent.job_service = AsyncMock()
+    mock_settings = Mock(spec=Settings)
+    mock_settings.environment = "development"
+    mock_settings.openai_api_key = "fake_key"
+    
+    mock_candidate_service = AsyncMock(spec=CandidateService)
+    mock_openai_service = AsyncMock(spec=OpenAIService)
+    mock_matching_service = AsyncMock(spec=MatchingService)
+    mock_retell_service = AsyncMock(spec=RetellService)
+    mock_supabase_client = AsyncMock(spec=AsyncClient)
+    
+    agent = BrainAgent(
+        supabase_client=mock_supabase_client,
+        candidate_service=mock_candidate_service,
+        openai_service=mock_openai_service,
+        matching_service=mock_matching_service,
+        retell_service=mock_retell_service,
+        settings=mock_settings
+    )
     return agent 

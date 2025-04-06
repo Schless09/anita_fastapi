@@ -8,7 +8,8 @@ import logging
 from pydantic import Field, PrivateAttr, BaseModel
 from .base import parse_llm_json_response
 from app.services.vector_service import VectorService
-from app.config.settings import get_table_name
+from app.config.utils import get_table_name
+from app.config.settings import Settings
 import traceback
 
 logger = logging.getLogger(__name__)
@@ -26,11 +27,20 @@ class JobSearchInput(BaseModel):
     # Add filters later if needed
 
 class VectorStoreTool(BaseTool):
-    """Tool for managing vector store operations. Implements singleton pattern."""
+    """Tool for interacting with the vector store."""
     
-    name = "vector_store"
-    description = "Manage vector store operations for jobs and candidates. Use for storing or searching job and candidate data."
-    args_schema = VectorStoreInput
+    name: str = "vector_store"
+    description: str = """Useful for searching and retrieving information from the vector store.
+    Input should be a JSON string with the following fields:
+    - query: The search query
+    - table: The table to search in (candidates or jobs)
+    - limit: (optional) Maximum number of results to return
+    - filter: (optional) Additional filter criteria
+    """
+    args_schema: Type[BaseModel] = VectorStoreInput
+    return_direct: bool = True
+    _vector_service: VectorService = PrivateAttr()
+    _settings: Settings = PrivateAttr()
     
     # Class-level singleton instance
     _instance: ClassVar[Optional['VectorStoreTool']] = None
@@ -55,13 +65,13 @@ class VectorStoreTool(BaseTool):
             object.__setattr__(cls._instance, '_initialized', False)
         return cls._instance
     
-    def __init__(self):
+    def __init__(self, vector_service: VectorService, settings: Settings):
         """Initialize the vector store tool."""
         if not self._initialized:
             super().__init__()
             
             # Initialize Vector service
-            self.vector_service = VectorService()
+            self.vector_service = vector_service
             
             # Create OpenAI embeddings
             self.embeddings = OpenAIEmbeddings()
@@ -316,7 +326,7 @@ class VectorStoreTool(BaseTool):
             response = await self.vector_service.supabase.table(self.jobs_table).select("*").in_('id', job_ids).execute()
 
             if response.data:
-                # Combine Supabase data with Pinecone scores
+                # Combine Supabase data with similarity scores (already included from RPC)
                 detailed_jobs = []
                 for job in response.data:
                     job_id = job.get('id')

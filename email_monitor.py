@@ -1,5 +1,5 @@
 from fastapi import FastAPI, Request, HTTPException
-from agents.interaction_agent import InteractionAgent
+from app.agents.interaction_agent import InteractionAgent
 from typing import Dict, Any
 import json
 import re
@@ -53,8 +53,8 @@ def extract_email_thread_info(email_data: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 @app.post("/email/webhook")
-async def handle_incoming_email(request: Request):
-    """Handle incoming emails from SendGrid webhook."""
+async def receive_email(request: Request):
+    """Handle incoming emails from an email webhook (e.g., Gmail push notifications or other provider)."""
     try:
         # Parse the incoming email data
         form_data = await request.form()

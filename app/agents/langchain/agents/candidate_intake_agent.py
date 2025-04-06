@@ -10,10 +10,13 @@ import traceback
 from langchain.prompts import PromptTemplate
 from datetime import datetime
 from app.config.supabase import get_supabase_client
-from app.config.settings import get_table_name
+from app.config.utils import get_table_name
+from app.config.settings import Settings
 from postgrest import AsyncPostgrestClient
 import json
 from app.services.openai_service import OpenAIService
+from app.services.vector_service import VectorService
+import asyncio
 
 logger = logging.getLogger(__name__)
 
@@ -55,10 +58,11 @@ class CandidateProfile(BaseModel):
 class CandidateIntakeAgent(BaseAgent):
     def __init__(
         self,
+        vector_service: VectorService,
+        settings: Settings,
         model_name: str = "gpt-4-turbo-preview",
         temperature: float = 0.7,
         memory: Optional[Any] = None,
-        vector_store: Optional[VectorStoreTool] = None,
         candidate_id: str = "",
         supabase: AsyncPostgrestClient = None
     ):
@@ -67,12 +71,16 @@ class CandidateIntakeAgent(BaseAgent):
         # Initialize tools as instance attributes
         self.pdf_processor = PDFProcessor()
         self.resume_parser = ResumeParser()
-        self.vector_store = vector_store or VectorStoreTool()
+        self.vector_store = VectorStoreTool(vector_service=vector_service, settings=settings)
         self.email_tool = EmailTool()
-        self.matching_tool = MatchingTool(vector_store=vector_store)
+        self.matching_tool = MatchingTool(vector_store=self.vector_store)
         
         # Initialize Supabase client
         self.supabase: AsyncPostgrestClient = supabase or get_supabase_client()
+        
+        # Store services for background processing
+        self.vector_service = vector_service
+        self.settings = settings
         
         # Set tools list for the agent
         self.tools = [
@@ -193,114 +201,70 @@ class CandidateIntakeAgent(BaseAgent):
         self,
         resume_content: bytes,
         candidate_email: str,
-        candidate_id: str,
-        additional_info: Optional[Dict[str, Any]] = None
+        candidate_id: str
     ) -> Dict[str, Any]:
+        """Process a new candidate submission."""
         try:
-            logger.info("\n=== Starting Candidate Intake Process ===")
-            logger.info(f"Processing candidate: {candidate_email}")
-            
-            # Step 1: Parse Resume
-            logger.info("\nStep 1: 📄 Parsing Resume")
+            # Step 1: Quick Resume Extraction
+            logger.info("\nStep 1: ⚡ Quick Resume Extraction")
             logger.info("----------------------------------------")
             
-            # First convert PDF to text
-            pdf_result = await self.pdf_processor._arun(resume_content)
-            if pdf_result["status"] != "success":
-                logger.error(f"❌ PDF Processing Failed: {pdf_result}")
-                return pdf_result
+            # First, check if candidate is already being processed
+            candidate_status = await self.supabase.table(self.candidates_table)\
+                .select('status')\
+                .eq('id', candidate_id)\
+                .single()\
+                .execute()
+            
+            if candidate_status.data and candidate_status.data.get('status') in ['processing', 'completed']:
+                logger.warning(f"Candidate {candidate_id} is already being processed or completed. Skipping duplicate processing.")
+                return {
+                    "status": "skipped",
+                    "message": "Candidate is already being processed or completed"
+                }
+
+            # Extract first name from email for Retell
+            full_name = candidate_email.split('@')[0].replace('.', ' ').title()
+            first_name = full_name.split(' ')[0]
+
+            # Process PDF with quick extraction
+            quick_result = self.pdf_processor._quick_extract(resume_content)
+
+            if quick_result["status"] != "success":
+                error_msg = quick_result.get("error", "Unknown error in quick extraction")
+                logger.error(f"❌ Quick PDF Extraction Failed: {error_msg}")
+                return quick_result
                 
-            # Then parse the text content
-            parse_result = await self.resume_parser._arun(pdf_result["text_content"])
+            # Store essential info immediately
+            essential_info = quick_result["essential_info"]
+            logger.info("Successfully extracted essential info:")
+            logger.info(f"- Current Title: {essential_info.get('current_title', 'Not found')}")
+            logger.info(f"- Current Company: {essential_info.get('current_company', 'Not found')}")
+            logger.info(f"- Email: {essential_info.get('email', 'Not found')}")
+            logger.info(f"- Phone: {essential_info.get('phone', 'Not found')}")
+            logger.info(f"- Skills: {len(essential_info.get('skills', []))} skills found")
             
-            if parse_result["status"] != "success":
-                logger.error(f"❌ Resume Parsing Failed: {parse_result}")
-                return parse_result
-            logger.info("✅ Resume parsed successfully")
+            # Add both full_name and first_name to essential_info
+            essential_info["full_name"] = full_name
+            essential_info["first_name"] = first_name
+            logger.info("✅ Essential info extracted successfully")
             
-            # Step 2: Analyze Resume
-            logger.info("\nStep 2: 🔍 Analyzing Resume")
-            logger.info("----------------------------------------")
-            analysis_result = await self.resume_analysis_chain.ainvoke(
-                {"resume_text": pdf_result["text_content"]}
-            )
-            
-            if not analysis_result:
-                logger.error("❌ Resume Analysis Failed")
-                return {"status": "error", "error": "Failed to analyze resume"}
-            logger.info("✅ Resume analyzed successfully")
-            
-            # Step 3: Create Profile
-            logger.info("\nStep 3: 👤 Creating Profile")
-            logger.info("----------------------------------------")
-            profile_result = await self.profile_creation_chain.ainvoke(
-                {"parsed_data": parse_result["parsed_data"], "analysis": analysis_result}
-            )
-            logger.info("✅ Profile created successfully")
-            
-            # Step 4: Store in Supabase
-            logger.info("\nStep 4: 💾 Storing in Supabase")
+            # Step 2: Trigger background processing
+            logger.info("\nStep 2: 🚀 Triggering Background Processing")
             logger.info("----------------------------------------")
             
-            # Convert AIMessage to string if needed and parse JSON
-            if hasattr(profile_result, 'content'):
-                profile_result = profile_result.content
+            # Start background processing
+            logger.info("Creating background task for full resume processing")
+            asyncio.create_task(self._process_full_resume_background(resume_content, candidate_id))
             
-            try:
-                # Try to parse the profile result as JSON
-                if isinstance(profile_result, str):
-                    # Clean the string to ensure it's valid JSON
-                    profile_result = profile_result.strip()
-                    if profile_result.startswith('```json'):
-                        profile_result = profile_result[7:]
-                    if profile_result.endswith('```'):
-                        profile_result = profile_result[:-3]
-                    profile_result = profile_result.strip()
-                    
-                    # Parse the cleaned JSON
-                    profile_result = json.loads(profile_result)
-                    
-                    # Validate the structure
-                    required_fields = ["basic_info", "professional_summary", "skills", "experience", "education"]
-                    for field in required_fields:
-                        if field not in profile_result:
-                            raise ValueError(f"Missing required field: {field}")
-                            
-            except json.JSONDecodeError as e:
-                logger.error(f"❌ Failed to parse profile result as JSON: {str(e)}")
-                logger.error(f"❌ Raw profile result: {profile_result}")
-                return {
-                    "status": "error",
-                    "error": "Failed to parse profile result as JSON"
-                }
-            except ValueError as e:
-                logger.error(f"❌ Invalid profile structure: {str(e)}")
-                logger.error(f"❌ Profile result: {profile_result}")
-                return {
-                    "status": "error",
-                    "error": f"Invalid profile structure: {str(e)}"
-                }
+            logger.info("✅ Background processing triggered")
             
-            # Update candidate profile in Supabase
-            profile_data = {
-                "profile_json": profile_result,
-                "status": "submitted",
-                "updated_at": datetime.utcnow().isoformat()
-            }
-            
-            # Correctly use profile_data for the update
-            await self.supabase.table(self.candidates_table).update({
-                'profile_json': profile_data["profile_json"],
-                'status': profile_data["status"],
-                'updated_at': profile_data["updated_at"]
-            }).eq('id', self.candidate_id).execute()
-            
-            logger.info("✅ Profile stored in Supabase")
-            
+            # Return immediately with essential info
             return {
                 "status": "success",
                 "candidate_id": candidate_id,
-                "profile": profile_result
+                "essential_info": essential_info,
+                "message": "Full resume processing started in background"
             }
             
         except Exception as e:
@@ -310,6 +274,154 @@ class CandidateIntakeAgent(BaseAgent):
                 "status": "error",
                 "error": str(e)
             }
+
+    async def _process_full_resume_background(
+        self,
+        resume_content: bytes,
+        candidate_id: str
+    ) -> None:
+        """Process the full resume in the background."""
+        try:
+            logger.info(f"\n=== Starting Background Processing for Candidate {candidate_id} ===")
+            
+            # Update status to processing
+            logger.info("Updating candidate status to 'processing'")
+            await self.supabase.table(self.candidates_table).update({
+                "status": "processing",
+                "updated_at": datetime.utcnow().isoformat()
+            }).eq("id", candidate_id).execute()
+            logger.info("Status updated successfully")
+
+            # Process the full resume in chunks
+            try:
+                logger.info("Starting full PDF processing")
+                # First get the text content using _arun
+                result = await self.pdf_processor._arun(resume_content)
+                if result["status"] != "success":
+                    error_msg = result.get("error", "Unknown error in PDF processing")
+                    logger.error(f"Failed to process PDF: {error_msg}")
+                    raise Exception(f"Failed to process PDF: {error_msg}")
+
+                logger.info(f"Successfully processed PDF with {result.get('num_pages', 0)} pages")
+                
+                # Parse the resume in chunks to avoid timeout
+                logger.info("Starting chunked text processing")
+                text_chunks = self._chunk_text(result["text_content"])
+                logger.info(f"Split text into {len(text_chunks)} chunks")
+                
+                parsed_data = {}
+                max_retries = 3
+                
+                for i, chunk in enumerate(text_chunks):
+                    logger.info(f"Processing chunk {i+1}/{len(text_chunks)}")
+                    retry_count = 0
+                    chunk_success = False
+                    
+                    while retry_count < max_retries and not chunk_success:
+                        try:
+                            chunk_result = await self.resume_parser.parse_resume(chunk)
+                            if chunk_result["status"] == "success":
+                                logger.info(f"Successfully parsed chunk {i+1}")
+                                # Merge the parsed data
+                                parsed_data = self._merge_parsed_data(parsed_data, chunk_result["profile"])
+                                chunk_success = True
+                            else:
+                                error_msg = chunk_result.get("error", "Unknown error")
+                                logger.warning(f"Failed to parse chunk {i+1} (attempt {retry_count + 1}/{max_retries}): {error_msg}")
+                                retry_count += 1
+                                if retry_count < max_retries:
+                                    await asyncio.sleep(1)  # Wait before retrying
+                        except asyncio.TimeoutError:
+                            logger.warning(f"Timeout processing chunk {i+1} (attempt {retry_count + 1}/{max_retries})")
+                            retry_count += 1
+                            if retry_count < max_retries:
+                                await asyncio.sleep(1)  # Wait before retrying
+                        except Exception as e:
+                            logger.error(f"Error processing chunk {i+1}: {str(e)}")
+                            retry_count += 1
+                            if retry_count < max_retries:
+                                await asyncio.sleep(1)  # Wait before retrying
+                    
+                    if not chunk_success:
+                        logger.error(f"Failed to process chunk {i+1} after {max_retries} attempts")
+                        # Continue with next chunk even if this one failed
+
+                logger.info("Completed chunk processing")
+                logger.info(f"Final parsed data contains {len(parsed_data)} fields")
+
+                # Update status to completed
+                logger.info("Updating candidate status to 'completed'")
+                await self.supabase.table(self.candidates_table).update({
+                    "status": "completed",
+                    "profile_json": parsed_data,
+                    "updated_at": datetime.utcnow().isoformat()
+                }).eq("id", candidate_id).execute()
+                logger.info("Status updated successfully")
+
+            except asyncio.TimeoutError:
+                logger.error("Background processing timed out")
+                await self.supabase.table(self.candidates_table).update({
+                    "status": "error",
+                    "error_message": "Processing timed out",
+                    "updated_at": datetime.utcnow().isoformat()
+                }).eq("id", candidate_id).execute()
+            except Exception as e:
+                logger.error(f"Error in background resume processing: {str(e)}")
+                logger.error(f"Full traceback: {traceback.format_exc()}")
+                await self.supabase.table(self.candidates_table).update({
+                    "status": "error",
+                    "error_message": str(e),
+                    "updated_at": datetime.utcnow().isoformat()
+                }).eq("id", candidate_id).execute()
+
+        except Exception as e:
+            logger.error(f"Error updating candidate status: {str(e)}")
+            logger.error(f"Full traceback: {traceback.format_exc()}")
+
+    def _chunk_text(self, text: str, chunk_size: int = 10000) -> List[str]:
+        """Split text into manageable chunks."""
+        words = text.split()
+        chunks = []
+        current_chunk = []
+        current_size = 0
+
+        for word in words:
+            if current_size + len(word) > chunk_size:
+                chunks.append(" ".join(current_chunk))
+                current_chunk = [word]
+                current_size = len(word)
+            else:
+                current_chunk.append(word)
+                current_size += len(word) + 1  # +1 for space
+
+        if current_chunk:
+            chunks.append(" ".join(current_chunk))
+
+        return chunks
+
+    def _merge_parsed_data(self, existing: Dict[str, Any], new: Dict[str, Any]) -> Dict[str, Any]:
+        """Merge parsed data from different chunks."""
+        merged = existing.copy() if existing else {}
+        
+        for key, value in new.items():
+            if key not in merged:
+                merged[key] = value
+            elif isinstance(value, list):
+                # For lists, append unique items
+                if key not in merged:
+                    merged[key] = []
+                merged[key].extend([item for item in value if item not in merged[key]])
+            elif isinstance(value, dict):
+                # For dicts, recursively merge
+                if key not in merged:
+                    merged[key] = {}
+                merged[key].update(value)
+            else:
+                # For other types, prefer non-empty values
+                if not merged[key] and value:
+                    merged[key] = value
+        
+        return merged
 
     async def screen_candidate(self, candidate_data: Dict[str, Any]) -> Dict[str, Any]:
         """Screen a candidate based on their data."""

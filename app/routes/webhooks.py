@@ -3,6 +3,8 @@ from fastapi import APIRouter, Depends, HTTPException, Request, Header, status
 from typing import Dict, Any, Optional
 
 from app.services.vector_service import VectorService
+# Import the provider function
+from app.dependencies import get_vector_service
 # Assuming you have a way to get settings, e.g., API keys or webhook secrets
 # from app.config import get_settings
 
@@ -23,7 +25,8 @@ router = APIRouter()
 async def handle_new_job_webhook(
     request: Request,
     payload: Dict[str, Any],
-    vector_service: VectorService = Depends(VectorService),
+    # Use the provider function in Depends
+    vector_service: VectorService = Depends(get_vector_service),
     # Optional: Add header for secret validation
     # authorization: Optional[str] = Header(None),
 ):

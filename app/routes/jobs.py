@@ -1,4 +1,4 @@
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Depends
 from typing import Dict, Any, List, Optional
 from app.services.job_service import JobService
 from app.schemas.job_posting import JobPosting
@@ -6,10 +6,10 @@ import logging
 import uuid
 from datetime import datetime
 from pydantic import BaseModel, Field, ValidationError
+from app.dependencies import get_job_service
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
-job_service = JobService()
 
 class Location(BaseModel):
     city: List[str]
@@ -130,7 +130,7 @@ class JobSubmission(BaseModel):
     recruiter_pitch_points: List[str]
 
 @router.post("/jobs/submit")
-async def submit_job(job_data: JobPosting):
+async def submit_job(job_data: JobPosting, job_service: JobService = Depends(get_job_service)):
     """
     Handle new job submission and generate embeddings.
     """

@@ -2,12 +2,48 @@ import pytest
 from typing import Dict, Any
 from app.services.candidate_service import CandidateService
 from app.services.job_service import JobService
-from app.config import get_settings, get_supabase
+from app.config import get_settings, get_supabase_client
+from app.config.settings import Settings
+from app.config.utils import get_table_name
+from app.services.openai_service import OpenAIService
+from app.services.vector_service import VectorService
+from supabase._async.client import AsyncClient
+from app.services.retell_service import RetellService
 
+# Instantiate dependencies for testing
+# It's generally better practice to use pytest fixtures for this,
+# but let's fix the global instantiation first.
 settings = get_settings()
-supabase = get_supabase()
-candidate_service = CandidateService()
-job_service = JobService()
+supabase: AsyncClient = get_supabase_client()
+# Remove old CandidateService instantiation
+# candidate_service = CandidateService() # Assuming this doesn't need changes yet, or will be refactored
+
+# Instantiate dependencies for JobService (and potentially CandidateService)
+openai_service = OpenAIService(settings=settings)
+candidates_table = get_table_name("candidates")
+jobs_table = get_table_name("jobs")
+vector_service = VectorService(
+    openai_service=openai_service,
+    supabase_client=supabase,
+    candidates_table=candidates_table,
+    jobs_table=jobs_table
+)
+retell_service = RetellService(settings=settings)
+
+# Instantiate CandidateService with its dependencies
+candidate_service = CandidateService(
+    supabase_client=supabase,
+    retell_service=retell_service,
+    openai_service=openai_service,
+    settings=settings
+)
+
+# Instantiate JobService with its dependencies
+job_service = JobService(
+    supabase_client=supabase,
+    vector_service=vector_service,
+    openai_service=openai_service
+)
 
 @pytest.mark.asyncio
 async def test_candidate_insertion():

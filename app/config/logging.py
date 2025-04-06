@@ -10,17 +10,10 @@ class JSONFormatter(logging.Formatter):
     """
     def format(self, record: logging.LogRecord) -> str:
         log_data: Dict[str, Any] = {
-            'timestamp': datetime.utcnow().isoformat(),
             'level': record.levelname,
             'message': record.getMessage(),
-            'module': record.module,
-            'function': record.funcName,
-            'line': record.lineno
+            'source': f"{record.filename}:{record.lineno}"
         }
-
-        # Add extra fields if they exist
-        if hasattr(record, 'extra'):
-            log_data.update(record.extra)
 
         # Add exception info if it exists
         if record.exc_info:

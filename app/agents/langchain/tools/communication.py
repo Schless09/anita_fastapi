@@ -1,28 +1,42 @@
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Type
 from langchain.tools import BaseTool
 from langchain_openai import ChatOpenAI
 from datetime import datetime, timedelta
 import os
-from sendgrid import SendGridAPIClient
-from sendgrid.helpers.mail import Mail, Email, To, Content
-# import google.auth
-# from google.oauth2.credentials import Credentials
-# from google_auth_oauthlib.flow import InstalledAppFlow
-# from google.auth.transport.requests import Request
-# import pickle
-from app.config import get_settings, get_sendgrid_client  # Removed get_google_calendar_client
-from pydantic import Field
+from app.config import get_settings
+from app.config.settings import Settings
+from pydantic import Field, BaseModel, PrivateAttr
 from .base import parse_llm_json_response
+import logging
+
+logger = logging.getLogger(__name__)
+
+class EmailInput(BaseModel):
+    """Input schema for email operations."""
+    to: str = Field(..., description="Email address of the recipient")
+    subject: str = Field(..., description="Subject of the email")
+    body: str = Field(..., description="Content of the email")
+    cc: Optional[List[str]] = Field(default=None, description="List of CC recipients")
+    bcc: Optional[List[str]] = Field(default=None, description="List of BCC recipients")
 
 class EmailTool(BaseTool):
-    """Tool for handling email communications."""
+    """Tool for sending emails."""
     
-    name = "email"
-    description = "Handle email communications"
-    # Define fields that will be set in __init__
+    name: str = "email"
+    description: str = """Useful for sending emails to candidates or recruiters.
+    Input should be a JSON string with the following fields:
+    - to: Email address of the recipient
+    - subject: Subject of the email
+    - body: Content of the email
+    - cc: (optional) List of CC recipients
+    - bcc: (optional) List of BCC recipients
+    """
+    args_schema: Type[BaseModel] = EmailInput
+    return_direct: bool = True
+    _settings: Settings = PrivateAttr()
     llm: ChatOpenAI = Field(default=None)
-    sg: SendGridAPIClient = Field(default=None)
-    from_email: str = Field(default=None)
+    settings: Any = Field(default=None)
+    from_email: Optional[str] = Field(default=None)
     
     class Config:
         """Configuration for this pydantic object."""
@@ -32,21 +46,29 @@ class EmailTool(BaseTool):
         """Initialize the email tool."""
         super().__init__()
         
+        # Get settings and store them
+        self.settings = get_settings()
+        
         # Set up LLM
         self.llm = ChatOpenAI(
-            model_name="gpt-4-turbo-preview",
-            temperature=0.7
+            model_name=self.settings.openai_model,
+            temperature=0.7,
+            api_key=self.settings.openai_api_key
         )
         
-        # Initialize SendGrid
-        self.sg = SendGridAPIClient(os.getenv("SENDGRID_API_KEY"))
-        self.from_email = os.getenv("SENDGRID_SENDER_EMAIL")
+        # Set sender email from settings
+        self.from_email = self.settings.sender_email
+        if not self.from_email:
+            logger.warning("Sender email not configured in settings.")
 
     def _run(self, operation: str, **kwargs) -> Dict[str, Any]:
         """Run email operations."""
         try:
             if operation == "send_email":
-                return self._send_email(**kwargs)
+                return {
+                    "status": "error",
+                    "error": "Email sending is not implemented yet."
+                }
             elif operation == "generate_email":
                 return self._generate_email(**kwargs)
             else:
@@ -64,35 +86,6 @@ class EmailTool(BaseTool):
     async def _arun(self, operation: str, **kwargs) -> Dict[str, Any]:
         """Async version of email operations."""
         return self._run(operation, **kwargs)
-
-    def _send_email(
-        self,
-        to_email: str,
-        subject: str,
-        content: str
-    ) -> Dict[str, Any]:
-        """Send an email using SendGrid."""
-        try:
-            message = Mail(
-                from_email=self.from_email,
-                to_emails=to_email,
-                subject=subject,
-                html_content=content
-            )
-            
-            response = self.sg.send(message)
-            
-            return {
-                "status": "success",
-                "success": response.status_code == 202,
-                "message_id": response.headers.get("X-Message-Id")
-            }
-            
-        except Exception as e:
-            return {
-                "status": "error",
-                "error": str(e)
-            }
 
     def _generate_email(
         self,
