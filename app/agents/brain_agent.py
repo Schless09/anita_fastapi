@@ -85,7 +85,13 @@ class BrainAgent:
                 "interviews_scheduled": 0,
                 "follow_ups_sent": 0,
                 "embeddings_generated": 0,
-                "successful_matches_stored": 0
+                "successful_matches_stored": 0,
+                "emails_sent": {
+                    "job_matches": 0,
+                    "missed_call": 0,
+                    "no_matches": 0,
+                    "call_too_short": 0
+                }
             },
             "transactions": {}
         }
