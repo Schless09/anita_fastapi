@@ -442,6 +442,9 @@ Do not add information not present in the transcript. Ensure your output is ONLY
                 "technologies_to_avoid": ["string"]
             }}"""
             
+            # <<< ADD DEBUG LOG: Log the transcript being sent >>>
+            logger.debug(f"Attempting to extract info from transcript (length {len(transcript)}): {transcript[:500]}...") # Log first 500 chars
+            
             response = await self.client.chat.completions.create(
                 model=self.model, # Use configured model name
                 messages=[
