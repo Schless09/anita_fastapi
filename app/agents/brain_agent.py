@@ -738,13 +738,43 @@ class BrainAgent:
                                 # --- Prepare Match Records (Only if matches found) ---
                                 match_records = []
                                 if matches:
-                                    # ... (Existing logic to prepare match_records remains the same) ...
-                                    pass # Placeholder for brevity
+                                    for match in matches:
+                                        # Generate match reason and tags using OpenAI
+                                        match_reason_data = await self._generate_match_reason_and_tags(
+                                            candidate_text=str(merged_profile_data),
+                                            job_text=str(match.get('job_data', {})),
+                                            match_score=match.get('similarity', 0)
+                                        )
+                                        
+                                        # Prepare the match record
+                                        match_record = {
+                                            'id': str(uuid.uuid4()),
+                                            'candidate_id': candidate_id,
+                                            'job_id': match.get('job_id'),
+                                            'match_score': match.get('similarity', 0),
+                                            'match_reason': match_reason_data.get('match_reason') if match_reason_data else None,
+                                            'match_tags': match_reason_data.get('match_tags') if match_reason_data else [],
+                                            'status': 'pending',
+                                            'is_automatic_match': True,
+                                            'next_step': 'Review match details',
+                                            'matched_at': datetime.utcnow().isoformat(),
+                                            'created_at': datetime.utcnow().isoformat(),
+                                            'updated_at': datetime.utcnow().isoformat()
+                                        }
+                                        match_records.append(match_record)
 
                                 # --- Store Match Records --- 
                                 if match_records:
-                                    # ... (Existing logic to store match_records remains the same) ...
-                                    pass # Placeholder for brevity
+                                    try:
+                                        # Insert match records into the database
+                                        insert_result = await self.supabase.table(self.matches_table).insert(match_records).execute()
+                                        if insert_result.data:
+                                            logger.info(f"Successfully stored {len(match_records)} match records")
+                                            self.state["metrics"]["successful_matches_stored"] += len(match_records)
+                                        else:
+                                            logger.error("Failed to store match records")
+                                    except Exception as store_err:
+                                        logger.error(f"Error storing match records: {store_err}")
                                 else:
                                     logger.info("No match records were prepared.")
 
