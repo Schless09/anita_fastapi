@@ -435,12 +435,7 @@ class OpenAIService:
                 "project_visibility_preference": ["string"],
                 "desired_company_stage": ["string"],
                 "preferred_company_size": ["string"],
-                "technologies_to_avoid": ["string"],
-                "call_status": {{
-                    "is_complete": false,
-                    "reason": "string",
-                    "follow_up_needed": true
-                }}
+                "technologies_to_avoid": ["string"]
             }}"""
             
             response = await self.client.chat.completions.create(
@@ -451,37 +446,11 @@ class OpenAIService:
                 ],
                 response_format={"type": "json_object"}
             )
-            
-            if response and response.choices and response.choices[0].message.content:
-                extracted_info = json.loads(response.choices[0].message.content)
-                
-                # Analyze if the call was complete
-                transcript_lines = transcript.split('\n')
-                if len(transcript_lines) < 5:  # Changed threshold from 20 to 5 for testing
-                    extracted_info['call_status'] = {
-                        'is_complete': False,
-                        'reason': 'Conversation too short',
-                        'follow_up_needed': True
-                    }
-                elif not any('experience' in line.lower() or 'background' in line.lower() for line in transcript_lines):
-                    extracted_info['call_status'] = {
-                        'is_complete': False,
-                        'reason': 'No background/experience discussed',
-                        'follow_up_needed': True
-                    }
-                else:
-                    extracted_info['call_status'] = {
-                        'is_complete': True,
-                        'reason': 'Sufficient information gathered',
-                        'follow_up_needed': False
-                    }
-                
-                logger.info(f"Successfully extracted transcript info: {json.dumps(extracted_info, indent=2)}")
-                return extracted_info
-            else:
-                logger.error("No content in OpenAI response")
-                return {}
-                
+            extracted_info = json.loads(response.choices[0].message.content)
+            logger.info("Successfully extracted transcript info.")
+            logger.debug(f"Extracted data: {json.dumps(extracted_info, indent=2)}")
+            return extracted_info
+
         except Exception as e:
-            logger.error(f"Error extracting transcript info: {str(e)}")
+            logger.error(f"Error extracting transcript info: {e}")
             return {} 
