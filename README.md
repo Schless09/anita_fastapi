@@ -280,3 +280,5 @@ This project is licensed under the MIT License - see the LICENSE file for detail
 ---
 
 _Note: Recent updates include migration from Pinecone/SendGrid to Supabase vectors/alternative email and deployment configuration fixes (as of commit xxxxxxx)._
+
+Created by Harrison Franke & Andrew Schuessler

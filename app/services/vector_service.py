@@ -230,7 +230,7 @@ class VectorService:
                 "match_jobs", 
                 {
                     "query_embedding": query_vector,
-                    "match_threshold": 0.5,  # Existing threshold
+                    "match_threshold": 0.1,  # Existing threshold
                     "match_count": top_k,
                     "environment": environment # Pass the environment
                 }

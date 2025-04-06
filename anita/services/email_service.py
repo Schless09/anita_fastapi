@@ -358,9 +358,9 @@ async def send_no_matches_email(
 
 Thanks for taking the time to speak with me.
 
-We've reviewed your profile against our current openings. While we don't have an immediate match that meets your preferences right now, we're constantly getting new roles.
+I've reviewed your profile against our current openings. While I don't have an immediate match that meets your preferences right now, I'm constantly getting new roles.
 
-We'll keep your profile active and reach out as soon as a suitable opportunity comes up!
+I'll keep your profile active and reach out as soon as a suitable opportunity comes up!
 
 Best regards,
 Anita, your personal career co-pilot
@@ -370,8 +370,8 @@ Anita, your personal career co-pilot
 <html><body>
 <p>{greeting}</p>
 <p>Thanks for taking the time to speak with me.</p>
-<p>We've reviewed your profile against our current openings. While we don't have an immediate match that meets your preferences right now, we're constantly getting new roles.</p>
-<p>We'll keep your profile active and reach out as soon as a suitable opportunity comes up!</p>
+<p>I've reviewed your profile against our current openings. While I don't have an immediate match that meets your preferences right now, I'm constantly getting new roles.</p>
+<p>I'll keep your profile active and reach out as soon as a suitable opportunity comes up!</p>
 <p>Best regards,<br>Anita, your personal career co-pilot</p>
 </body></html>
 """.strip()
@@ -429,15 +429,15 @@ async def send_call_too_short_email(
 
     plain_text_body = (
         f"{greeting}\n\n"
-        "It was great speaking with you, but we\'ll need more information to complete your profile and match you with jobs. \n"
-        "Let us know when\'s a good time to call you back.\n\n"
+        "It was great speaking with you, but I\'ll need more information to complete your profile and match you with jobs. \n"
+        "Let me know when\'s a good time to call you back.\n\n"
         "Best regards,\nAnita, Your personal career co-pilot"
     )
 
     html_body = (
         f"<html><body><h2>{greeting}</h2>"
-        "<p>It was great speaking with you, but we\'ll need more information to complete your profile and match you with jobs.</p>"
-        "<p>Let us know when\'s a good time to call you back.</p>"
+        "<p>It was great speaking with you, but I\'ll need more information to complete your profile and match you with jobs.</p>"
+        "<p>Let me know when\'s a good time to call you back.</p>"
         "<p>Best regards,<br>Anita, Your personal career co-pilot</p></body></html>"
     )
 
