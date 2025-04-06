@@ -780,37 +780,51 @@ class BrainAgent:
 
                                 # --- Email Logic (Based ONLY on Matches Found/Not Found) --- 
                                 if candidate_email:
-                                    # Check if high_scoring_jobs were generated (dependent on match_records being processed)
-                                    MATCH_SCORE_THRESHOLD = 0.40
-                                    high_scoring_jobs = []
-                                    if match_records: # Check if we actually *generated* records to send
-                                        # ... (Existing logic to query top jobs from stored matches) ...
-                                        pass # Placeholder for brevity
+                                    # Filter matches based on score threshold
+                                    MATCH_SCORE_THRESHOLD = 0.50
+                                    high_scoring_jobs = [
+                                        {
+                                            'job_id': match.get('job_id'),
+                                            'job_title': match.get('title'),
+                                            'company': match.get('company'),
+                                            'job_url': f"https://app.anita.ai/jobs/{match.get('job_id')}"
+                                        }
+                                        for match in matches
+                                        if match.get('similarity', 0) >= MATCH_SCORE_THRESHOLD
+                                    ]
 
                                     # Decide which email to send based on high_scoring_jobs list
                                     if high_scoring_jobs:
                                         logger.info(f"Attempting to send job match email to {candidate_email}...")
                                         try:
-                                            await send_job_match_email(...) # Correct arguments
-                                            # ... logging ...
-                                        except Exception as email_call_err: logger.error(...) # <<< Potential fix: ensure this logger call is correct
+                                            await send_job_match_email(
+                                                recipient_email=candidate_email,
+                                                candidate_name=candidate_name,
+                                                job_matches=high_scoring_jobs,
+                                                candidate_id=uuid.UUID(candidate_id),
+                                                supabase_client=self.supabase
+                                            )
+                                            self.state["metrics"]["emails_sent"]["job_matches"] += 1
+                                            self._update_transaction(process_id, "email_sent", "job_matches_success")
+                                            logger.info(f"Successfully sent job match email to {candidate_email}.")
+                                        except Exception as email_call_err:
+                                            logger.error(f"Error sending job match email: {email_call_err}")
+                                            self._update_transaction(process_id, "email_sent", "job_matches_failed", {"error": str(email_call_err)})
                                     else:
-                                        # Send no_matches email if embedding worked but no matches found/met threshold
+                                        # Send no_matches email if no matches meet the threshold
                                         logger.info(f"Sending 'no matches' email to {candidate_email}...")
                                         try:
-                                            # <<< FIX: Use the candidate_name fetched directly from DB, not from merged_profile_data >>>
-                                            name_to_use = candidate_name if candidate_name else 'Candidate' # Use fetched name, default if None/empty
+                                            name_to_use = candidate_name if candidate_name else 'Candidate'
                                             await send_no_matches_email(
-                                                recipient_email=candidate_email, 
-                                                candidate_name=name_to_use, # Pass the correct name
+                                                recipient_email=candidate_email,
+                                                candidate_name=name_to_use,
                                                 candidate_id=candidate_id,
                                                 supabase_client=self.supabase
                                             )
                                             self.state["metrics"]["emails_sent"]["no_matches"] += 1
                                             self._update_transaction(process_id, "email_sent", "no_matches_success")
                                             logger.info(f"Successfully sent 'no matches' email to {candidate_email}.")
-                                        except Exception as no_match_email_err: 
-                                            # Log the actual error variable
+                                        except Exception as no_match_email_err:
                                             logger.error(f"Error sending 'no matches' email: {no_match_email_err}")
                                             self._update_transaction(process_id, "email_sent", "no_matches_failed", {"error": str(no_match_email_err)})
                                 else:
