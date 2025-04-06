@@ -617,7 +617,7 @@ class BrainAgent:
                  duration_seconds = None # Ensure it's None on error
 
             # --- Decision based on Duration --- 
-            MIN_DURATION_SECONDS = 30 # 5 minutes
+            MIN_DURATION_SECONDS = 300 # 5 minutes
 
             if duration_seconds is None or duration_seconds < MIN_DURATION_SECONDS:
                 # === Scenario: Call Too Short ===
@@ -754,7 +754,7 @@ class BrainAgent:
                                             # <<< RE-APPLY FIX: Add missing arguments to the function call >>>
                                             candidate_name = merged_profile_data.get('basic_info', {}).get('full_name', 'Candidate') # Get name, default to 'Candidate'
                                             await send_no_matches_email(
-                                                to_email=candidate_email, 
+                                                recipient_email=candidate_email, 
                                                 candidate_name=candidate_name,
                                                 candidate_id=candidate_id,
                                                 supabase_client=self.supabase
