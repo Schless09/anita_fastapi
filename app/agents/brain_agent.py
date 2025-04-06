@@ -757,11 +757,11 @@ class BrainAgent:
                                         # Send no_matches email if embedding worked but no matches found/met threshold
                                         logger.info(f"Sending 'no matches' email to {candidate_email}...")
                                         try:
-                                            # <<< RE-APPLY FIX: Add missing arguments to the function call >>>
-                                            candidate_name = merged_profile_data.get('basic_info', {}).get('full_name', 'Candidate') # Get name, default to 'Candidate'
+                                            # <<< FIX: Use the candidate_name fetched directly from DB, not from merged_profile_data >>>
+                                            name_to_use = candidate_name if candidate_name else 'Candidate' # Use fetched name, default if None/empty
                                             await send_no_matches_email(
                                                 recipient_email=candidate_email, 
-                                                candidate_name=candidate_name,
+                                                candidate_name=name_to_use, # Pass the correct name
                                                 candidate_id=candidate_id,
                                                 supabase_client=self.supabase
                                             )

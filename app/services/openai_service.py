@@ -379,32 +379,35 @@ class OpenAIService:
         Analyzes the transcript using OpenAI to extract structured information.
         """
         try:
-            # Further revised system message
-            system_message = """You are an expert assistant tasked with extracting specific professional information from a call transcript between a candidate and a recruiter (Anita). Your goal is to populate a structured JSON object with the candidate's professional details based *only* on the provided transcript.
+            # New accuracy-focused system message
+            system_message = """You are an expert assistant analyzing a call transcript between a candidate and a recruiter (Anita). Your task is to extract specific professional details mentioned by the candidate and return them in a structured JSON object.
 
-Focus ONLY on extracting the following types of information if available in the transcript:
-1. Professional summary, current role, current company, years of experience.
-2. Technical skills, specific technologies (tech stack).
-3. Details about past roles (title, company, duration, description highlights).
-4. Education or qualifications.
-5. Industry preferences or restrictions.
-6. Technical preferences or restrictions (e.g., technologies to avoid).
+**Your primary goal is accuracy. Extract information ONLY if it is explicitly stated or clearly implied in the transcript text.**
 
-Do NOT include any personal information like name, email, phone, or location.
-Keep the extracted information professional and focused solely on qualifications and preferences mentioned in the transcript.
+1.  **Scan the transcript** for mentions of:
+    *   Professional summary, current role, current company, years of experience.
+    *   Technical skills, specific technologies (tech stack).
+    *   Details about past roles (title, company, duration, description highlights).
+    *   Education or qualifications.
+    *   Industry preferences or restrictions.
+    *   Work arrangement preferences (remote, hybrid, onsite).
+    *   Salary/compensation expectations.
+    *   Technical preferences or restrictions (e.g., technologies to avoid).
 
-Carefully review the transcript and populate the provided JSON structure with the corresponding information found.
-- For single string fields: Use the extracted string value. If the information is clearly absent, use an empty string ("").
-- For list fields (like skills, experience, education, etc.): Use a JSON list of strings or objects as appropriate. If no relevant items are found, use an empty list ([]).
-- If the transcript contains relevant information but you are unsure how to structure it for a specific field, make a reasonable attempt to populate it based on the schema, favouring inclusion over omission.
-- **CRITICAL:** If the provided transcript is not empty, your response MUST NOT be an entirely empty JSON object (e.g., `{"professional_summary": "", "current_role": "", ...}`). At least attempt to populate fields based on the content.
+2.  **Populate the JSON:** Use the exact JSON structure provided in the user message.
+    *   For string fields: If the information is found, include it. If it is **clearly absent** from the transcript, use an empty string "".
+    *   For list fields: If relevant items are found, include them in a list. If **none** are found, use an empty list ([]).
 
-Do not add information not present in the transcript. Ensure your output is ONLY the valid JSON object specified in the user message, with no extra text before or after it."""
+3.  **CRITICAL RULE: Do NOT invent, infer, or assume any information not present in the transcript.** It is better to have empty fields than incorrect data. Do not add example data. Your output must strictly reflect the conversation.
+
+4.  **Output Format:** Ensure your final output is ONLY the valid JSON object, with no additional text, explanations, or apologies.
+"""
             
+            # user_message remains the same, requesting the specific JSON structure
             user_message = f"""Please extract any available information from this call transcript:
             {transcript}
             
-            Return the information in this exact JSON structure, with empty values ("", []) for any fields not mentioned:
+            Return the information in this exact JSON structure, using empty strings ("") or empty lists ([]) for any fields where the information is clearly absent in the transcript:
             {{
                 "professional_summary": "string or empty string",
                 "current_role": "string or empty string",
@@ -442,8 +445,7 @@ Do not add information not present in the transcript. Ensure your output is ONLY
                 "technologies_to_avoid": ["string"]
             }}"""
             
-            # <<< ADD DEBUG LOG: Log the transcript being sent >>>
-            logger.debug(f"Attempting to extract info from transcript (length {len(transcript)}): {transcript[:500]}...") # Log first 500 chars
+            logger.debug(f"Attempting to extract info from transcript (length {len(transcript)}): {transcript[:500]}...") 
             
             response = await self.client.chat.completions.create(
                 model=self.model, # Use configured model name
@@ -451,8 +453,8 @@ Do not add information not present in the transcript. Ensure your output is ONLY
                     {"role": "system", "content": system_message},
                     {"role": "user", "content": user_message}
                 ],
-                response_format={"type": "json_object"},
-                temperature=0.3 # Set lower temperature
+                response_format={"type": "json_object"}
+                # Temperature parameter removed to use default
             )
             extracted_info = json.loads(response.choices[0].message.content)
             logger.info("Successfully extracted transcript info.")
