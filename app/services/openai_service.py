@@ -445,7 +445,7 @@ class OpenAIService:
                 "technologies_to_avoid": ["string"]
             }}"""
             
-            logger.debug(f"Attempting to extract info from transcript (length {len(transcript)}): {transcript[:500]}...") 
+            logger.debug(f"Attempting to extract info from transcript (length {len(transcript)}): {transcript}")
             
             response = await self.client.chat.completions.create(
                 model=self.model, # Use configured model name
