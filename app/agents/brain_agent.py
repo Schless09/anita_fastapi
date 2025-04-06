@@ -780,7 +780,7 @@ class BrainAgent:
 
                                 # --- Email Logic (Based ONLY on Matches Found/Not Found) --- 
                                 if candidate_email:
-                                    # Filter matches based on score threshold
+                                    # Filter matches based on score threshold and take top 3
                                     MATCH_SCORE_THRESHOLD = 0.50
                                     high_scoring_jobs = [
                                         {
@@ -792,6 +792,9 @@ class BrainAgent:
                                         for match in matches
                                         if match.get('similarity', 0) >= MATCH_SCORE_THRESHOLD
                                     ]
+                                    # Sort by similarity score and take top 3
+                                    high_scoring_jobs.sort(key=lambda x: matches[matches.index(next(m for m in matches if m.get('job_id') == x['job_id']))].get('similarity', 0), reverse=True)
+                                    high_scoring_jobs = high_scoring_jobs[:3]
 
                                     # Decide which email to send based on high_scoring_jobs list
                                     if high_scoring_jobs:
