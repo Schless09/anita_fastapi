@@ -751,11 +751,21 @@ class BrainAgent:
                                         # Send no_matches email if embedding worked but no matches found/met threshold
                                         logger.info(f"Sending 'no matches' email to {candidate_email}...")
                                         try:
-                                            await send_no_matches_email(...) # Correct arguments
-                                            # ... logging ...
+                                            # <<< RE-APPLY FIX: Add missing arguments to the function call >>>
+                                            candidate_name = merged_profile_data.get('basic_info', {}).get('full_name', 'Candidate') # Get name, default to 'Candidate'
+                                            await send_no_matches_email(
+                                                to_email=candidate_email, 
+                                                candidate_name=candidate_name,
+                                                candidate_id=candidate_id,
+                                                supabase_client=self.supabase
+                                            )
+                                            self.state["metrics"]["emails_sent"]["no_matches"] += 1
+                                            self._update_transaction(process_id, "email_sent", "no_matches_success")
+                                            logger.info(f"Successfully sent 'no matches' email to {candidate_email}.")
                                         except Exception as no_match_email_err: 
-                                            # <<< FIX: Log the actual error variable
+                                            # Log the actual error variable
                                             logger.error(f"Error sending 'no matches' email: {no_match_email_err}")
+                                            self._update_transaction(process_id, "email_sent", "no_matches_failed", {"error": str(no_match_email_err)})
                                 else:
                                     logger.warning(f"Could not find email for candidate {candidate_id}...")
 
