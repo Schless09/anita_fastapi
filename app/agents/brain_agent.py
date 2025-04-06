@@ -639,147 +639,156 @@ class BrainAgent:
                 # Stop further processing
                 return {"status": "stopped", "reason": reason, "final_db_status": final_process_status}
             
-            # === Scenario: Call Long Enough - Proceed with Full Processing ===
+            # === Scenario: Call Long Enough - Now also check status ===
             else: 
-                logger.info(f"Call duration ({duration_seconds}s) is sufficient. Proceeding with analysis, embedding, and matching for {candidate_id}.")
-                self._update_transaction(process_id, "outcome_decision", "proceed_full_processing")
-                
-                # --- Main Processing Block (Analysis, Embedding, Matching, Email) ---
-                merged_profile_data = current_profile_for_processing 
-                extracted_info = None
-                # analysis_complete flag no longer used for gating email
+                # <<< ADD CHECK: Duration is sufficient, NOW check status >>>
+                if call_status == 'ended':
+                    # <<< INDENT EXISTING BLOCK: Only run this if duration >= 5min AND status == 'ended' >>>
+                    logger.info(f"Call duration ({duration_seconds}s) sufficient and status is 'ended'. Proceeding with analysis, embedding, and matching for {candidate_id}.")
+                    self._update_transaction(process_id, "outcome_decision", "proceed_full_processing_ended")
+                    
+                    # --- Main Processing Block (Analysis, Embedding, Matching, Email) --- 
+                    merged_profile_data = current_profile_for_processing 
+                    extracted_info = None
+                    # analysis_complete flag no longer used for gating email
 
-                # 2a. Analyze Transcript (Still useful for data extraction)
-                self._update_transaction(process_id, "transcript_analysis", "started")
-                if not transcript or not transcript.strip(): # Handle case where duration >= 5min but transcript somehow missing
-                     logger.error(f"Critical error: Call duration >= 5min for {candidate_id}, but transcript is missing or empty! Skipping analysis.")
-                     self._update_transaction(process_id, "transcript_analysis", "skipped", {"reason": "Transcript missing despite duration"})
-                     # This case shouldn't happen often, but if it does, embedding will likely fail
-                else: 
-                    logger.info(f"Analyzing transcript for {candidate_id} (call duration >= 5 min)")
-                    try:
-                        extracted_info = await self.openai_service.extract_transcript_info(transcript)
-                        # Log the outcome of analysis but don't use its status for gating emails
-                        analysis_status_from_llm = extracted_info.get('call_status', {}).get('is_complete', 'unknown')
-                        analysis_reason_from_llm = extracted_info.get('call_status', {}).get('reason', 'unknown')
-                        logger.info(f"Transcript analysis result (for data extraction): complete={analysis_status_from_llm}, reason='{analysis_reason_from_llm}'")
-                        self._update_transaction(process_id, "transcript_analysis", "completed", {"analysis_outcome": extracted_info.get('call_status')})
-                    except Exception as analysis_err:
-                        logger.error(f"Error during transcript analysis for {candidate_id} (but proceeding due to duration): {analysis_err}")
-                        self._update_transaction(process_id, "transcript_analysis", "failed", {"error": str(analysis_err)})
-                        # Continue processing, maybe embedding can work with profile data only
-                        extracted_info = None # Ensure extracted_info is None if analysis fails
-                
-                # --- Process based on Analysis Outcome ---
-                # This block now runs *only* if duration >= 5 mins
-                try:
-                    # 2b. Update Profile JSON (Merge extracted info if available)
-                    if extracted_info:
-                        self._update_transaction(process_id, "profile_update", "started")
-                        merged_profile_data = self._deep_merge(merged_profile_data, extracted_info)
-                        cleaned_profile_json = self._clean_profile_json(merged_profile_data)
-                        profile_update_resp = await self.supabase.table(self.candidates_table).update({
-                            'profile_json': cleaned_profile_json, 'updated_at': datetime.utcnow().isoformat()
-                        }).eq('id', candidate_id).execute()
-                        if profile_update_resp.data: logger.info(f"Successfully updated profile_json for {candidate_id}")
-                        else: logger.error("Failed to save cleaned/merged profile JSON to database.")
-                        self._update_transaction(process_id, "profile_update", "completed")
-                    else:
-                        logger.warning(f"No extracted info from transcript analysis for {candidate_id}, proceeding with existing profile data.")
-                        self._update_transaction(process_id, "profile_update", "skipped", {"reason": "No extracted info"})
-
-                    # 2c. Update Communications Content (If info extracted)
-                    if extracted_info and call_data.get('call_id'):
-                        # ... (Existing logic to update communications content) ...
-                        pass # Placeholder for brevity, keep existing logic here
-
-                    # 3. Generate & Store Embedding
-                    self._update_transaction(process_id, "embedding", "started")
-                    logger.info(f"Generating embedding for {candidate_id}")
-                    # Use merged_profile_data (potentially just original profile if analysis failed/skipped)
-                    embedding_success = await self._generate_and_store_embedding(candidate_id, merged_profile_data)
-                    if not embedding_success:
-                        logger.error(f"Embedding generation/storage failed for {candidate_id}. Matchmaking will be skipped.")
-                        self._update_transaction(process_id, "embedding", "failed", {"reason": "Embedding function returned false"})
-                        final_process_status = 'error_embedding'
-                    else:
-                        self._update_transaction(process_id, "embedding", "completed")
-                        self.state["metrics"]["embeddings_generated"] += 1
-                        final_process_status = 'completed' # Default success if embedding works
-
-                    # 4. Trigger Matchmaking & Appropriate Email (Only if embedding succeeded)
-                    if embedding_success:
-                        self._update_transaction(process_id, "matchmaking", "started")
-                        logger.info(f"Triggering matchmaking for {candidate_id}")
+                    # 2a. Analyze Transcript (Still useful for data extraction)
+                    self._update_transaction(process_id, "transcript_analysis", "started")
+                    if not transcript or not transcript.strip():
+                         logger.error(f"Critical error: Call duration >= 5min for {candidate_id}, but transcript is missing or empty! Skipping analysis.")
+                         self._update_transaction(process_id, "transcript_analysis", "skipped", {"reason": "Transcript missing despite duration"})
+                         # This case shouldn't happen often, but if it does, embedding will likely fail
+                    else: 
+                        logger.info(f"Analyzing transcript for {candidate_id} (call duration >= 5 min)")
                         try:
-                            matches = await self.matching_service.match_candidate_to_jobs(candidate_id)
-                            logger.info(f"Found {len(matches)} potential matches for {candidate_id}")
-                            self.state["metrics"]["matches_found"] += len(matches)
+                            extracted_info = await self.openai_service.extract_transcript_info(transcript)
+                            # Log the outcome of analysis but don't use its status for gating emails
+                            analysis_status_from_llm = extracted_info.get('call_status', {}).get('is_complete', 'unknown')
+                            analysis_reason_from_llm = extracted_info.get('call_status', {}).get('reason', 'unknown')
+                            logger.info(f"Transcript analysis result (for data extraction): complete={analysis_status_from_llm}, reason='{analysis_reason_from_llm}'")
+                            self._update_transaction(process_id, "transcript_analysis", "completed", {"analysis_outcome": extracted_info.get('call_status')})
+                        except Exception as analysis_err:
+                            logger.error(f"Error during transcript analysis for {candidate_id} (but proceeding due to duration): {analysis_err}")
+                            self._update_transaction(process_id, "transcript_analysis", "failed", {"error": str(analysis_err)})
+                            # Continue processing, maybe embedding can work with profile data only
+                            extracted_info = None # Ensure extracted_info is None if analysis fails
+                    
+                    # --- Process based on Analysis Outcome --- 
+                    try:
+                        # 2b. Update Profile JSON
+                        if extracted_info:
+                            self._update_transaction(process_id, "profile_update", "started")
+                            merged_profile_data = self._deep_merge(merged_profile_data, extracted_info)
+                            cleaned_profile_json = self._clean_profile_json(merged_profile_data)
+                            profile_update_resp = await self.supabase.table(self.candidates_table).update({
+                                'profile_json': cleaned_profile_json, 'updated_at': datetime.utcnow().isoformat()
+                            }).eq('id', candidate_id).execute()
+                            if profile_update_resp.data: logger.info(f"Successfully updated profile_json for {candidate_id}")
+                            else: logger.error("Failed to save cleaned/merged profile JSON to database.")
+                            self._update_transaction(process_id, "profile_update", "completed")
+                        else:
+                            logger.warning(f"No extracted info from transcript analysis for {candidate_id}, proceeding with existing profile data.")
+                            self._update_transaction(process_id, "profile_update", "skipped", {"reason": "No extracted info"})
 
-                            # --- Prepare Match Records (Only if matches found) ---
-                            match_records = []
-                            if matches:
-                                # ... (Existing logic to prepare match_records remains the same) ...
-                                pass # Placeholder for brevity
+                        # 2c. Update Communications Content
+                        if extracted_info and call_data.get('call_id'):
+                            # ... (Existing logic to update communications content) ...
+                            pass # Placeholder for brevity, keep existing logic here
 
-                            # --- Store Match Records --- 
-                            if match_records:
-                                # ... (Existing logic to store match_records remains the same) ...
-                                pass # Placeholder for brevity
-                            else:
-                                logger.info("No match records were prepared.")
+                        # 3. Generate & Store Embedding
+                        self._update_transaction(process_id, "embedding", "started")
+                        logger.info(f"Generating embedding for {candidate_id}")
+                        # Use merged_profile_data (potentially just original profile if analysis failed/skipped)
+                        embedding_success = await self._generate_and_store_embedding(candidate_id, merged_profile_data)
+                        if not embedding_success:
+                            logger.error(f"Embedding generation/storage failed for {candidate_id}. Matchmaking will be skipped.")
+                            self._update_transaction(process_id, "embedding", "failed", {"reason": "Embedding function returned false"})
+                            final_process_status = 'error_embedding'
+                        else:
+                            self._update_transaction(process_id, "embedding", "completed")
+                            self.state["metrics"]["embeddings_generated"] += 1
+                            final_process_status = 'completed' # Default success if embedding works
 
-                            # --- Email Logic (Based ONLY on Matches Found/Not Found) --- 
-                            if candidate_email:
-                                # Check if high_scoring_jobs were generated (dependent on match_records being processed)
-                                MATCH_SCORE_THRESHOLD = 0.40
-                                high_scoring_jobs = []
-                                if match_records: # Check if we actually *generated* records to send
-                                    # ... (Existing logic to query top jobs from stored matches) ...
+                        # 4. Trigger Matchmaking & Appropriate Email
+                        if embedding_success:
+                            self._update_transaction(process_id, "matchmaking", "started")
+                            logger.info(f"Triggering matchmaking for {candidate_id}")
+                            try:
+                                matches = await self.matching_service.match_candidate_to_jobs(candidate_id)
+                                logger.info(f"Found {len(matches)} potential matches for {candidate_id}")
+                                self.state["metrics"]["matches_found"] += len(matches)
+
+                                # --- Prepare Match Records (Only if matches found) ---
+                                match_records = []
+                                if matches:
+                                    # ... (Existing logic to prepare match_records remains the same) ...
                                     pass # Placeholder for brevity
 
-                                # Decide which email to send based on high_scoring_jobs list
-                                if high_scoring_jobs:
-                                    logger.info(f"Attempting to send job match email to {candidate_email}...")
-                                    try:
-                                        await send_job_match_email(...) # Correct arguments
-                                        # ... logging ...
-                                    except Exception as email_call_err: logger.error(...) # <<< Potential fix: ensure this logger call is correct
+                                # --- Store Match Records --- 
+                                if match_records:
+                                    # ... (Existing logic to store match_records remains the same) ...
+                                    pass # Placeholder for brevity
                                 else:
-                                    # Send no_matches email if embedding worked but no matches found/met threshold
-                                    logger.info(f"Sending 'no matches' email to {candidate_email}...")
-                                    try:
-                                        await send_no_matches_email(...) # Correct arguments
-                                        # ... logging ...
-                                    except Exception as no_match_email_err: 
-                                        # <<< FIX: Log the actual error variable
-                                        logger.error(f"Error sending 'no matches' email: {no_match_email_err}")
-                            else:
-                                logger.warning(f"Could not find email for candidate {candidate_id}...")
+                                    logger.info("No match records were prepared.")
 
-                            self._update_transaction(process_id, "matchmaking", "completed")
-                        except Exception as match_err:
-                            logger.error(f"Error during matchmaking or email logic for {candidate_id}: {match_err}")
-                            logger.error(f"Traceback: {traceback.format_exc()}")
-                            self._update_transaction(process_id, "matchmaking", "failed", {"error": str(match_err)})
-                            # Keep final_process_status determined by embedding step
-                    else: # embedding failed
-                        logger.warning(f"Skipping matchmaking for {candidate_id} due to embedding failure.")
-                        self._update_transaction(process_id, "matchmaking", "skipped", {"reason": "Embedding failed"})
+                                # --- Email Logic (Based ONLY on Matches Found/Not Found) --- 
+                                if candidate_email:
+                                    # Check if high_scoring_jobs were generated (dependent on match_records being processed)
+                                    MATCH_SCORE_THRESHOLD = 0.40
+                                    high_scoring_jobs = []
+                                    if match_records: # Check if we actually *generated* records to send
+                                        # ... (Existing logic to query top jobs from stored matches) ...
+                                        pass # Placeholder for brevity
 
-                except Exception as processing_err:
-                    logger.error(f"Error during main processing block (post-duration check) for {candidate_id}: {processing_err}")
-                    logger.error(f"Traceback: {traceback.format_exc()}")
-                    final_process_status = 'error_processing_call'
-                    embedding_success = False # Ensure flag is false on error
+                                    # Decide which email to send based on high_scoring_jobs list
+                                    if high_scoring_jobs:
+                                        logger.info(f"Attempting to send job match email to {candidate_email}...")
+                                        try:
+                                            await send_job_match_email(...) # Correct arguments
+                                            # ... logging ...
+                                        except Exception as email_call_err: logger.error(...) # <<< Potential fix: ensure this logger call is correct
+                                    else:
+                                        # Send no_matches email if embedding worked but no matches found/met threshold
+                                        logger.info(f"Sending 'no matches' email to {candidate_email}...")
+                                        try:
+                                            await send_no_matches_email(...) # Correct arguments
+                                            # ... logging ...
+                                        except Exception as no_match_email_err: 
+                                            # <<< FIX: Log the actual error variable
+                                            logger.error(f"Error sending 'no matches' email: {no_match_email_err}")
+                                else:
+                                    logger.warning(f"Could not find email for candidate {candidate_id}...")
 
-                # --- Final Return --- 
-                logger.info(f"\n=== ✅ Call Processing Finished (Duration Logic) for {candidate_id} with determined status: {final_process_status} ====")
-                # Determine matches_found safely
-                matches_count = 0
-                if 'embedding_success' in locals() and embedding_success and 'matches' in locals():
-                     matches_count = len(matches)
-                return {"status": final_process_status, "matches_found": matches_count} # <<< FIX: Use safe matches_count
+                                self._update_transaction(process_id, "matchmaking", "completed")
+                            except Exception as match_err:
+                                logger.error(f"Error during matchmaking or email logic for {candidate_id}: {match_err}")
+                                logger.error(f"Traceback: {traceback.format_exc()}")
+                                self._update_transaction(process_id, "matchmaking", "failed", {"error": str(match_err)})
+                                # Keep final_process_status determined by embedding step
+                        else: # embedding failed
+                            logger.warning(f"Skipping matchmaking for {candidate_id} due to embedding failure.")
+                            self._update_transaction(process_id, "matchmaking", "skipped", {"reason": "Embedding failed"})
+
+                    except Exception as processing_err:
+                        logger.error(f"Error during main processing block (post-duration check) for {candidate_id}: {processing_err}")
+                        logger.error(f"Traceback: {traceback.format_exc()}")
+                        final_process_status = 'error_processing_call'
+                        embedding_success = False # Ensure flag is false on error
+
+                    # --- Final Return (Inside if call_status == 'ended') --- 
+                    logger.info(f"\n=== ✅ Call Processing Finished (Duration Logic - Ended) for {candidate_id} with determined status: {final_process_status} ====")
+                    matches_count = 0
+                    if 'embedding_success' in locals() and embedding_success and 'matches' in locals():
+                         matches_count = len(matches)
+                    return {"status": final_process_status, "matches_found": matches_count}
+                
+                # <<< ADD ELSE: Duration sufficient, but status != 'ended' >>>
+                else: 
+                    logger.warning(f"Call duration ({duration_seconds}s) sufficient, but status is '{call_status}' (not 'ended'). Skipping full processing for {candidate_id}.")
+                    final_process_status = 'call_incomplete' # Use same status as too short for now?
+                    self._update_transaction(process_id, "outcome_decision", "skipped_status_not_ended", {"reason": f"Status was {call_status}"})
+                    # Return status indicating processing was skipped due to non-ended status
+                    return {"status": final_process_status, "reason": f"Call status was {call_status}, expected 'ended' for full processing"}
 
         except Exception as e: # Outer try/except for setup errors
             # ... (rest of the code remains the same) ...
