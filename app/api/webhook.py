@@ -146,14 +146,15 @@ def extract_call_data(body: Dict[str, Any]) -> Dict[str, Any]:
         "end_timestamp": call_data.get("end_timestamp"),
         "disconnection_reason": call_data.get("disconnection_reason"),
         "call_type": call_data.get("call_type"),
-        "agent_id": call_data.get("agent_id")
+        "agent_id": call_data.get("agent_id"),
+        "call_cost": call_data.get("call_cost", {})
     }
     
     # Log what we found, but skip transcript object and other large fields
     logger.info("📋 Extracted fields:")
     for key, value in extracted.items():
         if (value is not None and value != {} and value != [] and 
-            key not in ['transcript_object', 'transcript', 'call_analysis']):
+            key not in ['transcript_object', 'transcript', 'call_analysis', 'call_cost']):
             logger.info(f"  {key}: {value}")
     
     return extracted
