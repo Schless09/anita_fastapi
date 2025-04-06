@@ -13,6 +13,7 @@ from app.config.settings import Settings
 from app.config.utils import get_table_name
 from app.dependencies import get_vector_service, get_brain_agent, get_supabase_client_dependency, get_cached_settings, get_retell_service
 from app.services.vector_service import VectorService
+from app.services.retell_service import RetellService
 import uuid
 
 # Get logger
