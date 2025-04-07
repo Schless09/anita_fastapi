@@ -354,11 +354,15 @@ class ResumeParser(BaseTool):
             text_content: The text content of the resume
         """
         try:
+            # Optimize text content by removing excessive whitespace and newlines
+            optimized_text = " ".join(text_content.split())
+            logger.info(f"Optimized text length: {len(optimized_text)} characters")
+            
             # Use LLM to extract structured information based on the desired profile_json structure
             prompt = f"""Analyze the following resume text and extract the specified information.
             
             Resume text:
-            {text_content}
+            {optimized_text}
             
             Return ONLY a valid JSON object with the following structure and fields. 
             Use the specified types (string, array of strings, array of objects). 
@@ -392,27 +396,49 @@ class ResumeParser(BaseTool):
             """
             
             try:
-                # Add timeout to LLM call
-                response = await asyncio.wait_for(
-                    self.llm.ainvoke(prompt),
-                    timeout=30.0  # 30 second timeout
-                )
-                logger.info("Successfully received response from LLM")
-            except asyncio.TimeoutError:
-                logger.error("LLM call timed out after 30 seconds")
+                # Increase timeout to 120 seconds and add retries
+                max_retries = 3
+                retry_count = 0
+                last_error = None
+                
+                while retry_count < max_retries:
+                    try:
+                        response = await asyncio.wait_for(
+                            self.llm.ainvoke(prompt),
+                            timeout=120.0  # Increased timeout to 120 seconds
+                        )
+                        logger.info("Successfully received response from LLM")
+                        break
+                    except asyncio.TimeoutError as e:
+                        retry_count += 1
+                        last_error = e
+                        logger.warning(f"LLM call timed out (attempt {retry_count}/{max_retries})")
+                        if retry_count < max_retries:
+                            await asyncio.sleep(5)  # Increased wait time between retries to 5 seconds
+                        continue
+                
+                if retry_count == max_retries:
+                    logger.error("LLM call timed out after all retries")
+                    return {
+                        "status": "error",
+                        "error": "LLM processing timed out after multiple retries"
+                    }
+                
+                # Parse the response into structured data
+                parsed_data = parse_llm_json_response(response.content)
+                logger.info("Successfully parsed LLM response into structured data")
+                
+                return {
+                    "status": "success",
+                    "profile": parsed_data
+                }
+                
+            except Exception as e:
+                logger.error(f"Error in LLM processing: {str(e)}")
                 return {
                     "status": "error",
-                    "error": "LLM processing timed out"
+                    "error": str(e)
                 }
-            
-            # Parse the response into structured data
-            parsed_data = parse_llm_json_response(response.content)
-            logger.info("Successfully parsed LLM response into structured data")
-            
-            return {
-                "status": "success",
-                "profile": parsed_data
-            }
             
         except Exception as e:
             logger.error(f"Error parsing resume: {str(e)}")
