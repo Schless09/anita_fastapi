@@ -59,6 +59,7 @@ from app.schemas.matching import MatchingResponse
 
 # Routers
 from app.api.webhook import router as webhook_router
+from app.api.webhook_proxy import router as webhook_proxy_router
 from app.routes.jobs import router as jobs_router
 from app.routes.candidates import router as candidates_router
 from app.routes.webhooks import router as webhook_jobs_router
@@ -208,9 +209,9 @@ async def favicon():
 
 # Include routers
 app.include_router(webhook_router, prefix="/webhook", tags=["webhook"])
+app.include_router(webhook_proxy_router, prefix="/webhook", tags=["webhook"])
 app.include_router(jobs_router, tags=["jobs"])
 app.include_router(candidates_router, tags=["candidates"])
-# Include the new webhook router
 app.include_router(webhook_jobs_router, prefix="/api/v1", tags=["Webhooks"])
 
 def get_service(service_name: str):

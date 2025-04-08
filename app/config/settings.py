@@ -55,10 +55,7 @@ class Settings(BaseSettings):
     @property
     def webhook_base_url(self) -> str:
         """Get the base URL for webhooks based on environment."""
-        if self.environment == "production":
-            return "https://anita-fastapi-2.vercel.app"
-        else:
-            return self.base_url  # This will be the ngrok URL in development
+        return "https://anita-fastapi.onrender.com"
     
     @property
     def retell_webhook_url(self) -> str:
