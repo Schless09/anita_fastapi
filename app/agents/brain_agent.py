@@ -22,6 +22,11 @@ from app.services.matching_service import MatchingService
 from app.config.settings import get_settings, Settings
 from app.config.utils import get_table_name
 from app.config.supabase import get_supabase_client
+from app.config.constants import (
+    MIN_CALL_DURATION_SECONDS,
+    MAX_CALL_DURATION_SECONDS,
+    MAX_MATCHES_PER_CANDIDATE
+)
 
 # Set up logging
 import logging
@@ -462,9 +467,13 @@ class BrainAgent:
         # Extract job description from job data if it's a dictionary
         if isinstance(job_text, dict):
             job_data = job_text
-            job_description = job_data.get('profile_json', {}).get('job_description', '')
+            # First try to get the narrative description from metadata
+            job_description = job_data.get('embedding_metadata', {}).get('narrative_description', '')
             if not job_description:
-                job_description = job_data.get('description', '')
+                # Fall back to profile_json or description if narrative not found
+                job_description = job_data.get('profile_json', {}).get('job_description', '')
+                if not job_description:
+                    job_description = job_data.get('description', '')
             job_text = job_description
 
         system_prompt = (
@@ -637,9 +646,7 @@ class BrainAgent:
                  duration_seconds = None # Ensure it's None on error
 
             # --- Decision based on Duration --- 
-            MIN_DURATION_SECONDS = 10 # 5 minutes
-
-            if duration_seconds is None or duration_seconds < MIN_DURATION_SECONDS:
+            if duration_seconds is None or duration_seconds < MIN_CALL_DURATION_SECONDS:
                 # === Scenario: Call Too Short ===
                 reason = "Duration < 5 minutes" if duration_seconds is not None else "Duration unknown/missing"
                 logger.warning(f"Call for {candidate_id} was too short ({duration_seconds}s). Reason: {reason}. Sending 'call too short' email.")
@@ -1164,3 +1171,28 @@ class BrainAgent:
             elif value is not None:
                  result[key] = value
         return result
+
+    async def _check_call_duration(self, call_duration: int) -> bool:
+        """Check if call duration meets requirements."""
+        if call_duration < MIN_CALL_DURATION_SECONDS:
+            logger.warning(f"Call duration ({call_duration}s) too short. Minimum required: {MIN_CALL_DURATION_SECONDS}s")
+            return False
+        
+        if call_duration > MAX_CALL_DURATION_SECONDS:
+            logger.warning(f"Call duration ({call_duration}s) exceeds maximum: {MAX_CALL_DURATION_SECONDS}s")
+            return False
+        
+        return True
+
+    async def _process_matches(self, matches: List[Dict[str, Any]], candidate_id: str) -> None:
+        """Process and store job matches."""
+        if not matches:
+            logger.info(f"No matches found for candidate {candidate_id}")
+            return
+        
+        # Just limit the number of matches, no additional threshold filtering
+        valid_matches = matches[:MAX_MATCHES_PER_CANDIDATE]
+        
+        logger.info(f"Found {len(valid_matches)} valid matches for candidate {candidate_id}")
+        
+        # Process matches here...
