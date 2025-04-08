@@ -54,7 +54,7 @@ class Settings(BaseSettings):
     sender_email: str
 
     # Add development webhook URL
-    development_webhook_url: str = "https://4a03-136-24-233-187.ngrok-free.app/webhook/retell"  # Can be overridden in .env
+    development_webhook_url: Optional[str] = None  # Set in .env: DEVELOPMENT_WEBHOOK_URL=your-ngrok-url/webhook/retell
 
     @property
     def webhook_base_url(self) -> str:
