@@ -81,19 +81,33 @@ class StorageService:
         try:
             # Get file extension from original filename
             _, ext = os.path.splitext(original_filename)
+            logger.info(f"Processing file with extension: {ext}")
             
             # Create a filename with user_id and timestamp
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
             filename = f"{user_id}_{timestamp}{ext}"
+            logger.info(f"Generated filename: {filename}")
             
             # Upload file to S3
-            logger.info(f"Uploading resume for user {user_id} to {self.bucket_name}/{filename}")
+            logger.info(f"Attempting S3 upload for user {user_id} to {self.bucket_name}/{filename}")
             
             try:
+                # Read file content into memory if it's a file object
+                if hasattr(file_content, 'read'):
+                    logger.info("Reading file content into memory")
+                    content = file_content.read()
+                    # Reset file pointer for potential retry
+                    if hasattr(file_content, 'seek'):
+                        file_content.seek(0)
+                else:
+                    logger.info("Using provided content directly")
+                    content = file_content
+
+                logger.info("Initiating S3 put_object operation")
                 self.s3_client.put_object(
                     Bucket=self.bucket_name,
                     Key=filename,
-                    Body=file_content,
+                    Body=content,
                     ContentType='application/pdf'
                 )
                 
@@ -105,25 +119,35 @@ class StorageService:
                 
             except Exception as s3_error:
                 logger.error(f"S3 upload error: {str(s3_error)}")
-                # Fallback to Supabase storage API if S3 fails
-                logger.info("Falling back to Supabase storage API")
-                result = (
-                    self.supabase.storage
-                    .from_(self.bucket_name)
-                    .upload(
-                        path=filename,
-                        file=file_content,
-                        file_options={"content-type": "application/pdf", "upsert": "true"}
+                logger.info("Attempting Supabase storage API fallback")
+                
+                try:
+                    # Reset file pointer if possible
+                    if hasattr(file_content, 'seek'):
+                        file_content.seek(0)
+                    
+                    result = (
+                        self.supabase.storage
+                        .from_(self.bucket_name)
+                        .upload(
+                            path=filename,
+                            file=file_content,
+                            file_options={"content-type": "application/pdf", "upsert": "true"}
+                        )
                     )
-                )
-                
-                file_path = f"{self.bucket_name}/{filename}"
-                logger.info(f"Successfully stored resume using fallback at {file_path}")
-                
-                return file_path
+                    
+                    file_path = f"{self.bucket_name}/{filename}"
+                    logger.info(f"Successfully stored resume using Supabase fallback at {file_path}")
+                    
+                    return file_path
+                except Exception as supabase_error:
+                    logger.error(f"Supabase storage error: {str(supabase_error)}")
+                    raise
             
         except Exception as e:
             logger.error(f"Error storing resume for user {user_id}: {str(e)}")
+            logger.error(f"Error type: {type(e)}")
+            logger.error(f"Error details: {str(e.__dict__)}")
             raise
 
     async def get_resume_url(self, file_path: str) -> str:
