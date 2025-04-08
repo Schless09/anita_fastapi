@@ -178,8 +178,8 @@ async def handler(
         logger.info(f"🔔 Received Retell webhook at {request.url}")
         logger.info(f"Current environment: {settings.environment}")
         
-        # If in development or staging, forward to localhost BEFORE any processing
-        if settings.environment in ["development", "staging"]:
+        # If in development or staging AND not on localhost, forward to localhost
+        if settings.environment in ["development", "staging"] and "localhost" not in str(request.url):
             try:
                 logger.info(f"⏩ Forwarding webhook from {settings.environment} to localhost:8000")
                 async with httpx.AsyncClient() as client:
@@ -205,8 +205,15 @@ async def handler(
                     content={"error": f"Failed to forward webhook to localhost: {str(e)}"}
                 )
 
-        # Only proceed with processing if we're in production or if we're running on localhost
-        if settings.environment == "production" or "localhost" in str(request.url):
+        # Only proceed with processing if:
+        # 1. We're in production environment on production server, OR
+        # 2. We're on localhost with matching environment (dev/staging)
+        should_process = (
+            (settings.environment == "production" and "localhost" not in str(request.url)) or
+            ("localhost" in str(request.url) and settings.environment in ["development", "staging"])
+        )
+
+        if should_process:
             # Extract call data
             call_data = extract_call_data(payload)
             if not call_data:
