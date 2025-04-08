@@ -30,61 +30,31 @@ async def log_call_communication(
     settings: Settings
 ):
     """Logs the completed call details to the communications table."""
-    logger.info(f"Attempting to log call communication for candidate {candidate_id}")
     try:
-        call_id = call_data.get('call_id')
-        if not call_id:
-            logger.warning(f"Missing call_id in call_data for candidate {candidate_id}. Cannot set thread_id.")
-            thread_id_to_log = None
-        else:
-            # Generate a new UUID for thread_id while preserving the call_id in metadata
-            thread_id_to_log = str(uuid.uuid4())
-
-        # Extract transcript summary instead of full transcript
+        # Extract data from call_data
+        call_id = call_data.get('call_id', 'unknown')
+        thread_id_to_log = call_data.get('metadata', {}).get('thread_id')
         transcript_object = call_data.get('transcript_object', [])
-        
-        # Safely calculate transcript summary with better error handling
-        transcript_summary = {
-            "word_count": len(transcript_object)
-        }
-        
-        # Safely calculate duration only if transcript has valid structure
-        if transcript_object and len(transcript_object) > 0:
-            try:
-                # Check if first and last items have required keys
-                if "start" in transcript_object[0] and "end" in transcript_object[-1]:
-                    transcript_summary["duration"] = transcript_object[-1]["end"] - transcript_object[0]["start"]
-                else:
-                    transcript_summary["duration"] = 0
-                    logger.warning(f"Transcript missing start/end times for candidate {candidate_id}")
-            except Exception as e:
-                transcript_summary["duration"] = 0
-                logger.warning(f"Error calculating transcript duration: {str(e)}")
-        else:
-            transcript_summary["duration"] = 0
-        
-        # Safely extract first few words
-        first_words = ""
-        if transcript_object:
-            try:
-                words = []
-                for word_obj in transcript_object[:5]:
-                    if "word" in word_obj:
-                        words.append(word_obj["word"])
-                first_words = " ".join(words) + "..." if words else ""
-            except Exception as e:
-                logger.warning(f"Error extracting first words from transcript: {str(e)}")
-        transcript_summary["first_words"] = first_words
+
+        # Get full transcript text
+        full_transcript = call_data.get('transcript', '')
+        if not full_transcript and transcript_object:
+            # If no plain transcript but we have transcript objects, construct it
+            full_transcript = " ".join([
+                word_obj.get("word", "") 
+                for word_obj in transcript_object 
+                if isinstance(word_obj, dict)
+            ])
 
         # Create communication log record with required fields
         communication_log = {
             "id": str(uuid.uuid4()),  # Generate a unique ID
             "candidates_id": candidate_id,
-            "thread_id": thread_id_to_log if thread_id_to_log else str(uuid.uuid4()),  # Ensure we always have a thread_id
+            "thread_id": thread_id_to_log if thread_id_to_log else str(uuid.uuid4()),
             "type": "call",
             "direction": "inbound",
             "subject": f"Retell Call ({call_id})" if call_id else "Retell Call",
-            "content": json.dumps(transcript_summary),
+            "content": full_transcript,  # Store the full transcript text in content
             "metadata": {
                 "call_id": call_id,
                 "call_status": call_data.get('call_status'),
@@ -93,39 +63,28 @@ async def log_call_communication(
                 "recording_url": call_data.get('recording_url'),
                 "disconnection_reason": call_data.get('disconnection_reason'),
                 "agent_id": call_data.get('agent_id'),
-                "call_analysis": call_data.get('call_analysis', {}),
-                "full_transcript": json.dumps(transcript_object if transcript_object else [])  # Ensure we don't serialize None
+                "call_analysis": call_data.get('call_analysis', {})
             },
             "timestamp": datetime.utcnow().isoformat()  # Explicitly set timestamp
         }
         
         logger.info(f"Preparing to insert communication log for candidate {candidate_id}")
-        # Don't log the full communication_log object as it contains large transcript data
         
         table_name = get_table_name("communications", settings)
-        logger.info(f"Using table name: {table_name}")
         
-        log_resp = await supabase_client.table(table_name).insert(communication_log).execute()
-        
-        if hasattr(log_resp, 'data') and log_resp.data:
-            logger.info(f"Successfully logged call communication for candidate {candidate_id}")
-            # Don't log the response data which might contain sensitive information
-        else:
-            logger.warning(f"Could not log call communication for candidate {candidate_id}")
-            if hasattr(log_resp, 'error'):
-                logger.error(f"Supabase error: {log_resp.error}")
-    except Exception as log_err:
-        logger.error(f"Error logging call communication for candidate {candidate_id}: {log_err}")
-        logger.error(f"Traceback: {traceback.format_exc()}")
-        # Try to log the error message that might help debug the issue
-        if 'communication_log' in locals():
-            # Create a copy without the large transcript data for logging
-            log_copy = communication_log.copy()
-            if 'metadata' in log_copy and 'full_transcript' in log_copy['metadata']:
-                log_copy['metadata'] = log_copy['metadata'].copy()
-                log_copy['metadata']['full_transcript'] = "[REDACTED]"
-            # Don't log even the redacted version, just note there was an error
-            logger.error(f"Error occurred with communication log object (transcript redacted)")
+        try:
+            response = await supabase_client.table(table_name).insert(communication_log).execute()
+            if response.data:
+                logger.info(f"✅ Successfully logged communication for candidate {candidate_id}")
+            else:
+                logger.error(f"❌ No data returned from communication log insert for candidate {candidate_id}")
+        except Exception as insert_error:
+            logger.error(f"❌ Error inserting communication log: {str(insert_error)}")
+            raise
+
+    except Exception as e:
+        logger.error(f"❌ Error in log_call_communication: {str(e)}")
+        raise
 
 def extract_call_data(body: Dict[str, Any]) -> Dict[str, Any]:
     """Extract and validate relevant call data from webhook payload."""
