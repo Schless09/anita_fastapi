@@ -43,6 +43,12 @@ class Settings(BaseSettings):
     supabase_key: str
     supabase_service_role_key: str
 
+    # S3 Storage
+    s3_endpoint: str = "https://izepykrdwrascjhxtxuz.supabase.co/storage/v1/s3"
+    s3_access_key_id: str = "7c49ea376b8006a7205c440a39fbbaf5"
+    s3_secret_access_key: str = "6dfd8431c0fdb5e26ca8b9b5508ca7e7ac45f53ed1806b55ef6770c374f551a4"
+    s3_region: str = "us-east-1"
+
     # Email
     sender_email: str
 
