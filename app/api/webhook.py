@@ -178,11 +178,11 @@ async def handler(
         logger.info(f"🔔 Received Retell webhook at {request.url}")
         logger.info(f"Current environment: {settings.environment}")
         
-        # Forward to localhost if in staging or development
+        # If in development or staging, forward to localhost BEFORE any processing
         if settings.environment in ["development", "staging"]:
             try:
+                logger.info(f"⏩ Forwarding webhook from {settings.environment} to localhost:8000")
                 async with httpx.AsyncClient() as client:
-                    logger.info(f"Forwarding webhook from {settings.environment} to localhost:8000")
                     response = await client.post(
                         "http://localhost:8000/webhook/retell",
                         json=payload,
@@ -190,6 +190,7 @@ async def handler(
                     )
                     if response.status_code == 200:
                         logger.info("✅ Successfully forwarded webhook to localhost")
+                        # Return the response from localhost and DO NOT process further
                         return response.json()
                     else:
                         logger.error(f"❌ Error forwarding to localhost: {response.status_code}")
@@ -199,76 +200,81 @@ async def handler(
                         )
             except Exception as e:
                 logger.error(f"❌ Failed to forward webhook to localhost: {str(e)}")
-                # Continue processing the webhook in case forwarding fails
-        
-        # Extract call data
-        call_data = extract_call_data(payload)
-        if not call_data:
-            logger.error("❌ Failed to extract call data from webhook payload")
-            return JSONResponse(status_code=400, content={"status": "error", "message": "Invalid webhook payload"})
+                return JSONResponse(
+                    status_code=500,
+                    content={"error": f"Failed to forward webhook to localhost: {str(e)}"}
+                )
 
-        # Get the call ID
-        call_id = call_data.get('call_id')
-        if not call_id:
-            logger.error("❌ No call_id found in call data")
-            return JSONResponse(status_code=400, content={"status": "error", "message": "No call_id in call data"})
+        # Only proceed with processing if we're in production or if we're running on localhost
+        if settings.environment == "production" or "localhost" in str(request.url):
+            # Extract call data
+            call_data = extract_call_data(payload)
+            if not call_data:
+                logger.error("❌ Failed to extract call data from webhook payload")
+                return JSONResponse(status_code=400, content={"status": "error", "message": "Invalid webhook payload"})
 
-        # Always fetch the full call data from Retell API
-        try:
-            logger.info(f"Fetching full call data for call {call_id}")
-            full_call_data = await retell_service.get_call(call_id)
-            if full_call_data:
-                # Update call_data with full transcript and other data
-                call_data['transcript'] = full_call_data.get('transcript', '')
-                call_data['transcript_object'] = full_call_data.get('transcript_object', [])
-                call_data['transcript_with_tool_calls'] = full_call_data.get('transcript_with_tool_calls', [])
-                logger.info(f"Successfully fetched full call data for call {call_id}")
+            # Get the call ID
+            call_id = call_data.get('call_id')
+            if not call_id:
+                logger.error("❌ No call_id found in call data")
+                return JSONResponse(status_code=400, content={"status": "error", "message": "No call_id in call data"})
+
+            # Always fetch the full call data from Retell API
+            try:
+                logger.info(f"Fetching full call data for call {call_id}")
+                full_call_data = await retell_service.get_call(call_id)
+                if full_call_data:
+                    # Update call_data with full transcript and other data
+                    call_data['transcript'] = full_call_data.get('transcript', '')
+                    call_data['transcript_object'] = full_call_data.get('transcript_object', [])
+                    call_data['transcript_with_tool_calls'] = full_call_data.get('transcript_with_tool_calls', [])
+                    logger.info(f"Successfully fetched full call data for call {call_id}")
+                else:
+                    logger.warning(f"No full call data available for call {call_id}")
+            except Exception as e:
+                logger.error(f"Error fetching full call data: {str(e)}")
+                # Continue with the original call_data even if fetch fails
+
+            # Add debug logging for transcript
+            logger.debug(f"Transcript content: {call_data.get('transcript')}")
+            logger.debug(f"Transcript object length: {len(call_data.get('transcript_object', []))}")
+            if call_data.get('transcript_object'):
+                logger.debug(f"First few transcript objects: {call_data.get('transcript_object')[:3]}")
+
+            candidate_id = call_data.get('metadata', {}).get('candidate_id')
+            if not candidate_id:
+                logger.error("❌ No candidate_id found in call metadata")
+                return JSONResponse(status_code=400, content={"status": "error", "message": "No candidate_id in metadata"})
+
+            event_type = call_data.get('event')
+            call_status = call_data.get('call_status')
+
+            logger.info(f"📞 Processing webhook for candidate {candidate_id}")
+            logger.info(f"Event type: {event_type}, Call status: {call_status}")
+
+            # --- Trigger brain agent ONLY on the final analysis event --- 
+            # Use 'call_analyzed' as the primary trigger, assuming it contains final data
+            if event_type == 'call_analyzed':
+                logger.info(f"📞 Call analyzed for candidate {candidate_id}. Logging communication and routing to BrainAgent.")
+                # Add task to log the call communication FIRST
+                background_tasks.add_task(
+                    log_call_communication,
+                    candidate_id=candidate_id,
+                    call_data=call_data,
+                    supabase_client=supabase_client,
+                    settings=settings
+                )
+                # Then add task for BrainAgent processing
+                background_tasks.add_task(
+                    brain_agent.handle_call_processed,
+                    candidate_id=candidate_id,
+                    call_data=call_data
+                )
+                return JSONResponse(content={"status": "success", "message": "Call logged and processing delegated to BrainAgent"})
             else:
-                logger.warning(f"No full call data available for call {call_id}")
-        except Exception as e:
-            logger.error(f"Error fetching full call data: {str(e)}")
-            # Continue with the original call_data even if fetch fails
-
-        # Add debug logging for transcript
-        logger.debug(f"Transcript content: {call_data.get('transcript')}")
-        logger.debug(f"Transcript object length: {len(call_data.get('transcript_object', []))}")
-        if call_data.get('transcript_object'):
-            logger.debug(f"First few transcript objects: {call_data.get('transcript_object')[:3]}")
-
-        candidate_id = call_data.get('metadata', {}).get('candidate_id')
-        if not candidate_id:
-            logger.error("❌ No candidate_id found in call metadata")
-            return JSONResponse(status_code=400, content={"status": "error", "message": "No candidate_id in metadata"})
-
-        event_type = call_data.get('event')
-        call_status = call_data.get('call_status')
-
-        logger.info(f"📞 Processing webhook for candidate {candidate_id}")
-        logger.info(f"Event type: {event_type}, Call status: {call_status}")
-
-        # --- Trigger brain agent ONLY on the final analysis event --- 
-        # Use 'call_analyzed' as the primary trigger, assuming it contains final data
-        if event_type == 'call_analyzed':
-            logger.info(f"📞 Call analyzed for candidate {candidate_id}. Logging communication and routing to BrainAgent.")
-            # Add task to log the call communication FIRST
-            background_tasks.add_task(
-                log_call_communication,
-                candidate_id=candidate_id,
-                call_data=call_data,
-                supabase_client=supabase_client,
-                settings=settings
-            )
-            # Then add task for BrainAgent processing
-            background_tasks.add_task(
-                brain_agent.handle_call_processed,
-                candidate_id=candidate_id,
-                call_data=call_data
-            )
-            return JSONResponse(content={"status": "success", "message": "Call logged and processing delegated to BrainAgent"})
-        else:
-            # Log other events but don't trigger the main processing
-            logger.info(f"Webhook event '{event_type}' (Status: '{call_status}') received but not the primary trigger ('call_analyzed'). No action taken.")
-            return JSONResponse(content={"status": "success", "message": f"Webhook received, event '{event_type}' ignored"})
+                # Log other events but don't trigger the main processing
+                logger.info(f"Webhook event '{event_type}' (Status: '{call_status}') received but not the primary trigger ('call_analyzed'). No action taken.")
+                return JSONResponse(content={"status": "success", "message": f"Webhook received, event '{event_type}' ignored"})
 
     except Exception as e:
         logger.error(f"❌ Error processing webhook: {str(e)}\nTraceback: {traceback.format_exc()}")
