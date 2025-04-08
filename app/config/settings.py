@@ -37,7 +37,7 @@ class Settings(BaseSettings):
     
     # Ngrok
     ngrok_authtoken: str
-    base_url: str
+    base_url: Optional[str] = None
     
     # Supabase
     supabase_url: str
@@ -52,6 +52,9 @@ class Settings(BaseSettings):
 
     # Email
     sender_email: str
+
+    # Add development webhook URL
+    development_webhook_url: Optional[str] = None  # Set in .env: DEVELOPMENT_WEBHOOK_URL=your-ngrok-url/webhook/retell
 
     @property
     def webhook_base_url(self) -> str:
