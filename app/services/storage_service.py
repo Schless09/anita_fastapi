@@ -29,7 +29,8 @@ class StorageService:
         )
         
         logger.info(f"Current environment: {settings.environment}")
-        self.bucket_name = "resumes-dev" if settings.environment == "development" else "resumes-prod"
+        # Use dev bucket for both development and staging
+        self.bucket_name = "resumes-prod" if settings.environment == "production" else "resumes-dev"
         logger.info(f"Selected bucket name: {self.bucket_name}")
         self._ensure_bucket_exists()
 

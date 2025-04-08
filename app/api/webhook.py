@@ -174,12 +174,13 @@ async def handler(
     try:
         payload = await request.json()
         
-        # If in development, ONLY forward to localhost and return
-        if settings.environment == "development":
+        # If we're on staging server and environment is development, forward to localhost
+        if (settings.environment == "development" and 
+            "anita-fastapi-staging" in request.base_url.hostname):
             try:
                 async with httpx.AsyncClient() as client:
                     # Forward to localhost
-                    logger.info("Development mode: Forwarding webhook to localhost:8000")
+                    logger.info("Development mode: Forwarding webhook from staging to localhost:8000")
                     response = await client.post(
                         "http://localhost:8000/webhook/retell",
                         json=payload,
@@ -201,7 +202,13 @@ async def handler(
                     content={"error": f"Failed to forward to localhost: {str(e)}"}
                 )
         
-        # Production processing - only reached if not in development
+        # For staging environment, process normally but log that we're in staging
+        if settings.environment == "staging":
+            logger.info("Processing webhook in staging environment")
+        elif settings.environment == "production":
+            logger.info("Processing webhook in production environment")
+        
+        # Normal processing for both staging and production environments
         # Create a copy for logging and redact large fields
         payload_for_logging = payload.copy()
         if 'call' in payload_for_logging and isinstance(payload_for_logging.get('call'), dict):

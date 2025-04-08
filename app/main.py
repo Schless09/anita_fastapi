@@ -137,8 +137,8 @@ async def startup_event():
         openai_service = OpenAIService(settings)
         
         # Get table names from settings
-        candidates_table = get_table_name("candidates")
-        jobs_table = get_table_name("jobs")
+        candidates_table = get_table_name("candidates", settings)
+        jobs_table = get_table_name("jobs", settings)
         
         # Initialize vector service
         vector_service = VectorService(

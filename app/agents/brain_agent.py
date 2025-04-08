@@ -73,10 +73,10 @@ class BrainAgent:
         self.resume_parser = ResumeParser()
 
         # Define table names using the helper function with injected settings
-        self.candidates_table = get_table_name("candidates")
-        self.jobs_table = get_table_name("jobs")
-        self.matches_table = get_table_name("candidate_job_matches")
-        self.communications_table = get_table_name("communications")
+        self.candidates_table = get_table_name("candidates", settings)
+        self.jobs_table = get_table_name("jobs", settings)
+        self.matches_table = get_table_name("candidate_job_matches", settings)
+        self.communications_table = get_table_name("communications", settings)
 
         # State tracking (remains the same)
         self.state = {
@@ -453,6 +453,14 @@ class BrainAgent:
             logger.warning("OpenAI service is not configured. Skipping match reason generation.")
             return None
 
+        # Extract job description from job data if it's a dictionary
+        if isinstance(job_text, dict):
+            job_data = job_text
+            job_description = job_data.get('profile_json', {}).get('job_description', '')
+            if not job_description:
+                job_description = job_data.get('description', '')
+            job_text = job_description
+
         system_prompt = (
             "You are an expert talent acquisition specialist. Analyze the provided candidate profile text, job description text, and the pre-calculated similarity score (0.0 to 1.0). "
             f"The match score is {match_score:.2f}. "
@@ -623,7 +631,7 @@ class BrainAgent:
                  duration_seconds = None # Ensure it's None on error
 
             # --- Decision based on Duration --- 
-            MIN_DURATION_SECONDS = 300 # 5 minutes
+            MIN_DURATION_SECONDS = 10 # 5 minutes
 
             if duration_seconds is None or duration_seconds < MIN_DURATION_SECONDS:
                 # === Scenario: Call Too Short ===
