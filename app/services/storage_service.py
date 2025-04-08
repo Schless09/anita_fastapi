@@ -28,7 +28,9 @@ class StorageService:
             config=Config(signature_version='s3v4')
         )
         
+        logger.info(f"Current environment: {settings.environment}")
         self.bucket_name = "resumes-dev" if settings.environment == "development" else "resumes-prod"
+        logger.info(f"Selected bucket name: {self.bucket_name}")
         self._ensure_bucket_exists()
 
     def _ensure_bucket_exists(self):
