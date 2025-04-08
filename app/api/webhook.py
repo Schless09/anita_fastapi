@@ -176,59 +176,74 @@ async def handler(
         
         # Log the incoming request details
         logger.info(f"🔔 Received Retell webhook at {request.url}")
-        logger.info(f"Environment settings:")
-        logger.info(f"  - ENVIRONMENT: {settings.environment}")
-        logger.info(f"  - Base URL: {settings.webhook_base_url}")
-        logger.info(f"  - Retell Webhook URL: {settings.retell_webhook_url}")
         
-        # If in development or staging AND not on localhost, forward to localhost
-        if settings.environment in ["development", "staging"] and "localhost" not in str(request.url):
-            try:
-                logger.info(f"⏩ Forwarding webhook from {settings.environment} to localhost:8000")
-                async with httpx.AsyncClient() as client:
-                    response = await client.post(
-                        "http://localhost:8000/webhook/retell",
-                        json=payload,
-                        headers={"Content-Type": "application/json"}
-                    )
-                    if response.status_code == 200:
-                        logger.info("✅ Successfully forwarded webhook to localhost")
-                        return JSONResponse(
-                            status_code=200,
-                            content={"status": "success", "message": "Forwarded to localhost"}
-                        )
-                    else:
-                        logger.error(f"❌ Error forwarding to localhost: {response.status_code}")
-                        return JSONResponse(
-                            status_code=response.status_code,
-                            content={"error": "Failed to forward to localhost"}
-                        )
-            except Exception as e:
-                logger.error(f"❌ Failed to forward webhook to localhost: {str(e)}")
-                return JSONResponse(
-                    status_code=500,
-                    content={"error": f"Failed to forward webhook to localhost: {str(e)}"}
-                )
-
-        # Only proceed with processing if we're in production OR on localhost
-        should_process = (
-            settings.environment == "production" or
-            "localhost" in str(request.url)
-        )
-
-        if not should_process:
-            logger.info(f"⏭️ Skipping processing in {settings.environment} environment")
-            return JSONResponse(
-                status_code=200, 
-                content={"status": "success", "message": f"Skipped processing in {settings.environment}"}
-            )
-
-        # Extract call data
+        # Extract call data first to get environment from metadata
         call_data = extract_call_data(payload)
         if not call_data:
             logger.error("❌ Failed to extract call data from webhook payload")
             return JSONResponse(status_code=400, content={"status": "error", "message": "Invalid webhook payload"})
+            
+        # Get originating environment from metadata
+        webhook_env = call_data.get('metadata', {}).get('environment')
+        
+        logger.info(f"Environment settings:")
+        logger.info(f"  - Originating ENV: {webhook_env}")
+        logger.info(f"  - Current Server ENV: {settings.environment}")
+        
+        # Forward webhooks based on originating environment
+        if settings.environment == "production":
+            # Production server should forward to appropriate environment
+            if webhook_env == "development":
+                forward_url = "http://localhost:8000/webhook/retell"
+                logger.info(f"⏩ Forwarding development webhook to localhost")
+            elif webhook_env == "staging":
+                forward_url = "https://anita-fastapi-staging.onrender.com/webhook/retell"
+                logger.info(f"⏩ Forwarding staging webhook to staging server")
+            else:
+                # Process in production
+                forward_url = None
+                logger.info("✅ Processing webhook in production")
+                
+            if forward_url:
+                try:
+                    async with httpx.AsyncClient() as client:
+                        response = await client.post(
+                            forward_url,
+                            json=payload,
+                            headers={"Content-Type": "application/json"}
+                        )
+                        if response.status_code == 200:
+                            logger.info(f"✅ Successfully forwarded webhook to {webhook_env}")
+                            return JSONResponse(
+                                status_code=200,
+                                content={"status": "success", "message": f"Forwarded to {webhook_env}"}
+                            )
+                        else:
+                            logger.error(f"❌ Error forwarding to {webhook_env}: {response.status_code}")
+                            # Continue with production processing as fallback
+                            logger.info("⚠️ Falling back to production processing")
+                except Exception as e:
+                    logger.error(f"❌ Failed to forward webhook: {str(e)}")
+                    # Continue with production processing as fallback
+                    logger.info("⚠️ Falling back to production processing")
 
+        # Only process the webhook if:
+        # 1. We're in production and it's a production webhook
+        # 2. We're in staging and it's a staging webhook
+        # 3. We're in development (localhost) and it's a development webhook
+        should_process = (
+            (settings.environment == webhook_env) or
+            (settings.environment == "development" and "localhost" in str(request.url))
+        )
+
+        if not should_process:
+            logger.info(f"⏭️ Skipping processing - Current env: {settings.environment}, Originating env: {webhook_env}")
+            return JSONResponse(
+                status_code=200, 
+                content={"status": "success", "message": f"Skipped processing - Not meant for {settings.environment}"}
+            )
+
+        # Process the webhook
         # Get the call ID
         call_id = call_data.get('call_id')
         if not call_id:
