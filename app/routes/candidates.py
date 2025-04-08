@@ -5,6 +5,7 @@ import logging
 import traceback
 from fastapi.responses import HTMLResponse
 from app.services.candidate_service import CandidateService
+from app.services.storage_service import StorageService
 from app.services.openai_service import OpenAIService
 from app.services.vector_service import VectorService
 from app.services.matching_service import MatchingService
@@ -23,7 +24,8 @@ from app.dependencies import (
     get_matching_service,
     get_vector_service,
     get_openai_service,
-    get_retell_service
+    get_retell_service,
+    get_storage_service
 )
 from app.config.settings import Settings
 from app.config.supabase import get_supabase_client
@@ -42,7 +44,8 @@ async def create_candidate(
     linkedin_url: Optional[str] = Form(None),
     resume: UploadFile = File(...),
     brain_agent: BrainAgent = Depends(get_brain_agent),
-    candidate_service: CandidateService = Depends(get_candidate_service)
+    candidate_service: CandidateService = Depends(get_candidate_service),
+    storage_service: StorageService = Depends(get_storage_service)
 ):
     """
     Handle new candidate submission from frontend (multipart/form-data).
@@ -59,14 +62,14 @@ async def create_candidate(
              )
 
         resume_bytes = await resume.read()
-
+        
+        # Create initial candidate record first
         submission_data = {
             'first_name': first_name,
             'last_name': last_name,
             'email': email,
             'phone': phone,
             'linkedin_url': linkedin_url,
-            'resume_content': resume_bytes,
             'resume_filename': resume.filename,
         }
 
@@ -75,6 +78,27 @@ async def create_candidate(
         candidate_id = initial_result['id']
         logger.info(f"Initial record created for candidate {candidate_id}")
 
+        # Store resume with actual candidate ID
+        try:
+            logger.info(f"Storing resume file for candidate {candidate_id}")
+            resume_path = await storage_service.store_resume(
+                file_content=resume_bytes,
+                user_id=candidate_id,
+                original_filename=resume.filename
+            )
+            logger.info(f"Resume stored successfully at {resume_path}")
+            
+            # Update the candidate record with the resume path
+            await candidate_service.update_resume_path(candidate_id, resume_path)
+            logger.info(f"Updated resume path for candidate {candidate_id}")
+            
+        except Exception as e:
+            logger.error(f"Failed to store resume: {str(e)}")
+            raise HTTPException(
+                status_code=500,
+                detail="Failed to store resume file"
+            )
+        
         logger.info(f"Triggering BrainAgent processing for candidate {candidate_id}")
         background_tasks.add_task(
             brain_agent.handle_candidate_submission,
@@ -84,7 +108,12 @@ async def create_candidate(
         )
 
         logger.info(f"Successfully initiated processing for candidate {candidate_id}")
-        return {"status": "success", "message": "Candidate submission received, processing started.", "candidate_id": candidate_id}
+        return {
+            "status": "success", 
+            "message": "Candidate submission received, processing started.", 
+            "candidate_id": candidate_id,
+            "resume_path": resume_path
+        }
 
     except ValueError as e:
         logger.error(f"Validation error for {email}: {str(e)}")

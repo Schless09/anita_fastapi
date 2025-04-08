@@ -203,14 +203,11 @@ class CandidateService:
                 .execute()
 
             if response.data:
-                 logger.info(f"(CandidateService) Successfully updated profile for {candidate_id}")
-                 return response.data[0]
-            else:
-                 logger.warning(f"(CandidateService) Update profile for {candidate_id} returned no data. Response: {response}")
-                 return None
+                return response.data[0]
+            return None
         except Exception as e:
-             logger.error(f"(CandidateService) Error updating candidate profile for {candidate_id}: {e}")
-             return None # Or raise?
+            logger.error(f"Error updating candidate profile {candidate_id}: {str(e)}")
+            raise HTTPException(status_code=500, detail=f"Error updating candidate profile: {str(e)}")
 
     async def get_candidate(self, candidate_id: str) -> Optional[Dict[str, Any]]:
         """
@@ -267,3 +264,43 @@ class CandidateService:
         except Exception as e:
              logger.error(f"(CandidateService) Error updating candidate status and profile for {update.candidate_id}: {e}")
              return None 
+
+    async def update_resume_path(self, candidate_id: str, resume_path: str) -> Dict[str, Any]:
+        """
+        Update the resume_path field for a candidate.
+        
+        Args:
+            candidate_id (str): The ID of the candidate to update
+            resume_path (str): The path where the resume is stored
+            
+        Returns:
+            Dict[str, Any]: The updated candidate record
+        """
+        try:
+            update_data = {
+                "resume_path": resume_path,
+                "updated_at": datetime.utcnow().isoformat()
+            }
+            
+            response = await self.supabase.table(self.candidates_table_name)\
+                .update(update_data)\
+                .eq('id', candidate_id)\
+                .execute()
+                
+            if not response.data:
+                logger.error(f"Failed to update resume path for candidate {candidate_id}")
+                raise HTTPException(
+                    status_code=500,
+                    detail="Failed to update candidate resume path"
+                )
+            
+            logger.info(f"Successfully updated resume path for candidate {candidate_id}")
+            return response.data[0]
+            
+        except Exception as e:
+            logger.error(f"Error updating resume path for candidate {candidate_id}: {str(e)}")
+            logger.error(f"Traceback: {traceback.format_exc()}")
+            raise HTTPException(
+                status_code=500,
+                detail=f"Error updating candidate resume path: {str(e)}"
+            ) 

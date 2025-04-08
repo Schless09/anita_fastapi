@@ -1,6 +1,7 @@
 from functools import lru_cache
 from fastapi import Depends
 from supabase._async.client import AsyncClient
+from typing import AsyncGenerator
 
 from app.config.settings import Settings, get_settings
 from app.config.utils import get_table_name
@@ -11,6 +12,7 @@ from app.services.job_service import JobService
 from app.services.matching_service import MatchingService
 from app.services.candidate_service import CandidateService
 from app.services.retell_service import RetellService
+from app.services.storage_service import StorageService
 from app.agents.brain_agent import BrainAgent
 
 # Cached settings
@@ -107,4 +109,22 @@ def get_brain_agent(
         retell_service=retell_service,
         vector_service=vector_service,
         settings=settings
-    ) 
+    )
+
+# Provider for Storage Service
+def get_storage_service(
+    settings: Settings = Depends(get_cached_settings)
+) -> StorageService:
+    """Get StorageService instance with proper dependencies."""
+    return StorageService()
+
+__all__ = [
+    'get_brain_agent',
+    'get_candidate_service',
+    'get_job_service',
+    'get_matching_service',
+    'get_vector_service',
+    'get_openai_service',
+    'get_retell_service',
+    'get_storage_service'
+] 
