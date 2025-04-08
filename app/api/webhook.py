@@ -175,65 +175,33 @@ async def handler(
         payload = await request.json()
         
         # Log the incoming request details
-        logger.info(f"Received webhook from {request.base_url.hostname}")
+        logger.info(f"🔔 Received Retell webhook at {request.url}")
         logger.info(f"Current environment: {settings.environment}")
         
-        # If we're in development environment and request is from staging, forward to localhost
-        if (settings.environment == "development" and 
-            "anita-fastapi-staging" in request.base_url.hostname):
+        # Forward to localhost if in staging or development
+        if settings.environment in ["development", "staging"]:
             try:
                 async with httpx.AsyncClient() as client:
-                    # Forward to localhost
-                    logger.info("Development mode: Forwarding webhook from staging to localhost:8000")
+                    logger.info(f"Forwarding webhook from {settings.environment} to localhost:8000")
                     response = await client.post(
                         "http://localhost:8000/webhook/retell",
                         json=payload,
                         headers={"Content-Type": "application/json"}
                     )
                     if response.status_code == 200:
-                        logger.info("Successfully forwarded webhook to localhost")
+                        logger.info("✅ Successfully forwarded webhook to localhost")
                         return response.json()
                     else:
-                        logger.error(f"Error forwarding to localhost: {response.status_code}")
+                        logger.error(f"❌ Error forwarding to localhost: {response.status_code}")
                         return JSONResponse(
                             status_code=response.status_code,
                             content={"error": "Failed to forward to localhost"}
                         )
             except Exception as e:
-                logger.error(f"Failed to forward to localhost: {str(e)}")
-                return JSONResponse(
-                    status_code=500,
-                    content={"error": f"Failed to forward to localhost: {str(e)}"}
-                )
+                logger.error(f"❌ Failed to forward webhook to localhost: {str(e)}")
+                # Continue processing the webhook in case forwarding fails
         
-        # If we're in development environment and request is from production, log a warning
-        if (settings.environment == "development" and 
-            "anita-fastapi.onrender.com" in request.base_url.hostname):
-            logger.warning("Received webhook from production in development environment. This should not happen.")
-        
-        # For staging environment, process normally but log that we're in staging
-        if settings.environment == "staging":
-            logger.info("Processing webhook in staging environment")
-        elif settings.environment == "production":
-            logger.info("Processing webhook in production environment")
-        
-        # Normal processing for both staging and production environments
-        # Create a copy for logging and redact large fields
-        payload_for_logging = payload.copy()
-        if 'call' in payload_for_logging and isinstance(payload_for_logging.get('call'), dict):
-            # Redact transcript_object
-            if 'transcript_object' in payload_for_logging['call']:
-                payload_for_logging['call']['transcript_object'] = f"[... omitted {len(payload['call'].get('transcript_object', []))} items ...]"
-            # Redact transcript string
-            if 'transcript' in payload_for_logging['call']:
-                payload_for_logging['call']['transcript'] = f"[... omitted {len(payload['call'].get('transcript', ''))} chars ...]"
-            # Redact transcript_with_tool_calls
-            if 'transcript_with_tool_calls' in payload_for_logging['call']:
-                payload_for_logging['call']['transcript_with_tool_calls'] = f"[... omitted {len(payload['call'].get('transcript_with_tool_calls', []))} items ...]"
-        
-        logger.info(f"📥 Received Retell webhook: {json.dumps(payload_for_logging, indent=2)}")
-
-        # Continue processing with the original payload
+        # Extract call data
         call_data = extract_call_data(payload)
         if not call_data:
             logger.error("❌ Failed to extract call data from webhook payload")
