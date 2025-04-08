@@ -126,7 +126,7 @@ def get_storage_service(
     settings: Settings = Depends(get_cached_settings)
 ) -> StorageService:
     """Get StorageService instance with proper dependencies."""
-    return StorageService()
+    return StorageService(settings=settings)
 
 def get_webhook_proxy() -> WebhookProxy:
     """Provider for WebhookProxy service."""

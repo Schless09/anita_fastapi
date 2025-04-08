@@ -43,14 +43,17 @@ logger = logging.getLogger(__name__)
 class BrainAgent:
     """Orchestrator agent that coordinates other specialized agents."""
     
-    def __init__(self, 
-                 supabase_client: AsyncClient,
-                 candidate_service: CandidateService,
-                 openai_service: OpenAIService,
-                 matching_service: MatchingService,
-                 retell_service: RetellService,
-                 vector_service: VectorService,
-                 settings: Settings):
+    def __init__(
+        self,
+        supabase_client: AsyncClient,
+        candidate_service: CandidateService,
+        openai_service: OpenAIService,
+        matching_service: MatchingService,
+        retell_service: RetellService,
+        vector_service: VectorService,
+        email_service: EmailService,
+        settings: Settings
+    ):
         """Initialize the brain agent and required services."""
         self._candidate_intake_agent = None
         self._job_matching_agent = None
@@ -64,9 +67,9 @@ class BrainAgent:
         self.openai_service = openai_service
         self.matching_service = matching_service
         self.retell_service = retell_service
-        # Assign settings and vector_service needed by agent properties
-        self.settings = settings 
         self.vector_service = vector_service
+        self.email_service = email_service
+        self.settings = settings
 
         # Initialize the PDF processing tools
         self.pdf_processor = PDFProcessor()
@@ -96,8 +99,8 @@ class BrainAgent:
             "transactions": {}
         }
         
-        # Initialize email service
-        self.email_service = EmailService(settings=settings)
+        self.logger = logging.getLogger(__name__)
+        self.logger.setLevel(logging.INFO)
         
     async def _initialize_async(self):
         """Initialize async components."""

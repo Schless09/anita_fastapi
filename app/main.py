@@ -51,6 +51,7 @@ from app.services.retell_service import RetellService
 from app.services.openai_service import OpenAIService
 from app.services.vector_service import VectorService
 from app.services.matching_service import MatchingService
+from anita.services.email_service import EmailService
 
 # Schemas
 from app.schemas.candidate import CandidateCreate, CandidateResponse, CandidateUpdate
@@ -119,68 +120,54 @@ supabase = get_supabase_client()
 
 @app.on_event("startup")
 async def startup_event():
-    """Initialize services on startup."""
+    """Initialize services and agents on startup."""
     global vector_store, brain_agent_instance
     try:
         logger.info("Initializing services...")
         
-        # Initialize vector store
-        from app.agents.langchain.tools.vector_store import VectorStoreTool
-        from app.services.vector_service import VectorService
-        from app.services.openai_service import OpenAIService
-        from app.services.candidate_service import CandidateService
-        from app.services.job_service import JobService
-        from app.services.retell_service import RetellService
-        from app.services.matching_service import MatchingService
-        
-        # Initialize OpenAI service with settings
-        openai_service = OpenAIService(settings)
-        
-        # Get table names from settings
-        candidates_table = get_table_name("candidates", settings)
-        jobs_table = get_table_name("jobs", settings)
-        
-        # Initialize vector service
+        # Initialize services
+        settings = get_settings()
+        supabase_client = get_supabase_client()
+        openai_service = OpenAIService(settings=settings)
         vector_service = VectorService(
             openai_service=openai_service,
-            supabase_client=supabase,
-            candidates_table=candidates_table,
-            jobs_table=jobs_table
-        )
-        
-        # Initialize vector store tool
-        vector_store = VectorStoreTool(vector_service=vector_service, settings=settings)
-        await vector_store._initialize_async()
-        
-        # Initialize other required services
-        retell_service = RetellService(settings)
-        candidate_service = CandidateService(
-            supabase_client=supabase,
-            retell_service=retell_service,
-            openai_service=openai_service,
-            settings=settings
+            supabase_client=supabase_client,
+            candidates_table=get_table_name("candidates", settings),
+            jobs_table=get_table_name("jobs", settings)
         )
         job_service = JobService(
-            supabase_client=supabase,
+            supabase_client=supabase_client,
             vector_service=vector_service,
             openai_service=openai_service
         )
         matching_service = MatchingService(
             openai_service=openai_service,
             vector_service=vector_service,
-            supabase_client=supabase,
+            supabase_client=supabase_client,
             settings=settings
         )
+        candidate_service = CandidateService(
+            supabase_client=supabase_client,
+            retell_service=RetellService(settings=settings),
+            openai_service=openai_service,
+            settings=settings
+        )
+        retell_service = RetellService(settings=settings)
+        email_service = EmailService(settings=settings)
+
+        # Initialize vector store tool
+        vector_store = VectorStoreTool(vector_service=vector_service, settings=settings)
+        await vector_store._initialize_async()
         
-        # Initialize brain agent with all required services
-        from app.agents.brain_agent import BrainAgent
+        # Initialize brain agent
         brain_agent_instance = BrainAgent(
-            supabase_client=supabase,
+            supabase_client=supabase_client,
             candidate_service=candidate_service,
             openai_service=openai_service,
             matching_service=matching_service,
             retell_service=retell_service,
             vector_service=vector_service,
+            email_service=email_service,
             settings=settings
         )
         await brain_agent_instance._initialize_async()
