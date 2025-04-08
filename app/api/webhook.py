@@ -102,7 +102,7 @@ async def log_call_communication(
         logger.info(f"Preparing to insert communication log for candidate {candidate_id}")
         # Don't log the full communication_log object as it contains large transcript data
         
-        table_name = get_table_name("communications")
+        table_name = get_table_name("communications", settings)
         logger.info(f"Using table name: {table_name}")
         
         log_resp = await supabase_client.table(table_name).insert(communication_log).execute()
@@ -174,7 +174,11 @@ async def handler(
     try:
         payload = await request.json()
         
-        # If we're on staging server and environment is development, forward to localhost
+        # Log the incoming request details
+        logger.info(f"Received webhook from {request.base_url.hostname}")
+        logger.info(f"Current environment: {settings.environment}")
+        
+        # If we're in development environment and request is from staging, forward to localhost
         if (settings.environment == "development" and 
             "anita-fastapi-staging" in request.base_url.hostname):
             try:
@@ -201,6 +205,11 @@ async def handler(
                     status_code=500,
                     content={"error": f"Failed to forward to localhost: {str(e)}"}
                 )
+        
+        # If we're in development environment and request is from production, log a warning
+        if (settings.environment == "development" and 
+            "anita-fastapi.onrender.com" in request.base_url.hostname):
+            logger.warning("Received webhook from production in development environment. This should not happen.")
         
         # For staging environment, process normally but log that we're in staging
         if settings.environment == "staging":

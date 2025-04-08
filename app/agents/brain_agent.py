@@ -35,8 +35,8 @@ from dotenv import load_dotenv
 from fastapi import HTTPException
 from supabase._async.client import AsyncClient, create_client
 
-# Uncomment the email service import
-from anita.services.email_service import send_job_match_email, send_missed_call_email, send_no_matches_email, send_call_too_short_email
+# Import EmailService
+from anita.services.email_service import EmailService
 
 logger = logging.getLogger(__name__)
 
@@ -95,6 +95,9 @@ class BrainAgent:
             },
             "transactions": {}
         }
+        
+        # Initialize email service
+        self.email_service = EmailService(settings=settings)
         
     async def _initialize_async(self):
         """Initialize async components."""
@@ -585,7 +588,7 @@ class BrainAgent:
                     logger.info(f"Attempting to send missed call email to {candidate_email} due to call_status: {call_status}")
                     try:
                         # --- UNCOMMENTED --- 
-                        await send_missed_call_email(
+                        await self.email_service.send_missed_call_email(
                             recipient_email=candidate_email, 
                             candidate_name=candidate_name, 
                             candidate_id=uuid.UUID(candidate_id), 
@@ -642,7 +645,7 @@ class BrainAgent:
                 if candidate_email:
                      logger.info(f"Attempting to send 'call too short' email to {candidate_email}.")
                      try:
-                         await send_call_too_short_email(
+                         await self.email_service.send_call_too_short_email(
                              recipient_email=candidate_email,
                              candidate_name=candidate_name,
                              candidate_id=uuid.UUID(candidate_id),
@@ -808,7 +811,7 @@ class BrainAgent:
                                     if high_scoring_jobs:
                                         logger.info(f"Attempting to send job match email to {candidate_email}...")
                                         try:
-                                            await send_job_match_email(
+                                            await self.email_service.send_job_match_email(
                                                 recipient_email=candidate_email,
                                                 candidate_name=candidate_name,
                                                 job_matches=high_scoring_jobs,
@@ -826,7 +829,7 @@ class BrainAgent:
                                         logger.info(f"Sending 'no matches' email to {candidate_email}...")
                                         try:
                                             name_to_use = candidate_name if candidate_name else 'Candidate'
-                                            await send_no_matches_email(
+                                            await self.email_service.send_no_matches_email(
                                                 recipient_email=candidate_email,
                                                 candidate_name=name_to_use,
                                                 candidate_id=candidate_id,

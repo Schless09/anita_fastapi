@@ -5,13 +5,13 @@ from datetime import datetime
 import boto3
 from botocore.client import Config
 from supabase import create_client, Client
-from app.config.settings import get_settings
+from app.config.settings import Settings
 
 logger = logging.getLogger(__name__)
-settings = get_settings()
 
 class StorageService:
-    def __init__(self):
+    def __init__(self, settings: Settings):
+        self.settings = settings
         # Initialize Supabase client with service role key for admin operations
         self.supabase = create_client(
             settings.supabase_url,

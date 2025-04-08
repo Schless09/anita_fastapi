@@ -15,6 +15,7 @@ from app.services.retell_service import RetellService
 from app.services.storage_service import StorageService
 from app.agents.brain_agent import BrainAgent
 from app.services.webhook_proxy import WebhookProxy
+from anita.services.email_service import EmailService
 
 # Cached settings
 @lru_cache()
@@ -43,8 +44,8 @@ def get_vector_service(
     openai_service: OpenAIService = Depends(get_openai_service),
     supabase_client: AsyncClient = Depends(get_supabase_client_dependency)
 ) -> VectorService:
-    candidates_table = get_table_name("candidates")
-    jobs_table = get_table_name("jobs")
+    candidates_table = get_table_name("candidates", settings)
+    jobs_table = get_table_name("jobs", settings)
     return VectorService(
         openai_service=openai_service,
         supabase_client=supabase_client,
@@ -92,6 +93,12 @@ def get_candidate_service(
         settings=settings
     )
 
+# Provider for Email Service
+def get_email_service(
+    settings: Settings = Depends(get_cached_settings)
+) -> EmailService:
+    return EmailService(settings=settings)
+
 # Provider for Brain Agent
 def get_brain_agent(
     supabase_client: AsyncClient = Depends(get_supabase_client_dependency),
@@ -100,6 +107,7 @@ def get_brain_agent(
     matching_service: MatchingService = Depends(get_matching_service),
     retell_service: RetellService = Depends(get_retell_service),
     vector_service: VectorService = Depends(get_vector_service),
+    email_service: EmailService = Depends(get_email_service),
     settings: Settings = Depends(get_cached_settings)
 ) -> BrainAgent:
     return BrainAgent(
@@ -109,6 +117,7 @@ def get_brain_agent(
         matching_service=matching_service,
         retell_service=retell_service,
         vector_service=vector_service,
+        email_service=email_service,
         settings=settings
     )
 
@@ -132,5 +141,6 @@ __all__ = [
     'get_openai_service',
     'get_retell_service',
     'get_storage_service',
-    'get_webhook_proxy'
+    'get_webhook_proxy',
+    'get_email_service'
 ] 

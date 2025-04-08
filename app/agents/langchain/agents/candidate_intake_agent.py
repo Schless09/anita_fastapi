@@ -122,7 +122,7 @@ class CandidateIntakeAgent(BaseAgent):
         self._initialize_agent(system_message)
         
         self.candidate_id = candidate_id
-        self.candidates_table = get_table_name("candidates")
+        self.candidates_table = get_table_name("candidates", settings)
 
     def _initialize_chains(self):
         """Initialize the processing chains."""

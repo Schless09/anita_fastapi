@@ -1,10 +1,11 @@
 from pydantic_settings import BaseSettings
 from typing import Optional
 from functools import lru_cache
+from pydantic import Field
 
 class Settings(BaseSettings):
     # Environment
-    environment: str = "development"
+    environment: str = Field(default="development", env="ENVIRONMENT")
     
     # OpenAI
     openai_api_key: str
