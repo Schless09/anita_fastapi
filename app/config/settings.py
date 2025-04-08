@@ -60,7 +60,7 @@ class Settings(BaseSettings):
     @property
     def retell_webhook_url(self) -> str:
         """Get the Retell webhook URL based on environment."""
-        return f"{self.webhook_base_url}/webhook/retell"
+        return f"{self.webhook_base_url}/webhook/retell/proxy"
     
     class Config:
         env_file = ".env"

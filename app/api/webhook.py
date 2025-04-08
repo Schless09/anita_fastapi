@@ -15,6 +15,7 @@ from app.dependencies import get_vector_service, get_brain_agent, get_supabase_c
 from app.services.vector_service import VectorService
 from app.services.retell_service import RetellService
 import uuid
+import httpx
 
 # Get logger
 logger = logging.getLogger(__name__)
@@ -172,6 +173,26 @@ async def handler(
     """Handle Retell webhook events."""
     try:
         payload = await request.json()
+        
+        # If in development, forward to localhost
+        if settings.environment == "development":
+            try:
+                async with httpx.AsyncClient() as client:
+                    # Forward to localhost
+                    logger.info("Forwarding webhook to localhost:8000")
+                    response = await client.post(
+                        "http://localhost:8000/webhook/retell",
+                        json=payload,
+                        headers={"Content-Type": "application/json"}
+                    )
+                    if response.status_code == 200:
+                        logger.info("Successfully forwarded webhook to localhost")
+                        return response.json()
+                    else:
+                        logger.error(f"Error forwarding to localhost: {response.status_code}")
+            except Exception as e:
+                logger.error(f"Failed to forward to localhost: {str(e)}")
+                # Continue with normal processing if forwarding fails
         
         # Create a copy for logging and redact large fields
         payload_for_logging = payload.copy()
