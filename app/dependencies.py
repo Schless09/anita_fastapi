@@ -14,6 +14,7 @@ from app.services.candidate_service import CandidateService
 from app.services.retell_service import RetellService
 from app.services.storage_service import StorageService
 from app.agents.brain_agent import BrainAgent
+from app.services.webhook_proxy import WebhookProxy
 
 # Cached settings
 @lru_cache()
@@ -118,6 +119,10 @@ def get_storage_service(
     """Get StorageService instance with proper dependencies."""
     return StorageService()
 
+def get_webhook_proxy() -> WebhookProxy:
+    """Provider for WebhookProxy service."""
+    return WebhookProxy()
+
 __all__ = [
     'get_brain_agent',
     'get_candidate_service',
@@ -126,5 +131,6 @@ __all__ = [
     'get_vector_service',
     'get_openai_service',
     'get_retell_service',
-    'get_storage_service'
+    'get_storage_service',
+    'get_webhook_proxy'
 ] 
