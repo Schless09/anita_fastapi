@@ -194,8 +194,14 @@ async def handler(
         if settings.environment == "production":
             # Production server should forward to appropriate environment
             if webhook_env == "development":
-                forward_url = "http://localhost:8000/webhook/retell"
-                logger.info(f"⏩ Forwarding development webhook to localhost")
+                if not settings.development_webhook_url:
+                    logger.error("❌ No development webhook URL configured")
+                    return JSONResponse(
+                        status_code=500,
+                        content={"error": "Development webhook URL not configured"}
+                    )
+                forward_url = settings.development_webhook_url
+                logger.info(f"⏩ Forwarding development webhook to {forward_url}")
             elif webhook_env == "staging":
                 forward_url = "https://anita-fastapi-staging.onrender.com/webhook/retell"
                 logger.info(f"⏩ Forwarding staging webhook to staging server")
@@ -207,10 +213,12 @@ async def handler(
             if forward_url:
                 try:
                     async with httpx.AsyncClient() as client:
+                        logger.info(f"Attempting to forward webhook to {forward_url}")
                         response = await client.post(
                             forward_url,
                             json=payload,
-                            headers={"Content-Type": "application/json"}
+                            headers={"Content-Type": "application/json"},
+                            timeout=10.0  # Add timeout to prevent hanging
                         )
                         if response.status_code == 200:
                             logger.info(f"✅ Successfully forwarded webhook to {webhook_env}")
@@ -219,7 +227,7 @@ async def handler(
                                 content={"status": "success", "message": f"Forwarded to {webhook_env}"}
                             )
                         else:
-                            logger.error(f"❌ Error forwarding to {webhook_env}: {response.status_code}")
+                            logger.error(f"❌ Error forwarding to {webhook_env}: {response.status_code} - {response.text}")
                             # Continue with production processing as fallback
                             logger.info("⚠️ Falling back to production processing")
                 except Exception as e:
