@@ -30,7 +30,7 @@ class CandidateService:
                  openai_service: OpenAIService, 
                  settings: Settings):
         self.supabase: AsyncClient = supabase_client # Use injected client
-        self.candidates_table_name = get_table_name("candidates") # Use injected settings
+        self.candidates_table_name = get_table_name("candidates", settings) # Use injected settings
         self.retell = retell_service # Use injected service
         self.openai = openai_service # Use injected service
         # Remove unused service assignments

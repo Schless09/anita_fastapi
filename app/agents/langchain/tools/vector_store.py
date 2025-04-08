@@ -70,6 +70,9 @@ class VectorStoreTool(BaseTool):
         if not self._initialized:
             super().__init__()
             
+            # Store settings
+            object.__setattr__(self, '_settings', settings)
+            
             # Initialize Vector service
             self.vector_service = vector_service
             
@@ -86,7 +89,7 @@ class VectorStoreTool(BaseTool):
             object.__setattr__(self, '_initialized', True)
             
             # Get dynamic table name
-            self.jobs_table = get_table_name("jobs")
+            self.jobs_table = get_table_name("jobs", settings)
     
     async def _initialize_async(self):
         """Initialize async components."""

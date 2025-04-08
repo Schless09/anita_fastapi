@@ -15,6 +15,7 @@ from app.dependencies import get_vector_service, get_brain_agent, get_supabase_c
 from app.services.vector_service import VectorService
 from app.services.retell_service import RetellService
 import uuid
+import httpx
 
 # Get logger
 logger = logging.getLogger(__name__)
@@ -101,7 +102,7 @@ async def log_call_communication(
         logger.info(f"Preparing to insert communication log for candidate {candidate_id}")
         # Don't log the full communication_log object as it contains large transcript data
         
-        table_name = get_table_name("communications")
+        table_name = get_table_name("communications", settings)
         logger.info(f"Using table name: {table_name}")
         
         log_resp = await supabase_client.table(table_name).insert(communication_log).execute()
@@ -173,27 +174,76 @@ async def handler(
     try:
         payload = await request.json()
         
-        # Create a copy for logging and redact large fields
-        payload_for_logging = payload.copy()
-        if 'call' in payload_for_logging and isinstance(payload_for_logging.get('call'), dict):
-            # Redact transcript_object
-            if 'transcript_object' in payload_for_logging['call']:
-                payload_for_logging['call']['transcript_object'] = f"[... omitted {len(payload['call'].get('transcript_object', []))} items ...]"
-            # Redact transcript string
-            if 'transcript' in payload_for_logging['call']:
-                payload_for_logging['call']['transcript'] = f"[... omitted {len(payload['call'].get('transcript', ''))} chars ...]"
-            # Redact transcript_with_tool_calls
-            if 'transcript_with_tool_calls' in payload_for_logging['call']:
-                payload_for_logging['call']['transcript_with_tool_calls'] = f"[... omitted {len(payload['call'].get('transcript_with_tool_calls', []))} items ...]"
+        # Log the incoming request details
+        logger.info(f"🔔 Received Retell webhook at {request.url}")
         
-        logger.info(f"📥 Received Retell webhook: {json.dumps(payload_for_logging, indent=2)}")
-
-        # Continue processing with the original payload
+        # Extract call data first to get environment from metadata
         call_data = extract_call_data(payload)
         if not call_data:
             logger.error("❌ Failed to extract call data from webhook payload")
             return JSONResponse(status_code=400, content={"status": "error", "message": "Invalid webhook payload"})
+            
+        # Get originating environment from metadata
+        webhook_env = call_data.get('metadata', {}).get('environment')
+        
+        logger.info(f"Environment settings:")
+        logger.info(f"  - Originating ENV: {webhook_env}")
+        logger.info(f"  - Current Server ENV: {settings.environment}")
+        
+        # Forward webhooks based on originating environment
+        if settings.environment == "production":
+            # Production server should forward to appropriate environment
+            if webhook_env == "development":
+                forward_url = "http://localhost:8000/webhook/retell"
+                logger.info(f"⏩ Forwarding development webhook to localhost")
+            elif webhook_env == "staging":
+                forward_url = "https://anita-fastapi-staging.onrender.com/webhook/retell"
+                logger.info(f"⏩ Forwarding staging webhook to staging server")
+            else:
+                # Process in production
+                forward_url = None
+                logger.info("✅ Processing webhook in production")
+                
+            if forward_url:
+                try:
+                    async with httpx.AsyncClient() as client:
+                        response = await client.post(
+                            forward_url,
+                            json=payload,
+                            headers={"Content-Type": "application/json"}
+                        )
+                        if response.status_code == 200:
+                            logger.info(f"✅ Successfully forwarded webhook to {webhook_env}")
+                            return JSONResponse(
+                                status_code=200,
+                                content={"status": "success", "message": f"Forwarded to {webhook_env}"}
+                            )
+                        else:
+                            logger.error(f"❌ Error forwarding to {webhook_env}: {response.status_code}")
+                            # Continue with production processing as fallback
+                            logger.info("⚠️ Falling back to production processing")
+                except Exception as e:
+                    logger.error(f"❌ Failed to forward webhook: {str(e)}")
+                    # Continue with production processing as fallback
+                    logger.info("⚠️ Falling back to production processing")
 
+        # Only process the webhook if:
+        # 1. We're in production and it's a production webhook
+        # 2. We're in staging and it's a staging webhook
+        # 3. We're in development (localhost) and it's a development webhook
+        should_process = (
+            (settings.environment == webhook_env) or
+            (settings.environment == "development" and "localhost" in str(request.url))
+        )
+
+        if not should_process:
+            logger.info(f"⏭️ Skipping processing - Current env: {settings.environment}, Originating env: {webhook_env}")
+            return JSONResponse(
+                status_code=200, 
+                content={"status": "success", "message": f"Skipped processing - Not meant for {settings.environment}"}
+            )
+
+        # Process the webhook
         # Get the call ID
         call_id = call_data.get('call_id')
         if not call_id:

@@ -9,7 +9,7 @@ from typing import Dict, Any
 app_dir = Path(__file__).resolve().parent.parent
 sys.path.append(str(app_dir))
 
-from app.config.settings import Settings
+from app.config.settings import get_settings
 from app.services.retell_service import RetellService
 
 async def trigger_retrospective_webhook(call_id: str, candidate_id: str):
@@ -18,7 +18,7 @@ async def trigger_retrospective_webhook(call_id: str, candidate_id: str):
     """
     try:
         # Initialize settings and services
-        settings = Settings()
+        settings = get_settings()
         retell_service = RetellService(settings)
         
         # Get full call data from Retell

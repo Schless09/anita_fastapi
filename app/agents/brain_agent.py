@@ -35,22 +35,25 @@ from dotenv import load_dotenv
 from fastapi import HTTPException
 from supabase._async.client import AsyncClient, create_client
 
-# Uncomment the email service import
-from anita.services.email_service import send_job_match_email, send_missed_call_email, send_no_matches_email, send_call_too_short_email
+# Import EmailService
+from anita.services.email_service import EmailService
 
 logger = logging.getLogger(__name__)
 
 class BrainAgent:
     """Orchestrator agent that coordinates other specialized agents."""
     
-    def __init__(self, 
-                 supabase_client: AsyncClient,
-                 candidate_service: CandidateService,
-                 openai_service: OpenAIService,
-                 matching_service: MatchingService,
-                 retell_service: RetellService,
-                 vector_service: VectorService,
-                 settings: Settings):
+    def __init__(
+        self,
+        supabase_client: AsyncClient,
+        candidate_service: CandidateService,
+        openai_service: OpenAIService,
+        matching_service: MatchingService,
+        retell_service: RetellService,
+        vector_service: VectorService,
+        email_service: EmailService,
+        settings: Settings
+    ):
         """Initialize the brain agent and required services."""
         self._candidate_intake_agent = None
         self._job_matching_agent = None
@@ -64,19 +67,19 @@ class BrainAgent:
         self.openai_service = openai_service
         self.matching_service = matching_service
         self.retell_service = retell_service
-        # Assign settings and vector_service needed by agent properties
-        self.settings = settings 
         self.vector_service = vector_service
+        self.email_service = email_service
+        self.settings = settings
 
         # Initialize the PDF processing tools
         self.pdf_processor = PDFProcessor()
         self.resume_parser = ResumeParser()
 
         # Define table names using the helper function with injected settings
-        self.candidates_table = get_table_name("candidates")
-        self.jobs_table = get_table_name("jobs")
-        self.matches_table = get_table_name("candidate_job_matches")
-        self.communications_table = get_table_name("communications")
+        self.candidates_table = get_table_name("candidates", settings)
+        self.jobs_table = get_table_name("jobs", settings)
+        self.matches_table = get_table_name("candidate_job_matches", settings)
+        self.communications_table = get_table_name("communications", settings)
 
         # State tracking (remains the same)
         self.state = {
@@ -95,6 +98,9 @@ class BrainAgent:
             },
             "transactions": {}
         }
+        
+        self.logger = logging.getLogger(__name__)
+        self.logger.setLevel(logging.INFO)
         
     async def _initialize_async(self):
         """Initialize async components."""
@@ -453,6 +459,14 @@ class BrainAgent:
             logger.warning("OpenAI service is not configured. Skipping match reason generation.")
             return None
 
+        # Extract job description from job data if it's a dictionary
+        if isinstance(job_text, dict):
+            job_data = job_text
+            job_description = job_data.get('profile_json', {}).get('job_description', '')
+            if not job_description:
+                job_description = job_data.get('description', '')
+            job_text = job_description
+
         system_prompt = (
             "You are an expert talent acquisition specialist. Analyze the provided candidate profile text, job description text, and the pre-calculated similarity score (0.0 to 1.0). "
             f"The match score is {match_score:.2f}. "
@@ -577,7 +591,7 @@ class BrainAgent:
                     logger.info(f"Attempting to send missed call email to {candidate_email} due to call_status: {call_status}")
                     try:
                         # --- UNCOMMENTED --- 
-                        await send_missed_call_email(
+                        await self.email_service.send_missed_call_email(
                             recipient_email=candidate_email, 
                             candidate_name=candidate_name, 
                             candidate_id=uuid.UUID(candidate_id), 
@@ -623,7 +637,7 @@ class BrainAgent:
                  duration_seconds = None # Ensure it's None on error
 
             # --- Decision based on Duration --- 
-            MIN_DURATION_SECONDS = 300 # 5 minutes
+            MIN_DURATION_SECONDS = 10 # 5 minutes
 
             if duration_seconds is None or duration_seconds < MIN_DURATION_SECONDS:
                 # === Scenario: Call Too Short ===
@@ -634,7 +648,7 @@ class BrainAgent:
                 if candidate_email:
                      logger.info(f"Attempting to send 'call too short' email to {candidate_email}.")
                      try:
-                         await send_call_too_short_email(
+                         await self.email_service.send_call_too_short_email(
                              recipient_email=candidate_email,
                              candidate_name=candidate_name,
                              candidate_id=uuid.UUID(candidate_id),
@@ -800,7 +814,7 @@ class BrainAgent:
                                     if high_scoring_jobs:
                                         logger.info(f"Attempting to send job match email to {candidate_email}...")
                                         try:
-                                            await send_job_match_email(
+                                            await self.email_service.send_job_match_email(
                                                 recipient_email=candidate_email,
                                                 candidate_name=candidate_name,
                                                 job_matches=high_scoring_jobs,
@@ -818,7 +832,7 @@ class BrainAgent:
                                         logger.info(f"Sending 'no matches' email to {candidate_email}...")
                                         try:
                                             name_to_use = candidate_name if candidate_name else 'Candidate'
-                                            await send_no_matches_email(
+                                            await self.email_service.send_no_matches_email(
                                                 recipient_email=candidate_email,
                                                 candidate_name=name_to_use,
                                                 candidate_id=candidate_id,

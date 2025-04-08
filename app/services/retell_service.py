@@ -8,6 +8,7 @@ logger = logging.getLogger(__name__)
 
 class RetellService:
     def __init__(self, settings: Settings):
+        self.settings = settings  # Store settings instance
         self.api_key = settings.retell_api_key
         self.phone_number = settings.retell_from_number
         self.webhook_url = settings.retell_webhook_url
@@ -85,7 +86,8 @@ class RetellService:
                         "to_number": phone,  # Use formatted phone number
                         "agent_id": self.agent_id,
                         "metadata": {
-                            "candidate_id": candidate_id
+                            "candidate_id": candidate_id,
+                            "environment": self.settings.environment  # Use self.settings
                         },
                         "retell_llm_dynamic_variables": clean_vars  # Use string-converted variables
                     }

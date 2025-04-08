@@ -9,7 +9,10 @@ project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, project_root)
 
 from app.config.supabase import get_supabase_client
+from app.config.settings import get_settings
+from app.config.utils import get_table_name
 from app.services.vector_service import VectorService
+from app.services.openai_service import OpenAIService
 # Attempt to import logging config, fallback to basic config if not found
 try:
     from app.config.logging import setup_logging
@@ -28,8 +31,17 @@ async def backfill_job_embeddings():
     supabase = None
     try:
         logger.info("Initializing Supabase client and VectorService...")
+        settings = get_settings()
         supabase = get_supabase_client()
-        vector_service = VectorService() # Uses the same Supabase client implicitly
+        openai_service = OpenAIService(settings=settings)
+        candidates_table = get_table_name("candidates", settings)
+        jobs_table = get_table_name("jobs", settings)
+        vector_service = VectorService(
+            openai_service=openai_service,
+            supabase_client=supabase,
+            candidates_table=candidates_table,
+            jobs_table=jobs_table
+        )
         logger.info("Initialization complete.")
 
         # Fetch jobs where embedding is NULL

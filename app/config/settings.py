@@ -1,10 +1,11 @@
 from pydantic_settings import BaseSettings
 from typing import Optional
 from functools import lru_cache
+from pydantic import Field
 
 class Settings(BaseSettings):
     # Environment
-    environment: str = "development"
+    environment: str = Field(default="development", env="ENVIRONMENT")
     
     # OpenAI
     openai_api_key: str
@@ -55,12 +56,18 @@ class Settings(BaseSettings):
     @property
     def webhook_base_url(self) -> str:
         """Get the base URL for webhooks based on environment."""
-        return "https://anita-fastapi.onrender.com"
+        if self.environment == "development":
+            # For local development, webhooks will be received by staging and forwarded
+            return "https://anita-fastapi-staging.onrender.com"
+        elif self.environment == "staging":
+            return "https://anita-fastapi-staging.onrender.com"
+        else:  # production
+            return "https://anita-fastapi.onrender.com"
     
     @property
     def retell_webhook_url(self) -> str:
-        """Get the Retell webhook URL based on environment."""
-        return f"{self.webhook_base_url}/webhook/retell"
+        """Get the webhook URL for Retell callbacks."""
+        return "https://anita-fastapi.onrender.com/webhook/retell"
     
     class Config:
         env_file = ".env"

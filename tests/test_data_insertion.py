@@ -20,8 +20,8 @@ supabase: AsyncClient = get_supabase_client()
 
 # Instantiate dependencies for JobService (and potentially CandidateService)
 openai_service = OpenAIService(settings=settings)
-candidates_table = get_table_name("candidates")
-jobs_table = get_table_name("jobs")
+candidates_table = get_table_name("candidates", settings)
+jobs_table = get_table_name("jobs", settings)
 vector_service = VectorService(
     openai_service=openai_service,
     supabase_client=supabase,

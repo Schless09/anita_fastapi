@@ -42,12 +42,12 @@ class EmailTool(BaseTool):
         """Configuration for this pydantic object."""
         arbitrary_types_allowed = True
     
-    def __init__(self):
+    def __init__(self, settings: Settings):
         """Initialize the email tool."""
         super().__init__()
         
-        # Get settings and store them
-        self.settings = get_settings()
+        # Store settings
+        self.settings = settings
         
         # Set up LLM
         self.llm = ChatOpenAI(
