@@ -174,12 +174,12 @@ async def handler(
     try:
         payload = await request.json()
         
-        # If in development, forward to localhost
+        # If in development, ONLY forward to localhost and return
         if settings.environment == "development":
             try:
                 async with httpx.AsyncClient() as client:
                     # Forward to localhost
-                    logger.info("Forwarding webhook to localhost:8000")
+                    logger.info("Development mode: Forwarding webhook to localhost:8000")
                     response = await client.post(
                         "http://localhost:8000/webhook/retell",
                         json=payload,
@@ -190,10 +190,18 @@ async def handler(
                         return response.json()
                     else:
                         logger.error(f"Error forwarding to localhost: {response.status_code}")
+                        return JSONResponse(
+                            status_code=response.status_code,
+                            content={"error": "Failed to forward to localhost"}
+                        )
             except Exception as e:
                 logger.error(f"Failed to forward to localhost: {str(e)}")
-                # Continue with normal processing if forwarding fails
+                return JSONResponse(
+                    status_code=500,
+                    content={"error": f"Failed to forward to localhost: {str(e)}"}
+                )
         
+        # Production processing - only reached if not in development
         # Create a copy for logging and redact large fields
         payload_for_logging = payload.copy()
         if 'call' in payload_for_logging and isinstance(payload_for_logging.get('call'), dict):
