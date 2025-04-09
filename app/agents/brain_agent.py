@@ -19,6 +19,7 @@ from app.services.retell_service import RetellService
 from app.services.openai_service import OpenAIService
 from app.services.vector_service import VectorService
 from app.services.matching_service import MatchingService
+from app.services.slack_service import SlackService
 from app.config.settings import get_settings, Settings
 from app.config.utils import get_table_name
 from app.config.supabase import get_supabase_client
@@ -57,6 +58,7 @@ class BrainAgent:
         retell_service: RetellService,
         vector_service: VectorService,
         email_service: EmailService,
+        slack_service: SlackService,
         settings: Settings
     ):
         """Initialize the brain agent and required services."""
@@ -74,6 +76,7 @@ class BrainAgent:
         self.retell_service = retell_service
         self.vector_service = vector_service
         self.email_service = email_service
+        self.slack_service = slack_service
         self.settings = settings
 
         # Initialize the PDF processing tools
@@ -372,7 +375,7 @@ class BrainAgent:
                 "status": "initial_processing_complete",
                 "timestamp": datetime.utcnow().isoformat()
             }
-            
+
         except Exception as e:
             logger.error(f"❌ Error in handle_candidate_submission: {str(e)}")
             logger.error(f"Traceback: {traceback.format_exc()}")
@@ -551,32 +554,41 @@ class BrainAgent:
         embedding_success = False
         candidate_email = None
         candidate_name = None
+        candidate_phone_db = None # Variable to store phone from DB
+        candidate_linkedin_url = None # Variable to store linkedin_url from DB
+        transcript_text = None # Initialize transcript text
 
         try:
             logger.info(f"\n=== Processing Incoming Call Event (Duration Logic) for Candidate ID: {candidate_id} ===")
 
-            # Fetch candidate email and name early on
+            # Fetch candidate email, name, phone, LINKEDIN_URL, and profile early on
             try:
-                 candidate_info_resp = await self.supabase.table(self.candidates_table)\
-                     .select('email, full_name, profile_json, status')\
-                     .eq('id', candidate_id)\
-                     .single()\
+                 # Corrected Supabase query syntax
+                 candidate_info_resp = await self.supabase.table(self.candidates_table) \
+                     .select('email, full_name, phone, linkedin_url, profile_json, status') \
+                     .eq('id', candidate_id) \
+                     .single() \
                      .execute()
                  
                  if not candidate_info_resp.data:
                       logger.error(f"(Agent Pre-Check) Could not find candidate {candidate_id}. Aborting call processing.")
                       self._end_transaction(process_id, "failed", "Candidate not found")
                       return {"status": "error", "reason": "Candidate not found"}
-                 # else (implied): continue if candidate was found
                  
                  # Store fetched data
                  candidate_email = candidate_info_resp.data.get('email')
                  candidate_name = candidate_info_resp.data.get('full_name')
+                 candidate_phone_db = candidate_info_resp.data.get('phone') 
+                 candidate_linkedin_url = candidate_info_resp.data.get('linkedin_url') 
                  current_db_status = candidate_info_resp.data.get('status')
-                 current_profile_for_processing = candidate_info_resp.data.get('profile_json', {}) # Get existing profile
+                 current_profile_for_processing = candidate_info_resp.data.get('profile_json', {}) 
                  
-                 if not candidate_email: # Log warning if email is missing
+                 if not candidate_email: 
                       logger.warning(f"(Agent Pre-Check) Candidate {candidate_id} missing email address. Cannot send follow-up emails.")
+                 if not candidate_phone_db:
+                      logger.warning(f"(Agent Pre-Check) Candidate {candidate_id} missing phone number in database.")
+                 if not candidate_linkedin_url:
+                      logger.info(f"(Agent Pre-Check) Candidate {candidate_id} missing linkedin_url in database.") 
 
             except Exception as fetch_err:
                  logger.error(f"(Agent Pre-Check) Error fetching initial candidate data for {candidate_id}: {fetch_err}")
@@ -617,11 +629,16 @@ class BrainAgent:
 
             # --- Transcript check (less critical now, but log if empty on 'ended' status) ---
             transcript = call_data.get('transcript')
-            if not transcript or not transcript.strip():
-                 if call_status == 'ended': # Log warning specifically if call ended but transcript is empty
-                      logger.warning(f"Transcript is empty for candidate {candidate_id} despite call status '{call_status}'. Duration check will determine outcome.")
-                 # Don't automatically send missed call email here anymore, rely on duration check below
-
+            # Prepare transcript_text (used later for Slack)
+            transcript_text = transcript
+            if not transcript_text and call_data.get('transcript_object'):
+                try:
+                    transcript_text = ' '.join([word.get('word', '') for word in call_data['transcript_object']])
+                    logger.debug(f"Converted transcript_object to text: {transcript_text[:100]}...")
+                except Exception as e:
+                    logger.error(f"Error converting transcript_object to text: {e}")
+                    transcript_text = None # Ensure it's None if conversion fails
+            
             # === Step 2: Duration Check ===
             duration_seconds = None
             try:
@@ -863,17 +880,53 @@ class BrainAgent:
                         else: # embedding failed
                             logger.warning(f"Skipping matchmaking for {candidate_id} due to embedding failure.")
                             self._update_transaction(process_id, "matchmaking", "skipped", {"reason": "Embedding failed"})
+                            # Attempt to send no_matches email even if embedding failed, as the call was long enough
+                            if candidate_email:
+                                logger.info(f"Sending 'no matches' email to {candidate_email} due to embedding failure...")
+                                try:
+                                    name_to_use = candidate_name if candidate_name else 'Candidate'
+                                    await self.email_service.send_no_matches_email(
+                                        recipient_email=candidate_email,
+                                        candidate_name=name_to_use,
+                                        candidate_id=candidate_id,
+                                        supabase_client=self.supabase
+                                    )
+                                    self.state["metrics"]["emails_sent"]["no_matches"] += 1
+                                    self._update_transaction(process_id, "email_sent", "no_matches_success_embedding_failed")
+                                    logger.info(f"Successfully sent 'no matches' email (embedding failed) to {candidate_email}.")
+                                except Exception as no_match_email_err:
+                                    logger.error(f"Error sending 'no matches' email (embedding failed): {no_match_email_err}")
+                                    self._update_transaction(process_id, "email_sent", "no_matches_failed_embedding_failed", {"error": str(no_match_email_err)})
+                            else:
+                                logger.warning(f"Could not find email for candidate {candidate_id} after embedding failure.")
 
                     except Exception as processing_err:
                         logger.error(f"Error during main processing block (post-duration check) for {candidate_id}: {processing_err}")
                         logger.error(f"Traceback: {traceback.format_exc()}")
                         final_process_status = 'error_processing_call'
                         embedding_success = False # Ensure flag is false on error
+                        matches = [] # Ensure matches is empty on error here
+
+                    # --- Send Slack Notification (AFTER email logic) --- 
+                    try:
+                        logger.info(f"Attempting to send Slack notification for processed call: {candidate_id}")
+                        await self.slack_service.notify_call_processed(
+                            candidate_name=candidate_name or "Unknown",
+                            email=candidate_email or "Unknown",
+                            phone=candidate_phone_db or "Not Provided", 
+                            transcript=transcript_text, 
+                            matches=matches,
+                            linkedin_url=candidate_linkedin_url # Pass the fetched URL
+                        )
+                    except Exception as slack_err:
+                        logger.error(f"Failed to send Slack notification for {candidate_id}: {slack_err}")
+                        logger.error(f"Traceback: {traceback.format_exc()}")
 
                     # --- Final Return (Inside if call_status == 'ended') --- 
                     logger.info(f"\n=== ✅ Call Processing Finished (Duration Logic - Ended) for {candidate_id} with determined status: {final_process_status} ====")
                     matches_count = 0
-                    if 'embedding_success' in locals() and embedding_success and 'matches' in locals():
+                    # Correct way to check if matches exists and has items
+                    if matches:
                          matches_count = len(matches)
                     return {"status": final_process_status, "matches_found": matches_count}
                 

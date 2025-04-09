@@ -51,6 +51,7 @@ from app.services.retell_service import RetellService
 from app.services.openai_service import OpenAIService
 from app.services.vector_service import VectorService
 from app.services.matching_service import MatchingService
+from app.services.slack_service import SlackService
 from anita.services.email_service import EmailService
 
 # Schemas
@@ -146,13 +147,14 @@ async def startup_event():
             supabase_client=supabase_client,
             settings=settings
         )
+        retell_service = RetellService(settings=settings)
         candidate_service = CandidateService(
             supabase_client=supabase_client,
-            retell_service=RetellService(settings=settings),
+            retell_service=retell_service,
             openai_service=openai_service,
             settings=settings
         )
-        retell_service = RetellService(settings=settings)
+        slack_service = SlackService(settings=settings)
         email_service = EmailService(settings=settings)
 
         # Initialize vector store tool
@@ -168,6 +170,7 @@ async def startup_event():
             retell_service=retell_service,
             vector_service=vector_service,
             email_service=email_service,
+            slack_service=slack_service,
             settings=settings
         )
         await brain_agent_instance._initialize_async()
@@ -175,6 +178,7 @@ async def startup_event():
         logger.info("✅ Services initialized successfully")
     except Exception as e:
         logger.error(f"❌ Error initializing services: {str(e)}")
+        traceback.print_exc()
         raise
 
 # Configure CORS
