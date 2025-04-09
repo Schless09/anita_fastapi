@@ -177,20 +177,26 @@ class PDFProcessor(BaseTool):
                     "error": "No text content was extracted from the PDF"
                 }
             
-            # Use LLM to extract essential info
-            logger.info("Sending text to LLM for information extraction")
-            prompt = f"""Extract the following essential information from this resume text (first few pages only):
+            # Use LLM to extract essential info, now including previous roles
+            logger.info("Sending text to LLM for information extraction (incl. prev roles)")
+            prompt = f"""Extract the following essential information from this resume text (likely first few pages only):
             1. Current or most recent job title
             2. Current or most recent company
+            3. The job title held *before* the current/most recent one (first previous title)
+            4. The company for the first previous title
+            5. The job title held *before* the first previous one (second previous title)
+            6. The company for the second previous title
             
             Resume text:
             {quick_text}
             
-            Return the information in a structured JSON format with these fields:
-            - current_role: Current or most recent job title
-            - current_company: Current or most recent company
+            Return the information in a structured JSON format with these specific fields:
+            - current_role: Current or most recent job title (string)
+            - current_company: Current or most recent company (string)
+            - experience: A JSON list containing objects for the previous roles. Include up to two previous roles found. Each object should have "title" and "company" keys.
+              Example: [ {{ "title": "First Previous Title", "company": "First Previous Company" }}, {{ "title": "Second Previous Title", "company": "Second Previous Company" }} ]
             
-            If any information is not found, use empty strings or empty arrays."""
+            If any specific piece of information (current role, company, a previous role/company) is not clearly found in the text, use an empty string ("") for its value in the JSON. If no previous experience is found, return an empty list for "experience"."""
             
             try:
                 response = self.llm.invoke(prompt)
