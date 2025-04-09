@@ -6,6 +6,7 @@ from typing import AsyncGenerator
 from app.config.settings import Settings, get_settings
 from app.config.utils import get_table_name
 from app.config.supabase import get_supabase_client
+from app.config import get_openai_client
 from app.services.openai_service import OpenAIService
 from app.services.vector_service import VectorService
 from app.services.job_service import JobService
@@ -16,6 +17,7 @@ from app.services.storage_service import StorageService
 from app.agents.brain_agent import BrainAgent
 from app.services.webhook_proxy import WebhookProxy
 from anita.services.email_service import EmailService
+from app.services.slack_service import SlackService
 
 # Cached settings
 @lru_cache()
@@ -99,7 +101,13 @@ def get_email_service(
 ) -> EmailService:
     return EmailService(settings=settings)
 
-# Provider for Brain Agent
+# Provider for Slack Service (NEW)
+def get_slack_service(
+    settings: Settings = Depends(get_cached_settings)
+) -> SlackService:
+    return SlackService(settings=settings)
+
+# Provider for Brain Agent (Reverted and Updated)
 def get_brain_agent(
     supabase_client: AsyncClient = Depends(get_supabase_client_dependency),
     candidate_service: CandidateService = Depends(get_candidate_service),
@@ -108,8 +116,10 @@ def get_brain_agent(
     retell_service: RetellService = Depends(get_retell_service),
     vector_service: VectorService = Depends(get_vector_service),
     email_service: EmailService = Depends(get_email_service),
-    settings: Settings = Depends(get_cached_settings)
+    slack_service: SlackService = Depends(get_slack_service), # Add SlackService dependency
+    settings: Settings = Depends(get_cached_settings) # Use cached settings
 ) -> BrainAgent:
+    # Instantiate BrainAgent using dependencies provided by FastAPI
     return BrainAgent(
         supabase_client=supabase_client,
         candidate_service=candidate_service,
@@ -118,6 +128,7 @@ def get_brain_agent(
         retell_service=retell_service,
         vector_service=vector_service,
         email_service=email_service,
+        slack_service=slack_service, # Pass it here
         settings=settings
     )
 
@@ -142,5 +153,6 @@ __all__ = [
     'get_retell_service',
     'get_storage_service',
     'get_webhook_proxy',
-    'get_email_service'
+    'get_email_service',
+    'get_slack_service' # Add new service to __all__
 ] 

@@ -1,9 +1,15 @@
-from pydantic_settings import BaseSettings
-from typing import Optional
+from pydantic_settings import BaseSettings, SettingsConfigDict
+from typing import Optional, List
 from functools import lru_cache
 from pydantic import Field
 
 class Settings(BaseSettings):
+    model_config = SettingsConfigDict(
+        env_file='.env', 
+        env_file_encoding='utf-8',
+        extra='ignore' # Allow extra fields like SLACK_WEBHOOK_URL initially
+    )
+
     # Environment
     environment: str = Field(default="development", env="ENVIRONMENT")
     
@@ -34,6 +40,7 @@ class Settings(BaseSettings):
     slack_signing_secret: str
     slack_verification_token: str
     slack_bot_token: str
+    slack_webhook_url: Optional[str] = None
     
     # Ngrok
     ngrok_authtoken: str
@@ -43,6 +50,8 @@ class Settings(BaseSettings):
     supabase_url: str
     supabase_key: str
     supabase_service_role_key: str
+    supabase_anon_key: str
+    supabase_db_name: str = "postgres"
 
     # S3 Storage
     s3_endpoint: str = "https://izepykrdwrascjhxtxuz.supabase.co/storage/v1/s3"
@@ -55,6 +64,12 @@ class Settings(BaseSettings):
 
     # Add development webhook URL
     development_webhook_url: Optional[str] = None  # Set in .env: DEVELOPMENT_WEBHOOK_URL=your-ngrok-url/webhook/retell
+
+    # Candidate Processing
+    min_call_duration_seconds: int = 300 # 5 minutes
+    max_call_duration_seconds: int = 1800 # 30 minutes
+    match_score_threshold: float = 0.50 # Threshold for sending match email
+    max_matches_per_candidate: int = 10 # Max matches to store/consider
 
     @property
     def webhook_base_url(self) -> str:
@@ -71,9 +86,6 @@ class Settings(BaseSettings):
     def retell_webhook_url(self) -> str:
         """Get the webhook URL for Retell callbacks."""
         return "https://anita-fastapi.onrender.com/webhook/retell"
-    
-    class Config:
-        env_file = ".env"
 
 @lru_cache()
 def get_settings() -> Settings:
