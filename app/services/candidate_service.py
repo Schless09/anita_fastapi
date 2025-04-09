@@ -37,40 +37,6 @@ class CandidateService:
         # self.vector_service = vector_service
         # self.matching = matching
 
-    async def create_candidate(self, submission: CandidateCreate) -> Dict[str, Any]:
-        logger.info(f"Creating candidate with email: {submission.email}")
-        # Build insert data dictionary
-        insert_data = {
-            "id": str(submission.id),  # Ensure id is string
-            "name": submission.name,
-            "email": submission.email,
-            "phone": submission.phone_number, # Use corrected field name
-            "linkedin": str(submission.linkedin) if submission.linkedin else None,
-            "status": "submitted", # Initial status
-            "profile_json": {}, # Initialize empty profile
-            "created_at": datetime.utcnow().isoformat(),
-            "updated_at": datetime.utcnow().isoformat(),
-            # Add other default fields as necessary
-            "is_resume_processed": False,
-            "is_call_completed": False,
-            "is_embedding_generated": False
-        }
-        # Note: Resume content is handled separately (upload to storage)
-
-        try:
-            response = await self.supabase.table(self.candidates_table_name).insert(insert_data).execute()
-            if response.data:
-                logger.info(f"Successfully created candidate: {submission.id}")
-                # Add resume upload logic here if needed
-                return response.data[0]
-            else:
-                logger.error(f"Failed to create candidate {submission.email}. Response: {response}")
-                raise Exception(f"Database insert failed for candidate {submission.email}")
-        except Exception as e:
-            logger.error(f"Error creating candidate {submission.email}: {e}")
-            logger.error(f"Traceback: {traceback.format_exc()}")
-            raise HTTPException(status_code=500, detail=f"Error creating candidate: {str(e)}")
-
     async def create_initial_candidate(self, submission_data: Dict[str, Any]) -> Dict[str, Any]:
         """Create initial candidate record with basic information."""
         logger.info(f"Creating initial candidate record for {submission_data['email']}")
@@ -80,31 +46,46 @@ class CandidateService:
         
         now = datetime.utcnow()
         
-        # Prepare initial candidate data
+        # Prepare initial candidate data, including all new fields
         insert_data = {
             "id": candidate_id,
-            "full_name": f"{submission_data['first_name']} {submission_data['last_name']}",  # Match full_name column
-            "email": submission_data['email'],
-            "phone": submission_data['phone'],
-            "linkedin_url": submission_data.get('linkedin_url'),  # Match linkedin_url column
-            "status": "submitted",
-            "status_last_updated": now.isoformat(),  # Add status_last_updated
-            "profile_json": {},
+            # Use correct field names based on schema/db
+            "full_name": submission_data.get('name'),
+            "email": submission_data.get('email'),
+            "phone": submission_data.get('phone_number'), # Use DB column name 'phone'
+            "linkedin_url": submission_data.get('linkedin'),
+            # "resume_filename": submission_data.get('resume_filename'), # Removed: No DB column
+            "work_environment": submission_data.get('work_environment'),
+            "desired_locations": submission_data.get('desired_locations'),
+            "preferred_sub_locations": submission_data.get('preferred_sub_locations'),
+            "work_authorization": submission_data.get('work_authorization'),
+            "visa_type": submission_data.get('visa_type'),
+            "employment_types": submission_data.get('employment_types'),
+            "availability": submission_data.get('availability'),
+            "dream_role_description": submission_data.get('dream_role_description'),
+            # Existing fields
+            "status": "submitted", # Initial status
+            "status_last_updated": now.isoformat(),
+            "profile_json": {}, # Initialize empty profile
             "created_at": now.isoformat(),
             "updated_at": now.isoformat(),
             "is_resume_processed": False,
             "is_call_completed": False,
             "is_embedding_generated": False,
-            "responsiveness_score": 0,  # Add default values from schema
+            "responsiveness_score": 0,
             "responsiveness_label": "Unresponsive"
+            # Note: resume_url will be updated later after upload
         }
+
+        # Remove keys with None values if the DB column doesn't handle them or has defaults
+        insert_data = {k: v for k, v in insert_data.items() if v is not None}
 
         try:
             # Insert the candidate record
             response = await self.supabase.table(self.candidates_table_name).insert(insert_data).execute()
             
             if not response.data:
-                logger.error(f"Failed to create initial candidate record for {submission_data['email']}")
+                logger.error(f"Failed to create initial candidate record for {submission_data.get('email', 'N/A')}. DB Response: {response}")
                 raise HTTPException(
                     status_code=500,
                     detail="Failed to create candidate record"
@@ -114,8 +95,10 @@ class CandidateService:
             return response.data[0]
             
         except Exception as e:
-            logger.error(f"Error creating initial candidate record: {str(e)}")
+            logger.error(f"Error creating initial candidate record for {submission_data.get('email', 'N/A')}: {str(e)}")
             logger.error(f"Traceback: {traceback.format_exc()}")
+            # Log the data being inserted for debugging (be careful with sensitive info)
+            # logger.debug(f"Insert data attempted: {insert_data}")
             raise HTTPException(
                 status_code=500,
                 detail=f"Error creating candidate record: {str(e)}"
@@ -276,31 +259,33 @@ class CandidateService:
         Returns:
             Dict[str, Any]: The updated candidate record
         """
+        logger.info(f"Updating resume URL for candidate {candidate_id} with path: {resume_path}")
         try:
             update_data = {
-                "resume_path": resume_path,
+                # Use the correct column name from the DB schema
+                "resume_url": resume_path, 
                 "updated_at": datetime.utcnow().isoformat()
             }
-            
+
             response = await self.supabase.table(self.candidates_table_name)\
                 .update(update_data)\
                 .eq('id', candidate_id)\
                 .execute()
-                
+
             if not response.data:
-                logger.error(f"Failed to update resume path for candidate {candidate_id}")
+                logger.error(f"Failed to update resume URL for candidate {candidate_id}")
                 raise HTTPException(
                     status_code=500,
-                    detail="Failed to update candidate resume path"
+                    detail="Failed to update candidate resume URL"
                 )
-            
-            logger.info(f"Successfully updated resume path for candidate {candidate_id}")
+
+            logger.info(f"Successfully updated resume URL for candidate {candidate_id}")
             return response.data[0]
-            
+
         except Exception as e:
-            logger.error(f"Error updating resume path for candidate {candidate_id}: {str(e)}")
+            logger.error(f"Error updating resume URL for candidate {candidate_id}: {str(e)}")
             logger.error(f"Traceback: {traceback.format_exc()}")
             raise HTTPException(
                 status_code=500,
-                detail=f"Error updating candidate resume path: {str(e)}"
+                detail=f"Error updating candidate resume URL: {str(e)}"
             ) 

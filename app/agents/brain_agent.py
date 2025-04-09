@@ -226,6 +226,12 @@ class BrainAgent:
         process_id = f"submission_{candidate_id}_{datetime.utcnow().isoformat()}"
         self._start_transaction(process_id, "candidate_submission")
         
+        # Initialize temporary variables for previous job info
+        previous_company_1 = ""
+        previous_title_1 = ""
+        previous_company_2 = ""
+        previous_title_2 = ""
+
         try:
             # Step 1: Initial Data Processing
             logger.info("\nStep 1: 📝 Initial Data Processing")
@@ -262,60 +268,92 @@ class BrainAgent:
             logger.info("\nStep 2: 🚀 Quick Resume Extraction")
             logger.info("----------------------------------------")
             
-            # Use PDFProcessor for quick extraction
             try:
-                # Call _quick_extract instead of _arun -> parse_resume
                 quick_result = self.pdf_processor._quick_extract(resume_content)
                 if quick_result["status"] != "success":
                     raise ValueError(f"Quick extraction failed: {quick_result.get('error', 'Unknown error')}")
                 
                 essential_info = quick_result.get("essential_info", {})
                 
-                # Extract ONLY current_role and current_company
+                # Extract current role/company (as before)
                 extracted_role = essential_info.get('current_role', '')
                 extracted_company = essential_info.get('current_company', '')
+
+                # --- START: Extract Previous Roles --- 
+                experience_list = essential_info.get("experience", [])
+                if isinstance(experience_list, list) and len(experience_list) > 0:
+                    # Assuming list is ordered: [current, prev1, prev2, ...]
+                    # Or sometimes: [prev1, prev2, ...] if current isn't listed as experience
+                    
+                    # Try to determine if the first item is current or already previous
+                    first_item = experience_list[0]
+                    is_first_item_current = False
+                    if isinstance(first_item, dict):
+                        # Heuristic: if first item matches extracted current role/company, skip it
+                        if first_item.get("title") == extracted_role and first_item.get("company") == extracted_company:
+                             is_first_item_current = True 
+                             
+                    start_index_for_previous = 1 if is_first_item_current else 0
+
+                    # Get first previous job (at index start_index_for_previous)
+                    if len(experience_list) > start_index_for_previous:
+                        prev1 = experience_list[start_index_for_previous]
+                        if isinstance(prev1, dict):
+                            previous_title_1 = prev1.get("title", "")
+                            previous_company_1 = prev1.get("company", "")
+                    
+                    # Get second previous job (at index start_index_for_previous + 1)
+                    if len(experience_list) > start_index_for_previous + 1:
+                        prev2 = experience_list[start_index_for_previous + 1]
+                        if isinstance(prev2, dict):
+                            previous_title_2 = prev2.get("title", "")
+                            previous_company_2 = prev2.get("company", "")
                 
-                # Log what was extracted quickly
-                logger.info(f"Quickly Extracted: Role: {extracted_role or 'Not found'}, " + 
-                            f"Company: {extracted_company or 'Not found'}")
+                logger.info(f"Quickly Extracted: Current Role: {extracted_role or 'N/A'}, Company: {extracted_company or 'N/A'}")
+                logger.info(f"Quickly Extracted: Prev1 Role: {previous_title_1 or 'N/A'}, Company: {previous_company_1 or 'N/A'}")
+                logger.info(f"Quickly Extracted: Prev2 Role: {previous_title_2 or 'N/A'}, Company: {previous_company_2 or 'N/A'}")
+                # --- END: Extract Previous Roles --- 
                 
-                # Update candidate with ONLY role and company initially
-                # The full profile will be populated by the background task
+                # Update candidate with ONLY current role and company initially
                 update_data = {
                     "profile_json": {
                         "current_role": extracted_role,
                         "current_company": extracted_company
+                        # DO NOT add previous roles here; full processing handles it
                     },
                     "updated_at": datetime.utcnow().isoformat()
                 }
-                update_res = await self.supabase.table(self.candidates_table).update(update_data).eq("id", candidate_id).execute()
-                if not update_res.data:
-                     logger.warning(f"Quick extraction DB update returned no data for candidate {candidate_id}")
-                     # Decide if this should be a hard failure? For now, log and continue.
-                
-                logger.info("✅ Quick resume extraction completed and essential info stored.")
+                update_result = await self.supabase.table(self.candidates_table).update(update_data).eq("id", candidate_id).execute()
+                if not update_result.data:
+                     # Log warning but don't fail the process just for this update
+                     logger.warning(f"Could not update candidate {candidate_id} with quick extracted role/company.")
+                else:
+                    logger.info(f"✅ Candidate {candidate_id} updated with quick extracted current role/company.")
                 self._update_transaction(process_id, "quick_extraction", "completed")
 
-                # Trigger background processing for the full resume details
-                logger.info("🚀 Triggering background task for full resume processing...")
-                asyncio.create_task(self._process_full_resume_background(resume_content, candidate_id))
-                logger.info("✅ Background task triggered.")
-                
-            except Exception as e:
-                logger.error(f"❌ Quick extraction or background task trigger failed: {str(e)}")
-                logger.error(traceback.format_exc()) # Log full traceback for quick extraction errors
-                self._update_transaction(process_id, "quick_extraction", "failed", {"error": str(e)})
-                # Continue with call scheduling even if quick extraction failed, might use limited data
-            
-            # Step 3: Schedule Retell Call
+            except Exception as extract_err:
+                logger.error(f"❌ Error during quick resume extraction for {candidate_id}: {extract_err}")
+                self._update_transaction(process_id, "quick_extraction", "failed", {"error": str(extract_err)})
+                # Continue process even if quick extract fails?
+                # Maybe rely on background processing or call without this info.
+                # For now, continue to call scheduling.
+
+            # Step 3: Scheduling Retell Call
             logger.info("\nStep 3: 📞 Scheduling Retell Call")
             logger.info("----------------------------------------")
             
             try:
-                # Fetch the LATEST candidate data including the updated profile_json from quick extraction
+                # Fetch the LATEST candidate data including the new fields
+                fields_to_select = [
+                    'profile_json', 'phone', 'full_name', # Existing fields
+                    # New fields for dynamic variables
+                    'work_environment', 'desired_locations', 'preferred_sub_locations',
+                    'work_authorization', 'visa_type', 'employment_types',
+                    'availability', 'dream_role_description'
+                ]
                 call_data_resp = await (
                     self.supabase.table(self.candidates_table)
-                    .select('profile_json, phone, full_name') # Select necessary fields
+                    .select(', '.join(fields_to_select)) # Select all required fields
                     .eq('id', candidate_id)
                     .single()
                     .execute()
@@ -323,40 +361,60 @@ class BrainAgent:
                 if not call_data_resp.data:
                     raise ValueError("Failed to fetch latest data before scheduling call.")
 
-                call_profile_json = call_data_resp.data.get('profile_json', {}) # Use the (now cleaned) profile_json
-                phone_number = call_data_resp.data.get('phone')
-                db_full_name = call_data_resp.data.get('full_name', '')
-                
-                # Log what we found in the database for debugging
-                logger.info(f"Candidate data for call scheduling - full_name: {db_full_name}, profile: {json.dumps(call_profile_json)[:100]}...")
+                # Extract data
+                candidate_data = call_data_resp.data
+                call_profile_json = candidate_data.get('profile_json', {})
+                phone_number = candidate_data.get('phone')
+                db_full_name = candidate_data.get('full_name', '')
+
+                # Log basic info
+                logger.info(f"Candidate data for call scheduling - full_name: {db_full_name}")
 
                 if not phone_number:
                     raise ValueError("Cannot schedule call, phone number missing.")
                 if not db_full_name:
                     logger.warning(f"Candidate {candidate_id} missing full_name, using 'Candidate' for Retell.")
 
-                # Extract role/company from profile_json (ensure these keys exist after cleaning)
+                # Extract role/company from profile_json (remains the same)
                 current_role = call_profile_json.get('current_role', '')
                 current_company = call_profile_json.get('current_company', '')
 
-                # Log the dynamic variables we're going to use
-                logger.info(f"Using dynamic variables - full_name: {db_full_name}, company: {current_company}, role: {current_role}")
-
-                # Extract first_name from full_name
+                # Extract first_name
                 nameParts = db_full_name.split(" ")
                 first_name = nameParts[0] if len(nameParts) > 0 else ""
 
-                # Pass first_name to RetellService
+                # Prepare dynamic variables dictionary, adding previous roles with defaults
+                dynamic_variables = {
+                    'first_name': first_name,
+                    'full_name': db_full_name,
+                    'email': candidate_email, 
+                    'phone': phone_number,
+                    # Use quick extracted if available, else DB fallback, else empty
+                    'current_company': extracted_company if extracted_company else (current_company if current_company != 'pending' else ''),
+                    'current_title': extracted_role if extracted_role else (current_role if current_role != 'pending' else ''),
+                    # Add new fields from form (as before)
+                    'work_env': ", ".join(candidate_data.get('work_environment', [])) if candidate_data.get('work_environment') else 'Not specified', 
+                    'desired_locs': ", ".join(candidate_data.get('desired_locations', [])) if candidate_data.get('desired_locations') else 'Not specified', 
+                    'preferred_sub_locs': ", ".join(candidate_data.get('preferred_sub_locations', [])) if candidate_data.get('preferred_sub_locations') else 'Not specified', 
+                    'work_auth': candidate_data.get('work_authorization', 'Not specified'),
+                    'visa_type': candidate_data.get('visa_type') or 'Not applicable', 
+                    'emp_types': ", ".join(candidate_data.get('employment_types', [])) if candidate_data.get('employment_types') else 'Not specified', 
+                    'availability': candidate_data.get('availability', 'Not specified'),
+                    'dream_role': candidate_data.get('dream_role_description', 'Not specified'),
+                    # --- ADD Previous Roles with Defaults --- 
+                    'previous_company_1': previous_company_1 or 'Previous Company', 
+                    'previous_title_1': previous_title_1 or 'Previous Title', 
+                    'previous_company_2': previous_company_2 or 'Second Previous Company', 
+                    'previous_title_2': previous_title_2 or 'Second Previous Title'  
+                }
+                
+                # Log the dynamic variables being sent
+                logger.info(f"Dynamic variables for Retell call: {json.dumps(dynamic_variables)}")
+
+                # Schedule call using retell_service
                 call_result = await self.retell_service.schedule_call(
                     candidate_id=candidate_id,
-                    dynamic_variables={
-                        'first_name': first_name,  # Pass the extracted first name
-                        'full_name': db_full_name,  # Pass the full name
-                        'email': candidate_email,  # Email passed into handler, not from DB profile_json
-                        'current_company': current_company if current_company and current_company != 'pending' else '',
-                        'current_title': current_role if current_role and current_role != 'pending' else '',
-                        'phone': phone_number
-                    }
+                    dynamic_variables=dynamic_variables
                 )
                 call_id = call_result.get("call_id", "unknown")
                 logger.info(f"✅ Retell call scheduled for candidate {candidate_id}: {call_id}")
