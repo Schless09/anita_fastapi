@@ -408,8 +408,11 @@ class BrainAgent:
                     'previous_title_2': previous_title_2 or 'Second Previous Title'  
                 }
                 
-                # Log the dynamic variables being sent
-                logger.info(f"Dynamic variables for Retell call: {json.dumps(dynamic_variables)}")
+                # Remove sensitive information before logging
+                sanitized_dynamic_variables = dynamic_variables.copy()
+                sanitized_dynamic_variables.pop('phone', None)
+                sanitized_dynamic_variables.pop('email', None)
+                logger.info(f"Dynamic variables for Retell call: {json.dumps(sanitized_dynamic_variables)}")
 
                 # Schedule call using retell_service
                 call_result = await self.retell_service.schedule_call(
