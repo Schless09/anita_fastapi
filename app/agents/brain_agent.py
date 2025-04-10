@@ -877,22 +877,57 @@ class BrainAgent:
 
                                 # --- Email Logic (Based ONLY on Matches Found/Not Found) --- 
                                 if candidate_email:
-                                    # Filter matches based on score threshold and take top 3
+                                    # Filter matches based on score threshold
                                     MATCH_SCORE_THRESHOLD = 0.50
-                                    high_scoring_jobs = [
-                                        {
-                                            'job_id': match.get('job_id'),
-                                            'job_title': match.get('title'),
-                                            'company': match.get('company'),
-                                            'job_url': match.get('job_url') # Use the URL returned by the matching service
-                                        }
-                                        for match in matches
+                                    qualifying_matches = [
+                                        match for match in matches
                                         if match.get('similarity', 0) >= MATCH_SCORE_THRESHOLD
                                     ]
-                                    # Sort by similarity score and take top 3
-                                    high_scoring_jobs.sort(key=lambda x: matches[matches.index(next(m for m in matches if m.get('job_id') == x['job_id']))].get('similarity', 0), reverse=True)
-                                    high_scoring_jobs = high_scoring_jobs[:3]
+                                    
+                                    high_scoring_jobs = []
+                                    if qualifying_matches:
+                                        # Sort by similarity score first
+                                        qualifying_matches.sort(key=lambda m: m.get('similarity', 0), reverse=True)
+                                        
+                                        # Get the IDs of the qualifying jobs
+                                        job_ids_to_fetch = [m.get('job_id') for m in qualifying_matches if m.get('job_id')]
+                                        job_id_to_similarity = {m.get('job_id'): m.get('similarity', 0) for m in qualifying_matches}
 
+                                        if job_ids_to_fetch:
+                                            # Fetch full job details from Supabase
+                                            logger.info(f"Fetching details for job IDs: {job_ids_to_fetch}")
+                                            try:
+                                                jobs_resp = await self.supabase.table(self.jobs_table)\
+                                                    .select("id, job_title, company_name, job_url")\
+                                                    .in_("id", job_ids_to_fetch)\
+                                                    .execute()
+                                                
+                                                if jobs_resp.data:
+                                                    # Create a dict for easy lookup
+                                                    job_details_map = {job['id']: job for job in jobs_resp.data}
+                                                    
+                                                    # Rebuild high_scoring_jobs with full details, maintaining order and limit
+                                                    for job_id in job_ids_to_fetch: # Iterate in sorted order
+                                                        if job_id in job_details_map:
+                                                            job_detail = job_details_map[job_id]
+                                                            high_scoring_jobs.append({
+                                                                'job_id': job_id,
+                                                                'job_title': job_detail.get('job_title'),
+                                                                'company': job_detail.get('company_name'), # Use company_name from DB
+                                                                'job_url': job_detail.get('job_url'), # Use job_url from DB
+                                                                # Optionally add similarity back if needed by email template, though not currently used
+                                                                # 'similarity': job_id_to_similarity.get(job_id)
+                                                            })
+                                                        if len(high_scoring_jobs) == 3: # Limit to top 3
+                                                             break 
+                                                else:
+                                                     logger.warning(f"Could not fetch details for job IDs: {job_ids_to_fetch}")
+                                                     
+                                            except Exception as db_err:
+                                                 logger.error(f"Error fetching job details from Supabase: {db_err}")
+                                                 # Proceed with empty high_scoring_jobs if DB fails?
+                                                 high_scoring_jobs = []
+                                        
                                     # Decide which email to send based on high_scoring_jobs list
                                     if high_scoring_jobs:
                                         logger.info(f"Attempting to send job match email to {candidate_email}...")
