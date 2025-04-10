@@ -75,6 +75,12 @@ class SlackService:
         linkedin_url: Optional[str] = None
     ) -> bool:
         """Send a notification after a call has been processed."""
+        # --- Environment Check ---
+        if self.settings.environment == "development":
+            logger.info(f"Environment is '{self.settings.environment}', skipping Slack notification for processed call: {email}")
+            return True # Indicate successful handling (by skipping), prevent potential upstream errors expecting False on actual send failure.
+
+        # --- Original Logic ---
         if not self.webhook_client:
             logger.warning("Slack webhook URL not configured. Skipping notification.")
             return False

@@ -63,6 +63,5 @@ lxml
 unstructured
 unstructured[pdf]
 numpy
-uuid
 loguru
 html2text
