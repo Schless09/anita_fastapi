@@ -86,7 +86,7 @@ class CandidateService:
         insert_data = {k: v for k, v in insert_data.items() if v is not None}
         
         # --- DEBUG LOGGING --- 
-        logger.info(f"Data prepared for Supabase insert: {insert_data}")
+        logger.info("Data prepared for Supabase insert.")
         # --- END DEBUG LOGGING ---
 
         try:
