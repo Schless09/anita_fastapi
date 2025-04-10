@@ -150,7 +150,7 @@ async def submit_job(job_data: JobPosting, job_service: JobService = Depends(get
             logger.info(f"Nice to Have: {', '.join(job_data.tech_stack_nice_to_haves)}")
         
         # Log compensation info
-        logger.info(f"Salary Range: ${job_data.salary_range_min} - ${job_data.salary_range_max}")
+        logger.info("Salary Range information received.")
         
         # Add job ID and timestamps
         job_id = str(uuid.uuid4())
