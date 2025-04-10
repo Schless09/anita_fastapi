@@ -855,8 +855,7 @@ class BrainAgent:
                                             'next_step': 'Review match details',
                                             'matched_at': datetime.utcnow().isoformat(),
                                             'created_at': datetime.utcnow().isoformat(),
-                                            'updated_at': datetime.utcnow().isoformat(),
-                                            'job_url': match.get('job_url') # Use the URL returned by the matching service
+                                            'updated_at': datetime.utcnow().isoformat()
                                         }
                                         match_records.append(match_record)
 
