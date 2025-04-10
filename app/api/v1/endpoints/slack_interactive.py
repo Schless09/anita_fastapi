@@ -41,62 +41,71 @@ async def get_inbound_service(settings: Settings = Depends(get_settings), supaba
     slack_service = SlackService(settings)
     return InboundEmailService(settings, supabase_client, email_service, slack_service)
 
-async def handle_approve_action(payload: dict, background_tasks: BackgroundTasks, inbound_service: InboundEmailService, settings: Settings):
-    user_id = payload['user']['id']
-    action = payload['actions'][0]
-    inbound_log_id = int(action['value'])
-    response_url = payload['response_url']
-    
-    logger.info(f"User {user_id} clicked Approve for log ID {inbound_log_id}")
+async def handle_approve_action(
+    payload: Dict[str, Any],
+    background_tasks: BackgroundTasks,
+    inbound_service: InboundEmailService = Depends(get_inbound_service),
+    settings: Settings = Depends(get_settings)
+):
+    """Handles the 'Approve & Send' action from Slack."""
+    try:
+        user_id = payload['user']['id']
+        action = payload['actions'][0]
+        # The value is the UUID primary key of the communications log, treat as string
+        inbound_log_id = action['value']
 
-    # 1. Fetch the proposed reply from the log
-    communications_table = get_table_name("communications", settings)
-    log_resp = await inbound_service.supabase.table(communications_table)\
-                            .select("metadata")\
-                            .eq("id", inbound_log_id)\
-                            .maybe_single().execute()
-    
-    if not log_resp.data or not log_resp.data.get("metadata") or not log_resp.data["metadata"].get("proposed_ai_reply"):
-        logger.error(f"Could not retrieve proposed reply for log ID {inbound_log_id} during approval.")
-        # Notify user in Slack
+        logger.info(f"User {user_id} clicked Approve for log ID {inbound_log_id}")
+
+        # 1. Fetch the proposed reply from the log
+        communications_table = get_table_name("communications", settings)
+        log_resp = await inbound_service.supabase.table(communications_table)\
+                                .select("metadata")\
+                                .eq("id", inbound_log_id)\
+                                .maybe_single().execute()
+        
+        if not log_resp.data or not log_resp.data.get("metadata") or not log_resp.data["metadata"].get("proposed_ai_reply"):
+            logger.error(f"Could not retrieve proposed reply for log ID {inbound_log_id} during approval.")
+            # Notify user in Slack
+            try:
+                slack_client = WebClient(token=settings.slack_bot_token)
+                slack_client.chat_postEphemeral(channel=payload['channel']['id'], user=user_id, text=f":warning: Error: Could not find the proposed reply data for Log ID {inbound_log_id}. Please check logs.")
+            except Exception as slack_err:
+                 logger.error(f"Error sending ephemeral Slack error message: {slack_err}")
+            return
+
+        proposed_reply = log_resp.data["metadata"]["proposed_ai_reply"]
+        
+        # 2. Add email sending to background tasks
+        background_tasks.add_task(inbound_service.send_approved_email, inbound_log_id, proposed_reply, user_id)
+        
+        # 3. Update the original Slack message (optional but good UX)
         try:
             slack_client = WebClient(token=settings.slack_bot_token)
-            slack_client.chat_postEphemeral(channel=payload['channel']['id'], user=user_id, text=f":warning: Error: Could not find the proposed reply data for Log ID {inbound_log_id}. Please check logs.")
-        except Exception as slack_err:
-             logger.error(f"Error sending ephemeral Slack error message: {slack_err}")
-        return
-
-    proposed_reply = log_resp.data["metadata"]["proposed_ai_reply"]
-    
-    # 2. Add email sending to background tasks
-    background_tasks.add_task(inbound_service.send_approved_email, inbound_log_id, proposed_reply, user_id)
-    
-    # 3. Update the original Slack message (optional but good UX)
-    try:
-        slack_client = WebClient(token=settings.slack_bot_token)
-        original_blocks = payload['message']['blocks']
-        # Remove the actions block and add an update message
-        updated_blocks = [block for block in original_blocks if block.get('type') != 'actions']
-        updated_blocks.append({
-            "type": "context",
-            "elements": [
-                {
-                    "type": "mrkdwn",
-                    "text": f":white_check_mark: Approved by <@{user_id}>. Sending email..."
-                }
-            ]
-        })
-        slack_client.chat_update(
-            channel=payload['channel']['id'],
-            ts=payload['message']['ts'],
-            blocks=updated_blocks,
-            text=f"Email reply approved by {user_id}"
-        )
-        logger.info(f"Updated Slack message for approved log ID {inbound_log_id}")
-    except SlackApiError as e:
-        logger.error(f"Error updating Slack message after approval: {e.response['error']}")
+            original_blocks = payload['message']['blocks']
+            # Remove the actions block and add an update message
+            updated_blocks = [block for block in original_blocks if block.get('type') != 'actions']
+            updated_blocks.append({
+                "type": "context",
+                "elements": [
+                    {
+                        "type": "mrkdwn",
+                        "text": f":white_check_mark: Approved by <@{user_id}>. Sending email..."
+                    }
+                ]
+            })
+            slack_client.chat_update(
+                channel=payload['channel']['id'],
+                ts=payload['message']['ts'],
+                blocks=updated_blocks,
+                text=f"Email reply approved by {user_id}"
+            )
+            logger.info(f"Updated Slack message for approved log ID {inbound_log_id}")
+        except SlackApiError as e:
+            logger.error(f"Error updating Slack message after approval: {e.response['error']}")
+        except Exception as e:
+             logger.exception(f"Unexpected error updating Slack message after approval: {e}")
     except Exception as e:
-         logger.exception(f"Unexpected error updating Slack message after approval: {e}")
+        logger.exception(f"Error processing approve action: {e}")
 
 async def handle_reject_action(
     payload: Dict[str, Any],
@@ -150,7 +159,8 @@ async def handle_reject_action(
 async def handle_edit_action(payload: dict, settings: Settings, supabase_client: AsyncClient): # Added supabase_client
     user_id = payload['user']['id']
     action = payload['actions'][0]
-    inbound_log_id = int(action['value'])
+    # The value is the UUID primary key of the communications log, treat as string
+    inbound_log_id = action['value']
     trigger_id = payload['trigger_id']
     
     logger.info(f"User {user_id} clicked Edit for log ID {inbound_log_id}")
@@ -209,7 +219,8 @@ async def handle_edit_action(payload: dict, settings: Settings, supabase_client:
 
 async def handle_edit_modal_submission(payload: dict, background_tasks: BackgroundTasks, inbound_service: InboundEmailService, settings: Settings):
     user_id = payload['user']['id']
-    inbound_log_id = int(payload['view']['private_metadata'])
+    # The private_metadata contains the UUID string log ID
+    inbound_log_id = payload['view']['private_metadata']
     edited_reply = payload['view']['state']['values']['edited_reply_block']['edited_reply_input']['value']
     
     logger.info(f"User {user_id} submitted edited reply for log ID {inbound_log_id}")
