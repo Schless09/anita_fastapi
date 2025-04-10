@@ -43,66 +43,74 @@ router = APIRouter()
 
 @router.post("/candidates", tags=["Candidates"])
 async def create_candidate(
-    request: Request,
-    background_tasks: BackgroundTasks,
-    firstName: str = Form(..., alias="firstName"),
-    lastName: str = Form(..., alias="lastName"),
-    email: str = Form(...),
-    phone: str = Form(...),
-    linkedinURL: Optional[str] = Form(None, alias="linkedinURL"),
-    resume: UploadFile = File(...),
-    workEnvironment: List[WorkEnvironmentEnum] = Form(..., alias="workEnvironment"),
-    workAuthorization: WorkAuthorizationEnum = Form(..., alias="workAuthorization"),
-    visaType: Optional[VisaTypeEnum] = Form(None, alias="visaType"),
-    employmentType: List[EmploymentTypeEnum] = Form(..., alias="employmentType"),
-    availability: AvailabilityEnum = Form(..., alias="availability"),
-    dreamRoleDescription: Optional[str] = Form(None, alias="dreamRoleDescription"),
+    # --- Restore original parameters --- 
+    request: Request, 
+    background_tasks: BackgroundTasks, 
+    firstName: str = Form(..., alias="firstName"), 
+    lastName: str = Form(..., alias="lastName"), 
+    email: str = Form(...), 
+    phone: str = Form(...), 
+    linkedinURL: Optional[str] = Form(None, alias="linkedinURL"), 
+    resume: UploadFile = File(...), 
+    workEnvironment: List[WorkEnvironmentEnum] = Form(..., alias="workEnvironment"), 
+    workAuthorization: WorkAuthorizationEnum = Form(..., alias="workAuthorization"), 
+    visaType: Optional[VisaTypeEnum] = Form(None, alias="visaType"), 
+    employmentType: List[EmploymentTypeEnum] = Form(..., alias="employmentType"), 
+    availability: AvailabilityEnum = Form(..., alias="availability"), 
+    dreamRoleDescription: Optional[str] = Form(None, alias="dreamRoleDescription"), 
+    # --- DO NOT include consent fields in signature --- 
+    # smsConsentStr: str = Form(..., alias="smsConsent"),
+    # legalConsentStr: str = Form(..., alias="legalConsent"),
+    # --- Restore Dependencies --- 
     brain_agent: BrainAgent = Depends(get_brain_agent),
     candidate_service: CandidateService = Depends(get_candidate_service),
     storage_service: StorageService = Depends(get_storage_service)
 ):
     """
     Handle new candidate submission from frontend (multipart/form-data).
-    Creates initial record with all form fields, uploads resume, then triggers BrainAgent.
+    Uses manual extraction for smsConsent and legalConsent.
     """
-    # --- WORKAROUND: Manually extract lists from raw form data --- 
+    logger.info("--- Entering FULL create_candidate ---")
+    
+    # --- Combined Manual Extraction (Lists and Consents) --- 
     try:
         raw_form_data = await request.form()
+        # Lists
         actual_desired_locations = raw_form_data.getlist("desiredLocation")
         actual_pref_sub_locations = raw_form_data.getlist("preferredSubLocation")
         actual_work_environments = raw_form_data.getlist("workEnvironment")
         actual_employment_types = raw_form_data.getlist("employmentType")
+        # Consents
+        sms_consent_str = raw_form_data.get("smsConsent", "false") 
+        legal_consent_str = raw_form_data.get("legalConsent", "false")
         
-        logger.debug(f"Manually extracted desired locations: {actual_desired_locations}")
-        logger.debug(f"Manually extracted preferred sub-locations: {actual_pref_sub_locations}")
-        logger.debug(f"Manually extracted work environments: {actual_work_environments}")
-        logger.debug(f"Manually extracted employment types: {actual_employment_types}")
-        
+        logger.debug(f"Extracted smsConsentStr: {sms_consent_str}") # Optional: keep for debug
+        logger.debug(f"Extracted legalConsentStr: {legal_consent_str}") # Optional: keep for debug
+
+        # --- Perform Boolean Conversion for Consents --- 
+        sms_consent_bool = sms_consent_str.lower() == "true"
+        legal_consent_bool = legal_consent_str.lower() == "true"
+
+        # --- Process Extracted Lists --- 
         valid_work_envs = []
         for env in actual_work_environments:
-            try:
-                valid_env = WorkEnvironmentEnum(env)
-                valid_work_envs.append(valid_env)
-            except ValueError:
-                logger.warning(f"Invalid workEnvironment value received: {env}")
+            try: valid_work_envs.append(WorkEnvironmentEnum(env))
+            except ValueError: logger.warning(f"Invalid workEnvironment value: {env}")
         
         valid_emp_types = []
         for emp_type in actual_employment_types:
-             try:
-                 valid_type = EmploymentTypeEnum(emp_type)
-                 valid_emp_types.append(valid_type)
-             except ValueError:
-                 logger.warning(f"Invalid employmentType value received: {emp_type}")
+             try: valid_emp_types.append(EmploymentTypeEnum(emp_type))
+             except ValueError: logger.warning(f"Invalid employmentType value: {emp_type}")
 
     except Exception as form_read_err:
         logger.error(f"Error manually reading form data: {form_read_err}")
         raise HTTPException(status_code=400, detail="Could not process form data.")
-    # --- END WORKAROUND --- 
+    # --- End Manual Extraction --- 
 
-    candidate_id = None
+    candidate_id = None # Initialize candidate_id
     try:
+        # --- Restore Original Logic --- 
         logger.info(f"Processing form submission for {email} via /candidates")
-
         full_name = f"{firstName} {lastName}"
 
         if not resume.content_type in ['application/pdf', 'application/msword', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document']:
@@ -115,6 +123,7 @@ async def create_candidate(
 
         resume_bytes = await resume.read()
 
+        # Construct submission_data using manually extracted/processed values
         submission_data = {
             'name': full_name,
             'email': email,
@@ -128,9 +137,12 @@ async def create_candidate(
             'employment_types': valid_emp_types if valid_emp_types else None,
             'availability': availability,
             'dream_role_description': dreamRoleDescription,
+            'sms_consent': sms_consent_bool, # Use manually converted boolean
+            'legal_consent': legal_consent_bool, # Use manually converted boolean
         }
 
         logger.info(f"Creating initial candidate record for {email} with detailed form data.")
+        # Use candidate_service dependency
         initial_result = await candidate_service.create_initial_candidate(submission_data)
         candidate_id = initial_result['id']
         logger.info(f"Initial record created for candidate {candidate_id}")
@@ -138,6 +150,7 @@ async def create_candidate(
         resume_path = None
         try:
             logger.info(f"Storing resume file for candidate {candidate_id}")
+            # Use storage_service dependency
             resume_path = await storage_service.store_resume(
                 file_content=resume_bytes,
                 user_id=str(candidate_id),
@@ -156,6 +169,7 @@ async def create_candidate(
             )
 
         logger.info(f"Triggering BrainAgent processing for candidate {candidate_id}")
+        # Use background_tasks and brain_agent dependency
         background_tasks.add_task(
             brain_agent.handle_candidate_submission,
             candidate_id=str(candidate_id),
@@ -164,6 +178,7 @@ async def create_candidate(
         )
 
         logger.info(f"Successfully initiated processing for candidate {candidate_id}")
+        # Restore original success response
         return {
             "status": "success",
             "message": "Candidate submission received, processing started.",
@@ -171,6 +186,7 @@ async def create_candidate(
             "resume_path": resume_path
         }
 
+    # Restore original error handling
     except ValueError as e:
         logger.error(f"Validation error processing submission for {email}: {str(e)}")
         raise HTTPException(status_code=400, detail=str(e))
