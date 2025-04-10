@@ -237,10 +237,9 @@ class EmailService:
             html_parts.append(f'<li><a href="{url}">{html_link_text}</a></li>')
 
         plain_text_parts.append("\nWe encourage you to check them out! Please reply to this email if you have any questions.")
-        plain_text_parts.append("\n\nBest regards,\nAnita, Your personal career co-pilot")
 
         html_parts.append("</ul><p>We encourage you to check them out! Please reply to this email if you have any questions.</p>")
-        html_parts.append("<p>Best regards,<br>Anita, Your personal career co-pilot</p></body></html>")
+        html_parts.append("</body></html>")
 
         plain_text = "\n".join(plain_text_parts)
         html_content = "\n".join(html_parts)
@@ -327,9 +326,6 @@ class EmailService:
 I tried calling but it seems I missed you.
 
 No worries! Reply to this email to let me know a better time to reach you.
-
-Best regards,
-Anita, your personal career co-pilot
 """.strip()
 
         html_content = f"""
@@ -337,7 +333,6 @@ Anita, your personal career co-pilot
 <p>{greeting}</p>
 <p>I tried calling but it seems I missed you.</p>
 <p>No worries! Reply to this email to let me know a better time to reach you.</p>
-<p>Best regards,<br>Anita, your personal career co-pilot</p>
 </body></html>
 """.strip()
 
@@ -395,9 +390,6 @@ Thanks for taking the time to speak with me.
 I've reviewed your profile against our current openings. While I don't have an immediate match that meets your preferences right now, I'm constantly getting new roles.
 
 I'll keep your profile active and reach out as soon as a suitable opportunity comes up!
-
-Best regards,
-Anita, your personal career co-pilot
 """.strip()
 
         html_content = f"""
@@ -406,7 +398,6 @@ Anita, your personal career co-pilot
 <p>Thanks for taking the time to speak with me.</p>
 <p>I've reviewed your profile against our current openings. While I don't have an immediate match that meets your preferences right now, I'm constantly getting new roles.</p>
 <p>I'll keep your profile active and reach out as soon as a suitable opportunity comes up!</p>
-<p>Best regards,<br>Anita, your personal career co-pilot</p>
 </body></html>
 """.strip()
 
@@ -465,15 +456,14 @@ Anita, your personal career co-pilot
         plain_text_body = (
             f"{greeting}\n\n"
             "It was great speaking with you, but I\'ll need more information to complete your profile and match you with jobs. \n"
-            "Let me know when\'s a good time to call you back.\n\n"
-            "Best regards,\nAnita, Your personal career co-pilot"
+            "Let me know when\'s a good time to call you back."
         )
 
         html_body = (
             f"<html><body><h2>{greeting}</h2>"
             "<p>It was great speaking with you, but I\'ll need more information to complete your profile and match you with jobs.</p>"
             "<p>Let me know when\'s a good time to call you back.</p>"
-            "<p>Best regards,<br>Anita, Your personal career co-pilot</p></body></html>"
+            "</body></html>"
         )
 
         message = self.create_message(self.sender_email, recipient_email, subject, plain_text_body, html_body)
