@@ -36,7 +36,7 @@ def _safe_int(value, default=None):
                     return int(match.group(1))
                 except (ValueError, TypeError):
                     pass # Fall through to default if extraction fails
-        logger.warning(f"Could not convert value '{value}' to int, using default '{default}'")
+        logger.warning("Could not convert value to int, using default")
         return default
 
 class JobService:
