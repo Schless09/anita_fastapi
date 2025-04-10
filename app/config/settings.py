@@ -41,6 +41,7 @@ class Settings(BaseSettings):
     slack_verification_token: str
     slack_bot_token: str
     slack_webhook_url: Optional[str] = None
+    slack_reply_approval_channel_id: str = "C08KAN8AYJJ" # Added: Channel for AI reply previews
     
     # Ngrok
     ngrok_authtoken: str
@@ -61,6 +62,7 @@ class Settings(BaseSettings):
 
     # Email
     sender_email: str
+    gmail_poll_interval_seconds: int = Field(default=300, env="GMAIL_POLL_INTERVAL_SECONDS") # Default 5 mins
 
     # Add development webhook URL
     development_webhook_url: Optional[str] = None  # Set in .env: DEVELOPMENT_WEBHOOK_URL=your-ngrok-url/webhook/retell
