@@ -69,7 +69,7 @@ async def create_candidate(
     try:
         raw_form_data = await request.form()
         actual_desired_locations = raw_form_data.getlist("desiredLocation")
-        actual_pref_sub_locations = raw_form_data.getlist("preferredSubLocation")
+        actual_pref_sub_locations = raw_form_data.getlist("preferredSubLocations")
         actual_work_environments = raw_form_data.getlist("workEnvironment")
         actual_employment_types = raw_form_data.getlist("employmentType")
         
