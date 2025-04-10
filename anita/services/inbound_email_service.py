@@ -3,6 +3,7 @@ import uuid
 from datetime import datetime
 from typing import Dict, Any, List, Optional
 import base64
+import html # <--- Add import for html escaping
 
 from openai import AsyncOpenAI
 from supabase import AsyncClient, create_client
@@ -468,13 +469,17 @@ Generate the email reply body based *only* on the candidate's message and the al
 
             # 2. Prepare and send the reply email
             reply_subject = f"Re: {original_subject}" if not original_subject.lower().startswith("re:") else original_subject
-            
+
+            # Convert plain text to simple HTML, escaping content and replacing newlines
+            escaped_content = html.escape(final_reply_content)
+            html_reply_content = f"<html><body><p>{escaped_content.replace('\n', '<br>')}</p></body></html>"
+
             # Use the EmailService's capability to handle threading headers
             sent_message_details = await self.email_service.send_reply_email(
                 recipient_email=recipient_email,
                 subject=reply_subject,
                 plain_text_body=final_reply_content,
-                # html_body=None, # Optional: generate HTML version if needed
+                html_body=html_reply_content, # <--- Pass the generated HTML body
                 thread_references=references,
                 thread_in_reply_to=inbound_message_id # Reply to the ID of the mail received
             )
@@ -494,6 +499,7 @@ Generate the email reply body based *only* on the candidate's message and the al
                         "reply_message_id": sent_message_details.get('id'),
                         "sender": self.settings.sender_email,
                         "recipient": recipient_email,
+                        "html_content": html_reply_content, # <--- Log the HTML content too
                         "ai_generated": metadata.get("proposed_ai_reply") == final_reply_content, # Track if it was modified
                         "approved_by": approver_user_id, # Log who approved/sent it
                         "in_reply_to_log_id": inbound_log_id, # Link back to the inbound log
