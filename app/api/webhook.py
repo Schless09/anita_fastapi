@@ -276,4 +276,4 @@ async def handler(
 
     except Exception as e:
         logger.error(f"❌ Error processing webhook: {str(e)}\nTraceback: {traceback.format_exc()}")
-        return JSONResponse(status_code=500, content={"status": "error", "message": str(e)}) # Return 500 on unexpected errors 
+        return JSONResponse(status_code=500, content={"status": "error", "message": "An internal error has occurred. Please try again later."}) # Return 500 on unexpected errors 
