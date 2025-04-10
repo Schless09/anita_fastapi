@@ -1147,13 +1147,20 @@ class BrainAgent:
                 )
                 return False
 
+            # Truncate text if it exceeds the approximate token limit
+            MAX_EMBEDDING_TEXT_LENGTH = 30000 # Approx. 8191 tokens * 4 chars/token, with buffer
+            if text_length > MAX_EMBEDDING_TEXT_LENGTH:
+                logger.warning(f"(Agent) Candidate text for {candidate_id} exceeds limit ({text_length} > {MAX_EMBEDDING_TEXT_LENGTH}). Truncating.")
+                candidate_text = candidate_text[:MAX_EMBEDDING_TEXT_LENGTH]
+                text_length = len(candidate_text) # Update length after truncation
+
             embedding_vector = await self.openai_service.generate_embedding(candidate_text)
             
             # Prepare metadata dictionary
             embedding_metadata_dict = {
                 'last_updated': datetime.utcnow().isoformat(),
                  'fields_included': fields_included,
-                 'text_length': text_length,
+                 'text_length': text_length, # Use potentially truncated length
                 'model_used': getattr(self.openai_service, 'embedding_model_name', 'unknown')
             }
 
