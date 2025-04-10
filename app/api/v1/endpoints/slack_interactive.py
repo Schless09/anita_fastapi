@@ -6,6 +6,7 @@ from slack_sdk.errors import SlackApiError
 from slack_sdk import WebClient
 from loguru import logger
 import urllib.parse
+from typing import Optional # Added Optional
 
 from app.config.settings import Settings, get_settings
 from anita.services.inbound_email_service import InboundEmailService
@@ -32,8 +33,7 @@ async def verify_slack_request(request: Request, settings: Settings):
         raise HTTPException(status_code=403, detail="Invalid Slack signature")
     return body # Return body for parsing later
 
-# Dependency to get InboundEmailService (simplified)
-# Assumes EmailService/SlackService can be instantiated within
+# Dependency to get InboundEmailService (Corrected)
 async def get_inbound_service(settings: Settings = Depends(get_settings), supabase_client: AsyncClient = Depends(get_supabase_client)) -> InboundEmailService:
     from anita.services.email_service import EmailService
     from anita.services.slack_service import SlackService # Corrected import path
@@ -59,8 +59,11 @@ async def handle_approve_action(payload: dict, background_tasks: BackgroundTasks
     if not log_resp.data or not log_resp.data.get("metadata") or not log_resp.data["metadata"].get("proposed_ai_reply"):
         logger.error(f"Could not retrieve proposed reply for log ID {inbound_log_id} during approval.")
         # Notify user in Slack
-        slack_client = WebClient(token=settings.slack_bot_token)
-        slack_client.chat_postEphemeral(channel=payload['channel']['id'], user=user_id, text=f":warning: Error: Could not find the proposed reply data for Log ID {inbound_log_id}. Please check logs.")
+        try:
+            slack_client = WebClient(token=settings.slack_bot_token)
+            slack_client.chat_postEphemeral(channel=payload['channel']['id'], user=user_id, text=f":warning: Error: Could not find the proposed reply data for Log ID {inbound_log_id}. Please check logs.")
+        except Exception as slack_err:
+             logger.error(f"Error sending ephemeral Slack error message: {slack_err}")
         return
 
     proposed_reply = log_resp.data["metadata"]["proposed_ai_reply"]
@@ -132,7 +135,7 @@ async def handle_reject_action(payload: dict, background_tasks: BackgroundTasks,
     except Exception as e:
          logger.exception(f"Unexpected error updating Slack message after rejection: {e}")
          
-async def handle_edit_action(payload: dict, settings: Settings):
+async def handle_edit_action(payload: dict, settings: Settings, supabase_client: AsyncClient): # Added supabase_client
     user_id = payload['user']['id']
     action = payload['actions'][0]
     inbound_log_id = int(action['value'])
@@ -142,17 +145,21 @@ async def handle_edit_action(payload: dict, settings: Settings):
 
     # 1. Fetch original proposed reply to pre-fill the modal
     communications_table = get_table_name("communications", settings)
-    # Use synchronous client for simplicity within this function or pass async client
-    supabase_sync = settings.get_supabase_client() # Assuming a sync client getter exists or create one
-    log_resp = await get_supabase_client().table(communications_table)\
+    # Use injected async client
+    log_resp = await supabase_client.table(communications_table)\
                             .select("metadata")\
                             .eq("id", inbound_log_id)\
                             .maybe_single().execute()
                             
     if not log_resp.data or not log_resp.data.get("metadata") or not log_resp.data["metadata"].get("proposed_ai_reply"):
         logger.error(f"Could not retrieve proposed reply for log ID {inbound_log_id} to open edit modal.")
-        # Maybe post an ephemeral message back? 
-        # For now, just open modal with empty text area if fetch fails.
+        # Maybe post an ephemeral message back?
+        try:
+             slack_client = WebClient(token=settings.slack_bot_token)
+             slack_client.chat_postEphemeral(channel=payload['channel']['id'], user=user_id, text=f":warning: Error: Could not find the proposed reply data for Log ID {inbound_log_id}. Cannot open editor.")
+        except Exception as slack_err:
+             logger.error(f"Error sending ephemeral Slack error message: {slack_err}")
+        return
         proposed_reply = "" 
     else:
         proposed_reply = log_resp.data["metadata"]["proposed_ai_reply"]
@@ -218,6 +225,7 @@ async def handle_slack_interaction(
     request: Request,
     background_tasks: BackgroundTasks, 
     settings: Settings = Depends(get_settings),
+    supabase_client: AsyncClient = Depends(get_supabase_client), # Added supabase dependency
     inbound_service: InboundEmailService = Depends(get_inbound_service)
 ):
     """Handle interactive components (buttons, modals) from Slack."""
@@ -247,7 +255,8 @@ async def handle_slack_interaction(
             elif action_id == REJECT_ACTION_ID:
                 await handle_reject_action(payload, background_tasks, inbound_service, settings)
             elif action_id == EDIT_ACTION_ID:
-                 await handle_edit_action(payload, settings)
+                 # Pass supabase client to the handler
+                 await handle_edit_action(payload, settings, supabase_client)
             else:
                 logger.warning(f"Unhandled block action ID: {action_id}")
                 
