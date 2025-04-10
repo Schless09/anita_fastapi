@@ -63,6 +63,11 @@ class CandidateService:
             "employment_types": submission_data.get('employment_types'),
             "availability": submission_data.get('availability'),
             "dream_role_description": submission_data.get('dream_role_description'),
+            
+            # Add the new consent fields
+            "sms_consent": submission_data.get('sms_consent', False), # Default to False if not provided
+            "legal_consent": submission_data.get('legal_consent', False), # Default to False if not provided
+            
             # Existing fields
             "status": "submitted", # Initial status
             "status_last_updated": now.isoformat(),
@@ -79,6 +84,10 @@ class CandidateService:
 
         # Remove keys with None values if the DB column doesn't handle them or has defaults
         insert_data = {k: v for k, v in insert_data.items() if v is not None}
+        
+        # --- DEBUG LOGGING --- 
+        logger.info(f"Data prepared for Supabase insert: {insert_data}")
+        # --- END DEBUG LOGGING ---
 
         try:
             # Insert the candidate record

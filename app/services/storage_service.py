@@ -108,7 +108,7 @@ class StorageService:
             if hasattr(content_to_upload, 'seek'):
                 content_to_upload.seek(0)
                 
-            result = await (
+            result = (
                 self.supabase.storage
                 .from_(self.bucket_name)
                 .upload(
