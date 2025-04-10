@@ -5,7 +5,10 @@ import os
 # Ensure credentials.json is in the same directory as this script
 CREDENTIALS_PATH = 'credentials.json'
 TOKEN_PATH = 'token.pkl'
-SCOPES = ['https://www.googleapis.com/auth/gmail.send'] # Make sure this matches the scope needed by your app
+SCOPES = [
+    'https://www.googleapis.com/auth/gmail.send',
+    'https://www.googleapis.com/auth/gmail.readonly'
+]
 
 def main():
     """Runs the OAuth 2.0 flow and saves the credentials."""

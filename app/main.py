@@ -6,6 +6,8 @@ from typing import Dict, Any, Optional
 import logging
 import traceback
 from dotenv import load_dotenv
+import asyncio
+from functools import lru_cache
 
 # Third-party imports
 from fastapi import FastAPI, HTTPException, Depends
@@ -24,6 +26,7 @@ from app.config import (
 )
 from app.config.settings import Settings
 from app.config.utils import get_table_name
+from app.config.supabase import get_supabase_client
 
 # Agents
 from app.agents.langchain.agents.candidate_intake_agent import CandidateIntakeAgent
@@ -51,8 +54,12 @@ from app.services.retell_service import RetellService
 from app.services.openai_service import OpenAIService
 from app.services.vector_service import VectorService
 from app.services.matching_service import MatchingService
-from app.services.slack_service import SlackService
 from anita.services.email_service import EmailService
+from anita.services.inbound_email_service import InboundEmailService
+from anita.services.gmail_polling_service import poll_gmail_for_updates
+from app.services.storage_service import StorageService
+# Correct the import path for SlackService
+from anita.services.slack_service import SlackService
 
 # Schemas
 from app.schemas.candidate import CandidateCreate, CandidateResponse, CandidateUpdate
@@ -62,6 +69,8 @@ from app.schemas.matching import MatchingResponse
 # Routers
 from app.api.webhook import router as webhook_router
 from app.api.webhook_proxy import router as webhook_proxy_router
+# from app.api.v1.endpoints import webhook_email as email_webhook_router # Removed/Commented out
+from app.api.v1.endpoints import slack_interactive as slack_interactive_router
 from app.routes.jobs import router as jobs_router
 from app.routes.candidates import router as candidates_router
 from app.routes.webhooks import router as webhook_jobs_router
@@ -69,6 +78,7 @@ from app.routes.webhooks import router as webhook_jobs_router
 # Dependencies
 from app.dependencies import get_brain_agent
 from app.agents.brain_agent import BrainAgent
+from app.services.webhook_proxy import WebhookProxy
 
 # Load environment variables first
 load_dotenv()
@@ -156,6 +166,7 @@ async def startup_event():
         )
         slack_service = SlackService(settings=settings)
         email_service = EmailService(settings=settings)
+        inbound_email_service = InboundEmailService(settings, supabase_client, email_service, slack_service)
 
         # Initialize vector store tool
         vector_store = VectorStoreTool(vector_service=vector_service, settings=settings)
@@ -176,6 +187,17 @@ async def startup_event():
         await brain_agent_instance._initialize_async()
         
         logger.info("✅ Services initialized successfully")
+        
+        # --- Start Gmail Polling --- 
+        logger.info("Starting background Gmail polling task...")
+        asyncio.create_task(poll_gmail_for_updates(
+            settings=settings, 
+            email_service=email_service, 
+            inbound_service=inbound_email_service,
+            poll_interval_seconds=settings.gmail_poll_interval_seconds # Use setting
+        ))
+        # -------------------------
+        
     except Exception as e:
         logger.error(f"❌ Error initializing services: {str(e)}")
         traceback.print_exc()
@@ -204,6 +226,8 @@ app.include_router(webhook_proxy_router, prefix="/webhook", tags=["webhook"])
 app.include_router(jobs_router, tags=["jobs"])
 app.include_router(candidates_router, tags=["candidates"])
 app.include_router(webhook_jobs_router, prefix="/api/v1", tags=["Webhooks"])
+# app.include_router(email_webhook_router.router, prefix="/webhook/email", tags=["Email Webhook"]) # Commented out - using polling now
+app.include_router(slack_interactive_router.router, prefix="/slack", tags=["Slack Interactivity"])
 
 def get_service(service_name: str):
     return core_services.get(service_name)

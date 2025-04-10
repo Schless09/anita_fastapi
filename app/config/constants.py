@@ -6,7 +6,7 @@ from typing import Final, Dict
 
 # Call Processing
 MIN_CALL_DURATION_SECONDS: Final[int] = 30  # Minimum duration for a call to be considered valid
-MAX_CALL_DURATION_SECONDS: Final[int] = 3600  # Maximum duration (1 hour) for a call
+MAX_CALL_DURATION_SECONDS: Final[int] = 1800  # Maximum duration (30 min) for a call
 
 # Matching
 MATCH_THRESHOLD: Final[float] = 0.3  # Minimum similarity score for a job match (0-1)

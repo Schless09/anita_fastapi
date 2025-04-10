@@ -855,7 +855,8 @@ class BrainAgent:
                                             'next_step': 'Review match details',
                                             'matched_at': datetime.utcnow().isoformat(),
                                             'created_at': datetime.utcnow().isoformat(),
-                                            'updated_at': datetime.utcnow().isoformat()
+                                            'updated_at': datetime.utcnow().isoformat(),
+                                            'job_url': match.get('job_url') # Use the URL returned by the matching service
                                         }
                                         match_records.append(match_record)
 
@@ -883,7 +884,7 @@ class BrainAgent:
                                             'job_id': match.get('job_id'),
                                             'job_title': match.get('title'),
                                             'company': match.get('company'),
-                                            'job_url': f"https://app.anita.ai/jobs/{match.get('job_id')}"
+                                            'job_url': match.get('job_url') # Use the URL returned by the matching service
                                         }
                                         for match in matches
                                         if match.get('similarity', 0) >= MATCH_SCORE_THRESHOLD
