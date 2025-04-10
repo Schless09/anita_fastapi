@@ -14,7 +14,7 @@ class RetellService:
         self.webhook_url = settings.retell_webhook_url
         self.agent_id = settings.retell_agent_id
         self.api_base = settings.retell_api_base
-        logger.info(f"Initialized RetellService with phone number: {self.phone_number}")
+        logger.info("Initialized RetellService")
 
     async def schedule_call(
         self,
