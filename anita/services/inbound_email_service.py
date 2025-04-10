@@ -393,32 +393,38 @@ Generate the email reply body based *only* on the candidate's message and the al
         }
         await self._update_log_metadata(inbound_log_id, metadata_update)
         
-        # 5. Send Slack Notification for Approval/Action
-        try:
-            slack_channel_id = self.settings.slack_reply_approval_channel_id
-            if slack_channel_id and self.slack_service:
-                fallback_text, blocks = self.slack_service.format_reply_notification(
-                    candidate_email=parsed_email["sender_email"],
-                    candidate_message=parsed_email["body_text"],
-                    ai_reply=ai_reply,
-                    inbound_comm_log_id=inbound_log_id # Pass the log ID
-                )
-                logger.info(f"Sending Slack notification to channel {slack_channel_id} for log ID {inbound_log_id}")
-                self.slack_service.send_notification(
-                   channel_id=slack_channel_id, 
-                   text=fallback_text, 
-                   blocks=blocks
-                )
-                # Update log status
-                await self._update_log_metadata(inbound_log_id, {"status": "pending_slack_action"})
-            else:
-                 logger.warning("Slack channel ID not configured or Slack service unavailable. Skipping notification.")
+        # 5. Send Slack Notification for Approval/Action (Only in Staging/Production)
+        if self.settings.environment in ["staging", "production"]:
+            logger.info(f"Environment is '{self.settings.environment}', proceeding with Slack notification.")
+            try:
+                slack_channel_id = self.settings.slack_reply_approval_channel_id
+                if slack_channel_id and self.slack_service:
+                    fallback_text, blocks = self.slack_service.format_reply_notification(
+                        candidate_email=parsed_email["sender_email"],
+                        candidate_message=parsed_email["body_text"],
+                        ai_reply=ai_reply,
+                        inbound_comm_log_id=inbound_log_id # Pass the log ID
+                    )
+                    logger.info(f"Sending Slack notification to channel {slack_channel_id} for log ID {inbound_log_id}")
+                    self.slack_service.send_notification(
+                       channel_id=slack_channel_id, 
+                       text=fallback_text, 
+                       blocks=blocks
+                    )
+                    # Update log status
+                    await self._update_log_metadata(inbound_log_id, {"status": "pending_slack_action"})
+                else:
+                     logger.warning("Slack channel ID not configured or Slack service unavailable. Skipping notification.")
+                     # Update log status
+                     await self._update_log_metadata(inbound_log_id, {"status": "slack_config_missing"})
+            except Exception as e:
+                 logger.exception(f"Error sending Slack notification: {e}") 
                  # Update log status
-                 await self._update_log_metadata(inbound_log_id, {"status": "slack_config_missing"})
-        except Exception as e:
-             logger.exception(f"Error sending Slack notification: {e}") 
-             # Update log status
-             await self._update_log_metadata(inbound_log_id, {"status": "slack_notification_failed"})
+                 await self._update_log_metadata(inbound_log_id, {"status": "slack_notification_failed"})
+        else:
+            logger.info(f"Environment is '{self.settings.environment}', skipping Slack notification for email reply approval.")
+            # Optional: Update status to indicate automatic skip if needed
+            # await self._update_log_metadata(inbound_log_id, {"status": "slack_skipped_dev"})
 
         # --- REMOVED STEP 6: Automatic Email Sending --- 
         # Email sending is now triggered by Slack actions handled by a separate endpoint.

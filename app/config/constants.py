@@ -6,7 +6,7 @@ from typing import Final, Dict
 
 # Call Processing
 
-MIN_CALL_DURATION_SECONDS: Final[int] = 300  # Minimum duration for a call to be considered valid
+MIN_CALL_DURATION_SECONDS: Final[int] = 30  # Minimum duration for a call to be considered valid
 MAX_CALL_DURATION_SECONDS: Final[int] = 1800  # Maximum duration (30 min) for a call
 
 # Matching

@@ -189,13 +189,13 @@ async def startup_event():
         logger.info("✅ Services initialized successfully")
         
         # --- Start Gmail Polling --- 
-        logger.info("Starting background Gmail polling task...")
-        asyncio.create_task(poll_gmail_for_updates(
-            settings=settings, 
-            email_service=email_service, 
-            inbound_service=inbound_email_service,
-            poll_interval_seconds=settings.gmail_poll_interval_seconds # Use setting
-        ))
+        # logger.info("Starting background Gmail polling task...")
+        # asyncio.create_task(poll_gmail_for_updates(
+        #     settings=settings, 
+        #     email_service=email_service, 
+        #     inbound_service=inbound_email_service,
+        #     poll_interval_seconds=settings.gmail_poll_interval_seconds # Use setting
+        # ))
         # -------------------------
         
     except Exception as e:

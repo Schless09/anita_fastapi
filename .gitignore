@@ -13,4 +13,5 @@ app.log
 
 # Secrets - DO NOT COMMIT
 token.pkl
+token_b64.txt
 credentials.json

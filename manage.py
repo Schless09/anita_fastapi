@@ -125,7 +125,8 @@ def start_server(port=8000, reload=True):
             "--log-level", "info"
         ]
         if reload:
-            cmd.append("--reload")
+            cmd.append("--reload-dir")
+            cmd.append(".")
         
         # Start the server
         logger.info(f"Starting server on port {port}...")
