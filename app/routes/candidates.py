@@ -44,61 +44,44 @@ router = APIRouter()
 
 @router.post("/candidates", tags=["Candidates"])
 async def create_candidate(
-    # --- Restore original parameters --- 
-    request: Request, 
-    background_tasks: BackgroundTasks, 
-    firstName: str = Form(..., alias="firstName"), 
-    lastName: str = Form(..., alias="lastName"), 
-    email: str = Form(...), 
-    phone: str = Form(...), 
-    linkedinURL: Optional[str] = Form(None, alias="linkedinURL"), 
-    resume: UploadFile = File(...), 
-    workEnvironment: List[WorkEnvironmentEnum] = Form(..., alias="workEnvironment"), 
-    workAuthorization: WorkAuthorizationEnum = Form(..., alias="workAuthorization"), 
-    visaType: Optional[VisaTypeEnum] = Form(None, alias="visaType"), 
-    employmentType: List[EmploymentTypeEnum] = Form(..., alias="employmentType"), 
-    availability: AvailabilityEnum = Form(..., alias="availability"), 
-    dreamRoleDescription: Optional[str] = Form(None, alias="dreamRoleDescription"), 
-    # --- DO NOT include consent fields in signature --- 
-    # smsConsentStr: str = Form(..., alias="smsConsent"),
-    # legalConsentStr: str = Form(..., alias="legalConsent"),
-    # --- Restore Dependencies --- 
+    request: Request,
+    background_tasks: BackgroundTasks,
+    firstName: str = Form(..., alias="firstName"),
+    lastName: str = Form(..., alias="lastName"),
+    email: str = Form(...),
+    phone: str = Form(...),
+    linkedinURL: Optional[str] = Form(None, alias="linkedinURL"),
+    resume: UploadFile = File(...),
+    workEnvironment: List[WorkEnvironmentEnum] = Form(..., alias="workEnvironment"),
+    workAuthorization: WorkAuthorizationEnum = Form(..., alias="workAuthorization"),
+    visaType: Optional[VisaTypeEnum] = Form(None, alias="visaType"),
+    employmentType: List[EmploymentTypeEnum] = Form(..., alias="employmentType"),
+    availability: AvailabilityEnum = Form(..., alias="availability"),
+    dreamRoleDescription: Optional[str] = Form(None, alias="dreamRoleDescription"),
+    smsConsent: bool = Form(..., alias="smsConsent"),
+    legalConsent: bool = Form(..., alias="legalConsent"),
     brain_agent: BrainAgent = Depends(get_brain_agent),
     candidate_service: CandidateService = Depends(get_candidate_service),
     storage_service: StorageService = Depends(get_storage_service)
 ):
     """
     Handle new candidate submission from frontend (multipart/form-data).
-    Uses manual extraction for smsConsent and legalConsent.
+    Relies on FastAPI Form parameters for validation and type conversion.
     """
-    logger.info("--- Entering FULL create_candidate ---")
+    logger.info("--- Entering create_candidate ---")
     
-    # --- Combined Manual Extraction (Lists and Consents) --- 
+    # --- Keep List Extraction Logic (from both branches, seems consistent) --- 
     try:
-        raw_form_data = await request.form()
-        # Lists
+        raw_form_data = await request.form() # Still need raw form for lists 
         actual_desired_locations = raw_form_data.getlist("desiredLocation")
         sub_locations_data = raw_form_data.get("subLocationsData")
         if sub_locations_data:
-            try:
-                actual_pref_sub_locations = json.loads(sub_locations_data)
-            except json.JSONDecodeError:
-                actual_pref_sub_locations = []
-        else:
-            actual_pref_sub_locations = []
+            try: actual_pref_sub_locations = json.loads(sub_locations_data)
+            except json.JSONDecodeError: actual_pref_sub_locations = []
+        else: actual_pref_sub_locations = []
         actual_work_environments = raw_form_data.getlist("workEnvironment")
         actual_employment_types = raw_form_data.getlist("employmentType")
-        # Consents
-        sms_consent_str = raw_form_data.get("smsConsent", "false") 
-        legal_consent_str = raw_form_data.get("legalConsent", "false")
         
-        logger.debug(f"Extracted smsConsentStr: {sms_consent_str}") # Optional: keep for debug
-        logger.debug(f"Extracted legalConsentStr: {legal_consent_str}") # Optional: keep for debug
-
-        # --- Perform Boolean Conversion for Consents --- 
-        sms_consent_bool = sms_consent_str.lower() == "true"
-        legal_consent_bool = legal_consent_str.lower() == "true"
-
         # --- Process Extracted Lists --- 
         valid_work_envs = []
         for env in actual_work_environments:
@@ -111,13 +94,12 @@ async def create_candidate(
              except ValueError: logger.warning(f"Invalid employmentType value: {emp_type}")
 
     except Exception as form_read_err:
-        logger.error(f"Error manually reading form data: {form_read_err}")
+        logger.error(f"Error manually reading list form data: {form_read_err}")
         raise HTTPException(status_code=400, detail="Could not process form data.")
-    # --- End Manual Extraction --- 
+    # --- End List Extraction --- 
 
     candidate_id = None # Initialize candidate_id
     try:
-        # --- Restore Original Logic --- 
         logger.info(f"Processing form submission for {email} via /candidates")
         full_name = f"{firstName} {lastName}"
 
@@ -131,7 +113,7 @@ async def create_candidate(
 
         resume_bytes = await resume.read()
 
-        # Construct submission_data using manually extracted/processed values
+        # --- Keep matching-improvement version for submission_data --- 
         submission_data = {
             'name': full_name,
             'email': email,
@@ -145,9 +127,10 @@ async def create_candidate(
             'employment_types': valid_emp_types if valid_emp_types else None,
             'availability': availability,
             'dream_role_description': dreamRoleDescription,
-            'sms_consent': sms_consent_bool, # Use manually converted boolean
-            'legal_consent': legal_consent_bool, # Use manually converted boolean
+            'sms_consent': smsConsent, # Use boolean from Form param
+            'legal_consent': legalConsent # Use boolean from Form param
         }
+        # --- End matching-improvement version --- 
 
         logger.info(f"Creating initial candidate record for {email} with detailed form data.")
         # Use candidate_service dependency

@@ -245,13 +245,13 @@ Keep the response concise and helpful.
             job_details_parts = []
             for job in allowed_jobs:
                 job_str = (
-                    f"- Job Title: {job.get('job_title', 'N/A')}\\n"
-                    f"  Company: {job.get('company_name', 'N/A')}\\n"
-                    f"  Description Snippet: {job.get('product_description', 'N/A')[:200]}...\\n"
+                    f"- Job Title: {job.get('job_title', 'N/A')}\n"
+                    f"  Company: {job.get('company_name', 'N/A')}\n"
+                    f"  Description Snippet: {job.get('product_description', 'N/A')[:200]}...\n"
                     f"  URL: {job.get('job_url', 'N/A')}"
                 )
                 job_details_parts.append(job_str)
-            job_context_str = "\\n".join(job_details_parts)
+            job_context_str = "\n".join(job_details_parts)
 
             prompt = f"""
 You are Anita, a friendly and helpful AI career co-pilot.
@@ -440,35 +440,24 @@ Generate the email reply body based *only* on the candidate's message and the al
         logger.info(f"--- Finished initial processing for inbound email (Log ID: {inbound_log_id}). Waiting for Slack action. ---")
 
     async def send_approved_email(self, inbound_log_id: int, final_reply_content: str, approver_user_id: Optional[str] = None):
-        """Sends the email reply after approval/edit via Slack."""
-        logger.info(f"Attempting to send approved email for inbound log ID: {inbound_log_id}")
+        """Sends the final, approved email reply."""
         communications_table = get_table_name("communications", self.settings)
-        
         try:
-            # 1. Fetch the original inbound log entry to get context
-            log_resp = await self.supabase.table(communications_table)\
-                                    .select("id, candidates_id, thread_id, subject, metadata")\
-                                    .eq("id", inbound_log_id)\
-                                    .maybe_single()\
-                                    .execute()
-            
+            # 1. Fetch the original inbound log entry to get necessary metadata
+            log_resp = await self.supabase.table(communications_table).select("candidate_id, thread_id, metadata").eq("id", inbound_log_id).single().execute()
             if not log_resp.data:
-                logger.error(f"Could not find communication log entry with ID: {inbound_log_id}. Cannot send reply.")
-                # TODO: Notify Slack channel about this failure?
+                logger.error(f"Could not find communication log entry with ID: {inbound_log_id}")
                 return False
-            
-            inbound_log = log_resp.data
-            metadata = inbound_log.get("metadata", {})
-            if not isinstance(metadata, dict):
-                 logger.error(f"Invalid metadata format in log {inbound_log_id}. Cannot proceed.")
-                 return False
-            
-            candidate_id = inbound_log.get("candidates_id")
-            thread_id = inbound_log.get("thread_id")
-            original_subject = inbound_log.get("subject", "")
-            recipient_email = metadata.get("sender") # The sender of the inbound email is the recipient of the reply
+
+            log_entry = log_resp.data
+            candidate_id = log_entry.get("candidate_id")
+            thread_id = log_entry.get("thread_id")
+            metadata = log_entry.get("metadata", {})
+
+            recipient_email = metadata.get("sender") # The sender of the original email is the recipient of the reply
+            original_subject = metadata.get("subject", "")
             references = metadata.get("references")
-            inbound_message_id = metadata.get("message_id") # ID of the email we are replying to
+            inbound_message_id = metadata.get("message_id")
 
             if not recipient_email or not inbound_message_id:
                  logger.error(f"Missing recipient email or original message_id in log {inbound_log_id} metadata. Cannot send reply.")
@@ -476,19 +465,21 @@ Generate the email reply body based *only* on the candidate's message and the al
 
             # 2. Prepare and send the reply email
             reply_subject = f"Re: {original_subject}" if not original_subject.lower().startswith("re:") else original_subject
-
-            # Convert plain text to simple HTML, escaping content and replacing newlines
+            
+            # Use html escape from main and replace logic from both branches
+            logger.info(">>>> DEBUG: Executing fixed send_approved_email code block - v3 <<<<") # Keep debug log
             escaped_content = html.escape(final_reply_content)
-            html_reply_content = f"<html><body><p>{escaped_content.replace('\n', '<br>')}</p></body></html>"
+            content_with_br = escaped_content.replace('\n', '<br>')
+            html_reply_content = f"<html><body><p>{content_with_br}</p></body></html>"
 
-            # Use the EmailService's capability to handle threading headers
+            # The actual call
             sent_message_details = await self.email_service.send_reply_email(
                 recipient_email=recipient_email,
                 subject=reply_subject,
                 plain_text_body=final_reply_content,
-                html_body=html_reply_content, # <--- Pass the generated HTML body
+                html_body=html_reply_content, # Keep uncommented from main
                 thread_references=references,
-                thread_in_reply_to=inbound_message_id # Reply to the ID of the mail received
+                thread_in_reply_to=inbound_message_id
             )
             
             if sent_message_details and sent_message_details.get('id'):
