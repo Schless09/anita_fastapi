@@ -236,9 +236,15 @@ class EmailService:
             html_link_text = f"{title}" + (f" @ {company}" if company else "")
             html_parts.append(f'<li><a href="{url}">{html_link_text}</a></li>')
 
-        plain_text_parts.append("\nWe encourage you to check them out! Please reply to this email if you have any questions.")
+        plain_text_parts.append("\nWe encourage you to check them out! The roles have been specifically selected for you based on your profile.")
+        plain_text_parts.append("\nIn terms of next steps, reply to this email with which roles (if any) you are interested in and I'll apply on your behalf directly with the Hiring Manager.")
+        plain_text_parts.append("\nIf you have any other questions, please let me know!")
+        plain_text_parts.append("\nI look forward to guiding you through the next steps of this process.")
 
-        html_parts.append("</ul><p>We encourage you to check them out! Please reply to this email if you have any questions.</p>")
+        html_parts.append("</ul><p>We encourage you to check them out! The roles have been specifically selected for you based on your profile.</p>")
+        html_parts.append("<p>In terms of next steps, reply to this email with which roles (if any) you are interested in and I'll apply on your behalf directly with the Hiring Manager.</p>")
+        html_parts.append("<p>If you have any other questions, please let me know!</p>")
+        html_parts.append("<p>I look forward to guiding you through the next steps of this process.</p>")
         html_parts.append("</body></html>")
 
         plain_text = "\n".join(plain_text_parts)
