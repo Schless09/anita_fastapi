@@ -242,10 +242,17 @@ Do not mention any specific job titles or companies unless they mentioned them c
 Keep the response concise and helpful.
 """
         else:
-            job_context_str = "\n".join([
-                f"- Job Title: {job.get('job_title', 'N/A')}\n  Company: {job.get('company_name', 'N/A')}\n  Description Snippet: {job.get('product_description', 'N/A')[:200]}...\n  URL: {job.get('job_url', 'N/A')}"
-                for job in allowed_jobs
-            ])
+            job_details_parts = []
+            for job in allowed_jobs:
+                job_str = (
+                    f"- Job Title: {job.get('job_title', 'N/A')}\\n"
+                    f"  Company: {job.get('company_name', 'N/A')}\\n"
+                    f"  Description Snippet: {job.get('product_description', 'N/A')[:200]}...\\n"
+                    f"  URL: {job.get('job_url', 'N/A')}"
+                )
+                job_details_parts.append(job_str)
+            job_context_str = "\\n".join(job_details_parts)
+
             prompt = f"""
 You are Anita, a friendly and helpful AI career co-pilot.
 You are replying to an email from a candidate named {candidate_name}.

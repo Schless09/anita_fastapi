@@ -37,6 +37,7 @@ from app.schemas.candidate import (
     EmploymentTypeEnum,
     AvailabilityEnum
 )
+import json
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -77,7 +78,14 @@ async def create_candidate(
         raw_form_data = await request.form()
         # Lists
         actual_desired_locations = raw_form_data.getlist("desiredLocation")
-        actual_pref_sub_locations = raw_form_data.getlist("preferredSubLocation")
+        sub_locations_data = raw_form_data.get("subLocationsData")
+        if sub_locations_data:
+            try:
+                actual_pref_sub_locations = json.loads(sub_locations_data)
+            except json.JSONDecodeError:
+                actual_pref_sub_locations = []
+        else:
+            actual_pref_sub_locations = []
         actual_work_environments = raw_form_data.getlist("workEnvironment")
         actual_employment_types = raw_form_data.getlist("employmentType")
         # Consents
