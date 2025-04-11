@@ -476,14 +476,20 @@ Generate the email reply body based *only* on the candidate's message and the al
             # 2. Prepare and send the reply email
             reply_subject = f"Re: {original_subject}" if not original_subject.lower().startswith("re:") else original_subject
             
-            # Use the EmailService's capability to handle threading headers
+            # If HTML body generation is needed and causing errors, fix it:
+            # Example structure based on error log (adjust if actual code differs):
+            logger.info(">>>> DEBUG: Executing fixed send_approved_email code block - v3 <<<<") # Add debug log
+            content_with_br = final_reply_content.replace('\n', '<br>') # Perform replacement first
+            html_reply_content = f"<html><body><p>{content_with_br}</p></body></html>" # Use variable in f-string
+
+            # The actual call that was likely near the original error line:
             sent_message_details = await self.email_service.send_reply_email(
                 recipient_email=recipient_email,
                 subject=reply_subject,
                 plain_text_body=final_reply_content,
-                # html_body=None, # Optional: generate HTML version if needed
+                # html_body=html_reply_content, # Pass the fixed HTML content if uncommented
                 thread_references=references,
-                thread_in_reply_to=inbound_message_id # Reply to the ID of the mail received
+                thread_in_reply_to=inbound_message_id
             )
             
             if sent_message_details and sent_message_details.get('id'):

@@ -58,6 +58,8 @@ async def create_candidate(
     employmentType: List[EmploymentTypeEnum] = Form(..., alias="employmentType"),
     availability: AvailabilityEnum = Form(..., alias="availability"),
     dreamRoleDescription: Optional[str] = Form(None, alias="dreamRoleDescription"),
+    smsConsent: bool = Form(..., alias="smsConsent"),
+    legalConsent: bool = Form(..., alias="legalConsent"),
     brain_agent: BrainAgent = Depends(get_brain_agent),
     candidate_service: CandidateService = Depends(get_candidate_service),
     storage_service: StorageService = Depends(get_storage_service)
@@ -136,6 +138,8 @@ async def create_candidate(
             'employment_types': valid_emp_types if valid_emp_types else None,
             'availability': availability,
             'dream_role_description': dreamRoleDescription,
+            'sms_consent': smsConsent,
+            'legal_consent': legalConsent
         }
 
         logger.info(f"Creating initial candidate record for {email} with detailed form data.")
