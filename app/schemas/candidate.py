@@ -75,7 +75,7 @@ class CandidateCreate(BaseModel):
     work_authorization: Optional[WorkAuthorizationEnum] = Field(None, description="Candidate's US work authorization status")
     visa_type: Optional[VisaTypeEnum] = Field(None, description="Candidate's specific visa type if sponsorship is required")
     employment_types: Optional[List[EmploymentTypeEnum]] = Field(None, description="Array of desired employment types")
-    availability: Optional[AvailabilityEnum] = Field(None, description="Candidate's target start timeline")
+    availability: Optional[int] = Field(None, description="Candidate's target start timeline (score 2-5)")
     dream_role_description: Optional[str] = Field(None, description="Candidate's description of their ideal role")
 
     @validator('phone_number')
@@ -104,7 +104,7 @@ class CandidateUpdate(BaseModel):
     work_authorization: Optional[WorkAuthorizationEnum] = None
     visa_type: Optional[VisaTypeEnum] = None
     employment_types: Optional[List[EmploymentTypeEnum]] = None
-    availability: Optional[AvailabilityEnum] = None
+    availability: Optional[int] = None
     dream_role_description: Optional[str] = None
 
 class CandidateResponse(CandidateBase):
@@ -122,7 +122,7 @@ class CandidateResponse(CandidateBase):
     work_authorization: Optional[WorkAuthorizationEnum] = None
     visa_type: Optional[VisaTypeEnum] = None
     employment_types: Optional[List[EmploymentTypeEnum]] = None
-    availability: Optional[AvailabilityEnum] = None
+    availability: Optional[int] = None
     dream_role_description: Optional[str] = None
 
     class Config:

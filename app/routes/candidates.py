@@ -56,7 +56,7 @@ async def create_candidate(
     workAuthorization: WorkAuthorizationEnum = Form(..., alias="workAuthorization"),
     visaType: Optional[VisaTypeEnum] = Form(None, alias="visaType"),
     employmentType: List[EmploymentTypeEnum] = Form(..., alias="employmentType"),
-    availability: AvailabilityEnum = Form(..., alias="availability"),
+    availability: str = Form(..., alias="availability"),
     dreamRoleDescription: Optional[str] = Form(None, alias="dreamRoleDescription"),
     smsConsent: bool = Form(..., alias="smsConsent"),
     legalConsent: bool = Form(..., alias="legalConsent"),
@@ -103,6 +103,18 @@ async def create_candidate(
         logger.info(f"Processing form submission for {email} via /candidates")
         full_name = f"{firstName} {lastName}"
 
+        # --- Convert availability string to int --- 
+        try:
+            availability_int = int(availability) 
+            # Optional: Add validation for the range (2-5)
+            if not 2 <= availability_int <= 5:
+                 logger.warning(f"Received invalid availability score: {availability}. Defaulting to null/None.")
+                 availability_int = None # Or handle as an error
+        except ValueError:
+            logger.error(f"Could not convert availability '{availability}' to integer. Setting to None.")
+            availability_int = None # Set to None or raise an error if it's mandatory
+        # -------------------------------------------
+
         if not resume.content_type in ['application/pdf', 'application/msword', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document']:
              logger.warning(f"Invalid resume file type received: {resume.content_type}")
              if not resume.content_type == 'application/pdf':
@@ -125,7 +137,7 @@ async def create_candidate(
             'work_authorization': workAuthorization,
             'visa_type': visaType,
             'employment_types': valid_emp_types if valid_emp_types else None,
-            'availability': availability,
+            'availability': availability_int,
             'dream_role_description': dreamRoleDescription,
             'sms_consent': smsConsent, # Use boolean from Form param
             'legal_consent': legalConsent # Use boolean from Form param
